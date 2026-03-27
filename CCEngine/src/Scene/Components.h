@@ -1,6 +1,7 @@
 #pragma once
 #include <DirectXMath.h>
 #include <string>
+#include <box2d/id.h>
 #include "Scene/ScriptableEntity.h"
 
 namespace CCEngine
@@ -73,8 +74,8 @@ namespace CCEngine
         BodyType Type = BodyType::Static;
         bool FixedRotation = false;
 
-        // Box2D 내부 객체 포인터 (런타임 시 생성됨)
-        void* RuntimeBody = nullptr;
+        // [🔥 수정] v3는 포인터(void*)가 아니라 ID(struct)를 씁니다!
+        b2BodyId RuntimeBodyId = b2_nullBodyId;
 
         Rigidbody2DComponent() = default;
         Rigidbody2DComponent(const Rigidbody2DComponent&) = default;
@@ -86,14 +87,12 @@ namespace CCEngine
         DirectX::XMFLOAT2 Offset = { 0.0f, 0.0f };
         DirectX::XMFLOAT2 Size = { 0.5f, 0.5f };
 
-        // 물리적 마찰력, 탄성 등
         float Density = 1.0f;
         float Friction = 0.5f;
         float Restitution = 0.0f;
-        float RestitutionThreshold = 0.5f;
 
-        // Box2D 내부 피스처 포인터
-        void* RuntimeFixture = nullptr;
+        // [🔥 수정] Fixture가 아예 삭제되었습니다! ShapeId로 대체됩니다.
+        b2ShapeId RuntimeShapeId = b2_nullShapeId;
 
         BoxCollider2DComponent() = default;
         BoxCollider2DComponent(const BoxCollider2DComponent&) = default;
