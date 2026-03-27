@@ -33,8 +33,9 @@ project "CCEngine"
 
     includedirs {
         "%{prj.name}/src",
-        "%{prj.name}/vendor/spdlog/include"
-        "%{prj.name}/src/ImGui"
+        "%{prj.name}/vendor/spdlog/include",
+        "%{prj.name}/src/ImGui",
+        "%{prj.name}/src/box2d/include"
     }
 
     links {
@@ -71,7 +72,9 @@ project "Sandbox"
 
     includedirs {
         "CCEngine/src",
-        "CCEngine/vendor/spdlog/include"
+        "CCEngine/vendor/spdlog/include",
+        "CCEngine/src/ImGui",
+        "CCEngine/src/box2d/include"
     }
 
     links {
