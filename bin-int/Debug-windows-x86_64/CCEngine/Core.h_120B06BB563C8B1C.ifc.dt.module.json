@@ -1,0 +1,22 @@
+{
+    "version": 1,
+    "revision": 0,
+    "rules": [
+        {
+            "primary-output": "D:\\CCEngine\\CCEngine\\..\\bin-int\\Debug-windows-x86_64\\CCEngine\\Core.obj",
+            "outputs": [
+                "D:\\CCEngine\\CCEngine\\..\\bin-int\\Debug-windows-x86_64\\CCEngine\\Core.h_120B06BB563C8B1C.ifc.dt.module.json",
+                "D:\\CCEngine\\CCEngine\\..\\bin-int\\Debug-windows-x86_64\\CCEngine\\Core.h_120B06BB563C8B1C.ifc.dt.d.json",
+                "D:\\CCEngine\\CCEngine\\..\\bin-int\\Debug-windows-x86_64\\CCEngine\\Core.h.ifc"
+            ],
+            "provides": [
+                {
+                    "logical-name": "D:\\CCEngine\\CCEngine\\Core.h",
+                    "source-path": "d:\\ccengine\\ccengine\\core.h",
+                    "lookup-method": "absolute"
+                }
+            ],
+            "requires": []
+        }
+    ]
+}
