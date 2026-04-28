@@ -1,6 +1,7 @@
 #pragma once
 #include "Core.h"
 #include <cstddef> // size_t 사용을 위해 포함
+#include <new>
 
 namespace CCEngine {
 
@@ -24,13 +25,21 @@ namespace CCEngine {
 }
 
 // =========================================================
-// [중요] 네임스페이스 밖에서 전역 new / delete 연산자를 오버로딩
+// 네임스페이스 밖에서 전역 new / delete 연산자를 오버로딩
 // CCEngine 내에서 발생하는 모든 new/delete는 아래 구현된 함수로 처리
 // =========================================================
+
+// MSVC 정적 분석기의 SAL 주석 불일치 경고(C28251)를 무시
+#pragma warning(push)
+#pragma warning(disable: 28251)
+
 void* operator new(size_t size);
 void operator delete(void* memory, size_t size) noexcept;
 void operator delete(void* memory) noexcept;
+
 // Array forms
 void* operator new[](size_t size);
 void operator delete[](void* memory, size_t size) noexcept;
 void operator delete[](void* memory) noexcept;
+
+#pragma warning(pop)

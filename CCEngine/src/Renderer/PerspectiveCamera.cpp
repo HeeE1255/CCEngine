@@ -2,35 +2,44 @@
 
 namespace CCEngine
 {
+    PerspectiveCamera::PerspectiveCamera(float fov, float aspectRatio, float nearClip, float farClip)
+        : m_FOV(fov), m_AspectRatio(aspectRatio), m_NearClip(nearClip), m_FarClip(farClip)
+    {
+        // 생성 시점에 초기 행렬을 한번 세팅
+        RecalculateProjectionMatrix();
+        m_ViewMatrix = DirectX::XMMatrixIdentity();
+        m_ViewProjectionMatrix = m_ViewMatrix * m_ProjectionMatrix;
+
+        m_IsDirty = false;
+        m_IsProjectionDirty = false;
+    }
+
     const DirectX::XMMATRIX& PerspectiveCamera::GetViewMatrix() const
     {
-        // 더티 플레그가 ture일 때만 행렬을 다시 게산
-        // 더티 플레그는 카메라의 위치나 회전이 변경되었을 때 true로 설정되고, 뷰 행렬이 다시 계산된 후에는 false로 리셋
-        // 매 프레임마다 불필요하게 뷰 행렬을 계산하는 것을 방지
         if (m_IsDirty)
-        {
             RecalculateViewMatrix();
-        }
+
         return m_ViewMatrix;
+    }
+
+    const DirectX::XMMATRIX& PerspectiveCamera::GetProjectionMatrix() const
+    {
+        if (m_IsProjectionDirty)
+            RecalculateProjectionMatrix();
+
+        return m_ProjectionMatrix;
     }
 
     const DirectX::XMMATRIX& PerspectiveCamera::GetViewProjectionMatrix() const
     {
+        // 두 행렬 중 하나라도 더티 상태라면 갱신
+        if (m_IsProjectionDirty)
+            RecalculateProjectionMatrix();
+
         if (m_IsDirty)
-        {
             RecalculateViewMatrix();
-        }
+
         return m_ViewProjectionMatrix;
-    }
-
-    PerspectiveCamera::PerspectiveCamera(float fov, float aspectRatio, float near, float far)
-    {
-        // 투영 행렬 계산: 시야각, 화면 비율, 클리핑 평면을 기반으로 3D 공간을 2D 화면에 투영하는 행렬을 계산합니다
-        m_ProjectionMatrix = DirectX::XMMatrixPerspectiveFovLH(
-            DirectX::XMConvertToRadians(fov), aspectRatio, near, far);
-
-        m_ViewMatrix = DirectX::XMMatrixIdentity();
-        m_ViewProjectionMatrix = m_ViewMatrix * m_ProjectionMatrix;
     }
 
     void PerspectiveCamera::SetPosition(const DirectX::XMFLOAT3& position)
@@ -45,20 +54,40 @@ namespace CCEngine
         m_IsDirty = true;
     }
 
+    void PerspectiveCamera::SetProjectionMatrix(float fovDegrees, float aspectRatio, float nearClip, float farClip)
+    {
+        // 최적화: 실제로 값이 달라졌을 때만 재계산을 예약
+        if (m_FOV != fovDegrees || m_AspectRatio != aspectRatio || m_NearClip != nearClip || m_FarClip != farClip)
+        {
+            m_FOV = fovDegrees;
+            m_AspectRatio = aspectRatio;
+            m_NearClip = nearClip;
+            m_FarClip = farClip;
+
+            m_IsProjectionDirty = true;
+            m_IsDirty = true; 
+        }
+    }
+
     void PerspectiveCamera::RecalculateViewMatrix() const
     {
-        // 카메라의 회전과 위치를 기반으로 뷰 행렬을 계산합니다
         DirectX::XMVECTOR quat = DirectX::XMLoadFloat4(&m_RotationQuat);
         DirectX::XMMATRIX transform = DirectX::XMMatrixRotationQuaternion(quat)
             * DirectX::XMMatrixTranslation(m_Position.x, m_Position.y, m_Position.z);
 
-        // 뷰 행렬은 카메라의 변환 행렬의 역행렬입니다. 카메라가 월드 공간에서 어떻게 배치되어 있는지를 나타내는 행렬을 뒤집어서, 월드 공간에서 카메라가 보는 방향으로 변환하는 행렬을 얻습니다
         m_ViewMatrix = DirectX::XMMatrixInverse(nullptr, transform);
+        m_ViewProjectionMatrix = m_ViewMatrix * m_ProjectionMatrix; // V * P
 
-        // 뷰-투영 행렬 계산: 뷰 행렬과 투영 행렬을 곱하여, 월드 공간에서 카메라가 보는 방향으로 변환한 후, 2D 화면에 투영하는 행렬을 계산합니다
+        m_IsDirty = false;
+    }
+
+    void PerspectiveCamera::RecalculateProjectionMatrix() const
+    {
+        float fovRadians = DirectX::XMConvertToRadians(m_FOV);
+        m_ProjectionMatrix = DirectX::XMMatrixPerspectiveFovLH(fovRadians, m_AspectRatio, m_NearClip, m_FarClip);
+
         m_ViewProjectionMatrix = m_ViewMatrix * m_ProjectionMatrix;
 
-        // 뷰 행렬이 다시 계산되었으므로 더티 플래그를 false로 리셋
-        m_IsDirty = false;
+        m_IsProjectionDirty = false;
     }
 }

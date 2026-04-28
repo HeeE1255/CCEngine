@@ -34,6 +34,11 @@ namespace CCEngine
             s_RendererAPI->ResizeContext(width, height);
         }
 
+        inline static void SetDepthTest(bool enable)
+        {
+            s_RendererAPI->SetDepthTest(enable);
+        }
+
     private:
         static std::unique_ptr<RendererAPI> s_RendererAPI;
     };

@@ -11,30 +11,39 @@ namespace CCEngine
         PerspectiveCamera(float fov, float aspectRatio, float nearClip, float farClip);
 
         void SetPosition(const DirectX::XMFLOAT3& position); // X, Y, Z 위치
-        void SetRotation(const DirectX::XMFLOAT4& rotation); // X(Pitch), Y(Yaw), Z(Roll)
+        void SetRotation(const DirectX::XMFLOAT4& rotation); // X(Pitch), Y(Yaw), Z(Roll) 쿼터니언
 
-        // 카메라의 위치나 회전이 변경되었을 때 뷰 행렬을 다시 계산하도록 GetViewMatrix와 GetViewProjectionMatrix에서 체크
+        // 각각의 행렬을 요청할 때, 더티 플래그를 확인하여 최신 상태로 반환
         const DirectX::XMMATRIX& GetViewMatrix() const;
+        const DirectX::XMMATRIX& GetProjectionMatrix() const;
         const DirectX::XMMATRIX& GetViewProjectionMatrix() const;
 
-        //const DirectX::XMMATRIX& GetProjectionMatrix() const { return m_ProjectionMatrix; }
-        //const DirectX::XMMATRIX& GetViewMatrix() const { return m_ViewMatrix; }
-        //const DirectX::XMMATRIX& GetViewProjectionMatrix() const { return m_ViewProjectionMatrix; }
+        // 카메라 투영 설정 변경
+        void SetProjectionMatrix(float fovDegrees, float aspectRatio, float nearClip, float farClip);
+
+        // (선택) 현재 카메라의 설정값을 가져오는 Getter들
+        float GetFOV() const { return m_FOV; }
+        float GetAspectRatio() const { return m_AspectRatio; }
 
     private:
-        void RecalculateViewMatrix() const; // 카메라의 위치나 회전이 변경되었을 때 뷰 행렬을 다시 계산하는 함수
+        void RecalculateViewMatrix() const;
+        void RecalculateProjectionMatrix() const;
 
     private:
-        DirectX::XMMATRIX m_ProjectionMatrix;
-        // 뷰 행렬과 뷰-투영 행렬은 카메라의 위치나 회전이 변경될 때마다 다시 계산되어야 하므로, mutable로 선언하여 const 함수에서도 수정할 수 있도록 한다.
-        mutable DirectX::XMMATRIX m_ViewMatrix;
-        mutable DirectX::XMMATRIX m_ViewProjectionMatrix;
+        float m_FOV = 45.0f;
+        float m_AspectRatio = 1.778f; // 16:9
+        float m_NearClip = 0.1f;
+        float m_FarClip = 100.0f;
 
         DirectX::XMFLOAT3 m_Position = { 0.0f, 0.0f, 0.0f };
         DirectX::XMFLOAT4 m_RotationQuat = { 0.0f, 0.0f, 0.0f, 1.0f };
 
-        // 위치나 회전이 변경되어 뷰 행렬을 다시 계산해야 하는지 여부를 나타내는 플래그 (랜더링 해야하므로 처음에는 무조건 true)
-        // mutable로 선언하여 const 함수에서도 수정할 수 있도록 한다.
-        mutable bool m_IsDirty = true;
+        // 더티 플래그와 행렬들은 const getter 내부에서 갱신되어야 하므로 mutable로 선언
+        mutable bool m_IsDirty = true;             // 뷰(위치/회전) 변경 확인용
+        mutable bool m_IsProjectionDirty = true;   // 프로젝션(화면/시야) 변경 확인용
+
+        mutable DirectX::XMMATRIX m_ProjectionMatrix;
+        mutable DirectX::XMMATRIX m_ViewMatrix;
+        mutable DirectX::XMMATRIX m_ViewProjectionMatrix;
     };
 }

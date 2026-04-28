@@ -16,8 +16,7 @@ namespace CCEngine
         Entity(const Entity& other) = default;
 
         // ==========================================
-        // [핵심] 템플릿 마법으로 컴포넌트 추가/가져오기
-        // 사용법: entity.AddComponent<TransformComponent>();
+        // 컴포넌트 추가/가져오기
         // ==========================================
         template<typename T, typename... Args>
         T& AddComponent(Args&&... args)

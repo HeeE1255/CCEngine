@@ -28,7 +28,6 @@ namespace CCEngine
         nlohmann::json entitiesArray = nlohmann::json::array();
 
         // 씬 안의 모든 엔티티를 순회하며 데이터를 추출
-        // (EnTT의 each()는 엔티티 ID를 반환합니다)
         m_Scene->m_Registry.view<TransformComponent>().each([&](auto entityID, auto& transform)
             {
                 Entity entity = { entityID, m_Scene };
@@ -58,14 +57,14 @@ namespace CCEngine
                     entityData["SpriteRendererComponent"]["Color"] = { sprite.Color.x, sprite.Color.y, sprite.Color.z, sprite.Color.w };
                 }
 
-                // 4. Wave 컴포넌트 저장 (임시)
-                if (entity.HasComponent<WaveComponent>())
-                {
-                    auto& wave = entity.GetComponent<WaveComponent>();
-                    entityData["WaveComponent"]["StartX"] = wave.StartX;
-                    entityData["WaveComponent"]["StartY"] = wave.StartY;
-                    entityData["WaveComponent"]["TimeOffset"] = wave.TimeOffset;
-                }
+                //// 4. Wave 컴포넌트 저장 (임시)
+                //if (entity.HasComponent<WaveComponent>())
+                //{
+                //    auto& wave = entity.GetComponent<WaveComponent>();
+                //    entityData["WaveComponent"]["StartX"] = wave.StartX;
+                //    entityData["WaveComponent"]["StartY"] = wave.StartY;
+                //    entityData["WaveComponent"]["TimeOffset"] = wave.TimeOffset;
+                //}
 
                 // 배열에 완성된 엔티티 데이터를 추가!
                 entitiesArray.push_back(entityData);
@@ -97,8 +96,7 @@ namespace CCEngine
         // 2. JSON 파싱 (스트림에서 데이터 뽑아오기)
         nlohmann::json data;
         
-        // 스트림(파일)에서 데이터를 뽑아서(>>) json 객체(data)에 파싱해 넣어라는 연산자. 
-        // ( >> 연산자 오버로딩 덕분에 이렇게 간단히 쓸 수 있습니다)
+        // 스트림(파일)에서 데이터를 뽑아서(>>) json 객체(data)에 파싱해 넣어라는 오버로딩 연산자
         // 파싱이 실패하면 예외가 터지므로, 여기까지 왔으면 일단 성공적으로 파싱된 것
         stream >> data; 
 
@@ -140,20 +138,19 @@ namespace CCEngine
             if (entityData.contains("SpriteRendererComponent"))
             {
                 auto& spriteData = entityData["SpriteRendererComponent"];
-                // 이 부품은 기본으로 안 달려있으니 AddComponent로 달아줍니다!
                 auto& src = deserializedEntity.AddComponent<SpriteRendererComponent>();
                 src.Color = { spriteData["Color"][0], spriteData["Color"][1], spriteData["Color"][2], spriteData["Color"][3] };
             }
 
-            // Wave 복구
-            if (entityData.contains("WaveComponent"))
-            {
-                auto& waveData = entityData["WaveComponent"];
-                auto& wc = deserializedEntity.AddComponent<WaveComponent>();
-                wc.StartX = waveData["StartX"];
-                wc.StartY = waveData["StartY"];
-                wc.TimeOffset = waveData["TimeOffset"];
-            }
+            //// Wave 복구
+            //if (entityData.contains("WaveComponent"))
+            //{
+            //    auto& waveData = entityData["WaveComponent"];
+            //    auto& wc = deserializedEntity.AddComponent<WaveComponent>();
+            //    wc.StartX = waveData["StartX"];
+            //    wc.StartY = waveData["StartY"];
+            //    wc.TimeOffset = waveData["TimeOffset"];
+            //}
         }
 
         return true;
