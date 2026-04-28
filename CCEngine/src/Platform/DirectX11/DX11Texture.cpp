@@ -1,23 +1,16 @@
 #include "Platform/DirectX11/DX11Texture.h"
 #include "Platform/DirectX11/DX11Context.h"
 #include "stb_image.h"
+#include <system_error>
 #include <iostream>
 
 namespace CCEngine
 {
-    // 텍스처 생성 함수: 파일 경로를 받아서 텍스처 객체를 생성하는 정적 함수
-    Texture2D* Texture2D::Create(const std::string& path)
-    {
-        return new DX11Texture2D(path);
-    }
-
     DX11Texture2D::DX11Texture2D(const std::string& path)
         : m_Path(path)
     {
         int width, height, channels;
 
-        // 이미지 파일을 로드하여 CPU 메모리에 픽셀 데이터 가져오기 (RGBA 4채널로 강제 변환)
-        stbi_set_flip_vertically_on_load(1); // 다이렉트X는 UV 좌표가 y축 반대라서 플립 <>
         stbi_uc* data = stbi_load(path.c_str(), &width, &height, &channels, 4);
 
         if (data == nullptr)
@@ -26,46 +19,130 @@ namespace CCEngine
             return;
         }
 
-        // 다이렉트X 텍스처 리소스 만들기
-        D3D11_TEXTURE2D_DESC textureDesc = {}; 
-        textureDesc.Width = width; 
-        textureDesc.Height = height;
-        textureDesc.MipLevels = 1;  // 밉맵 생략 (나중에 성능 최적화할 때 추가 가능)
-        textureDesc.ArraySize = 1;  // 2D 텍스처는 배열 크기가 1
-        textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM; // RGBA 8비트 표준 포맷
-        textureDesc.SampleDesc.Count = 1; // 멀티샘플링 없음
-        textureDesc.Usage = D3D11_USAGE_DEFAULT; // GPU에서 읽고 쓰는 용도로 사용
-        textureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE; // 셰이더에서 읽겠다고 표시
+        m_Width = width;
+        m_Height = height;
+
+        D3D11_TEXTURE2D_DESC textureDesc = {};
+        textureDesc.Width = m_Width;
+        textureDesc.Height = m_Height;
+        textureDesc.MipLevels = 1;
+        textureDesc.ArraySize = 1;
+        textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        textureDesc.SampleDesc.Count = 1;
+        textureDesc.Usage = D3D11_USAGE_DEFAULT;
+        textureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 
         D3D11_SUBRESOURCE_DATA initialData = {};
-        initialData.pSysMem = data; // CPU 메모리에 있는 픽셀 데이터 포인터
-        initialData.SysMemPitch = width * 4; // 한 줄의 데이터 크기 (픽셀 수 * 4바이트 RGBA)
+        initialData.pSysMem = data;
+        initialData.SysMemPitch = m_Width * 4;
 
-        ID3D11Texture2D* texture = nullptr;
-        DX11Context::Get()->GetDevice()->CreateTexture2D(&textureDesc, &initialData, &texture);
 
-        // 텍스처 뷰 만들기: 셰이더에서 텍스처를 읽을 때 사용하는 뷰 객체
+        auto device = DX11Context::Get()->GetDevice();
+
+        HRESULT hr = device->CreateTexture2D(&textureDesc, &initialData, &m_Texture);
+
+        if (SUCCEEDED(hr) && m_Texture != nullptr)
+        {
+            D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+            srvDesc.Format = textureDesc.Format;
+            srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            srvDesc.Texture2D.MostDetailedMip = 0;
+            srvDesc.Texture2D.MipLevels = 1;
+
+            device->CreateShaderResourceView(m_Texture, &srvDesc, &m_TextureView);
+        }
+
+        stbi_image_free(data);
+    }
+
+    // =========================================================================
+    // 가로, 세로 크기만 받아 메모리에 빈 텍스처 생성
+    // =========================================================================
+    DX11Texture2D::DX11Texture2D(uint32_t width, uint32_t height)
+        : m_Width(width), m_Height(height)
+    {
+        D3D11_TEXTURE2D_DESC textureDesc = {};
+        textureDesc.Width = m_Width;
+        textureDesc.Height = m_Height;
+        textureDesc.MipLevels = 1;
+        textureDesc.ArraySize = 1;
+        textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        textureDesc.SampleDesc.Count = 1;
+        textureDesc.Usage = D3D11_USAGE_DEFAULT;
+        textureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+        // pInitialData 없이 빈 텍스처를 생성
+        HRESULT hr = DX11Context::Get()->GetDevice()->CreateTexture2D(&textureDesc, nullptr, &m_Texture);
+
+        if (SUCCEEDED(hr))
+        {
+            D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+            srvDesc.Format = textureDesc.Format;
+            srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            srvDesc.Texture2D.MostDetailedMip = 0;
+            srvDesc.Texture2D.MipLevels = 1;
+
+            DX11Context::Get()->GetDevice()->CreateShaderResourceView(m_Texture, &srvDesc, &m_TextureView);
+        }
+    }
+
+    DX11Texture2D::DX11Texture2D(uint32_t width, uint32_t height, void* data)
+    {
+        m_Width = width;
+        m_Height = height;
+
+        if (m_Width == 0 || m_Height == 0)
+        {
+            std::cout << "[DX11] 에러: 텍스처 너비나 높이가 0입니다!" << std::endl;
+            return;
+        }
+
+        D3D11_TEXTURE2D_DESC textureDesc = {};
+        textureDesc.Width = m_Width;
+        textureDesc.Height = m_Height;
+        textureDesc.MipLevels = 1;
+        textureDesc.ArraySize = 1;               // ★ 필수!
+        textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        textureDesc.SampleDesc.Count = 1;        // ★ 필수! (0이면 무조건 실패)
+        textureDesc.Usage = D3D11_USAGE_DEFAULT;
+        textureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+        // ★ 파라미터로 넘어온 데이터 포인터를 연결!
+        D3D11_SUBRESOURCE_DATA initialData = {};
+        initialData.pSysMem = data;
+        initialData.SysMemPitch = m_Width * 4; // RGBA 4채널이므로 픽셀당 4바이트
+
+        auto device = DX11Context::Get()->GetDevice();
+        HRESULT hr = device->CreateTexture2D(&textureDesc, &initialData, &m_Texture);
+
+        if (FAILED(hr))
+        {
+            std::cout << "[DX11] 텍스처 생성 실패! 에러 코드: 0x" << std::hex << hr
+                << " / 상세: " << std::system_category().message(hr) << std::endl;
+            return;
+        }
+
+        // 5. 셰이더 리소스 뷰(SRV) 생성
         D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
         srvDesc.Format = textureDesc.Format;
         srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
         srvDesc.Texture2D.MostDetailedMip = 0;
         srvDesc.Texture2D.MipLevels = 1;
 
-        DX11Context::Get()->GetDevice()->CreateShaderResourceView(texture, &srvDesc, &m_TextureView);
+        device->CreateShaderResourceView(m_Texture, &srvDesc, &m_TextureView);
 
-        // 해제: 텍스처는 뷰가 참조하므로 뷰가 생성된 후에 해제해도 됩니다. CPU 메모리의 픽셀 데이터도 이제 필요 없으므로 해제합니다
-        texture->Release();
-        stbi_image_free(data);
     }
 
     DX11Texture2D::~DX11Texture2D()
     {
         if (m_TextureView) m_TextureView->Release();
+
+        // 소멸될 때 원본 텍스처도 함께 해제
+        if (m_Texture) m_Texture->Release();
     }
 
     void DX11Texture2D::Bind(uint32_t slot) const
     {
-        // 셰이더에서 텍스처를 읽을 때 사용하는 슬롯 번호에 텍스처 뷰를 바인딩합니다. 슬롯 번호는 셰이더 코드에서 Texture2D가 선언된 순서에 따라 결정됩니다 (예: slot0, slot1 등)
         DX11Context::Get()->GetDeviceContext()->PSSetShaderResources(slot, 1, &m_TextureView);
     }
 
@@ -73,5 +150,21 @@ namespace CCEngine
     {
         ID3D11ShaderResourceView* nullSRV = nullptr;
         DX11Context::Get()->GetDeviceContext()->PSSetShaderResources(slot, 1, &nullSRV);
+    }
+
+    // =========================================================================
+    // CPU 메모리의 픽셀 데이터를 GPU 텍스처에 덮어쓰기
+    // =========================================================================
+    void DX11Texture2D::SetData(void* data, uint32_t size)
+    {
+        uint32_t bpp = 4; // R, G, B, A (각 1바이트)
+        if (size != m_Width * m_Height * bpp)
+        {
+            std::cout << "Data size must be entire texture!" << std::endl;
+            return;
+        }
+
+        // UpdateSubresource를 사용하여 텍스처 데이터 덮어쓰기
+        DX11Context::Get()->GetDeviceContext()->UpdateSubresource(m_Texture, 0, nullptr, data, m_Width * bpp, 0);
     }
 }

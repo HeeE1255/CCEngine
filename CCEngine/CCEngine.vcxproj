@@ -68,7 +68,7 @@
     <TargetExt>.dll</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Dist|x64'">
-    <LinkIncremental>true</LinkIncremental>
+    <LinkIncremental>false</LinkIncremental>
     <OutDir>$(ProjectDir)..\bin\Dist-windows-x86_64\</OutDir>
     <IntDir>$(ProjectDir)..\bin-int\Dist-windows-x86_64\CCEngine\</IntDir>
     <TargetName>CCEngine</TargetName>
@@ -78,31 +78,34 @@
     <ClCompile>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <WarningLevel>Level3</WarningLevel>
-      <PreprocessorDefinitions>CC_PLATFORM_WINDOWS;CC_BUILD_DLL;CC_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>src;vendor\spdlog\include;src\ImGui;src\box2d\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>CC_PLATFORM_WINDOWS;CC_BUILD_DLL;_CRT_SECURE_NO_WARNINGS;CC_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>src;vendor\spdlog\include;vendor\box2d\include;vendor\Assimp\include;vendor\stb_truetype;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DebugInformationFormat>EditAndContinue</DebugInformationFormat>
       <Optimization>Disabled</Optimization>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <ExternalWarningLevel>Level3</ExternalWarningLevel>
-      <LanguageStandard_C>stdc17</LanguageStandard_C>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>d3d11.lib;dxgi.lib;d3dcompiler.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>d3d11.lib;dxgi.lib;d3dcompiler.lib;assimp-vc145-mt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>vendor\Assimp\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <ImportLibrary>..\bin\Debug-windows-x86_64\CCEngine.lib</ImportLibrary>
     </Link>
     <ProjectReference>
     </ProjectReference>
+    <PostBuildEvent>
+      <Command>IF EXIST $(ProjectDir)\vendor\Assimp\bin\*.dll\ (xcopy /Q /E /Y /I $(ProjectDir)\vendor\Assimp\bin\*.dll ..\bin\Debug-windows-x86_64 &gt; nul) ELSE (xcopy /Q /Y /I $(ProjectDir)\vendor\Assimp\bin\*.dll ..\bin\Debug-windows-x86_64 &gt; nul)</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <WarningLevel>Level3</WarningLevel>
-      <PreprocessorDefinitions>CC_PLATFORM_WINDOWS;CC_BUILD_DLL;CC_RELEASE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>src;vendor\spdlog\include;src\ImGui;src\box2d\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>CC_PLATFORM_WINDOWS;CC_BUILD_DLL;_CRT_SECURE_NO_WARNINGS;CC_RELEASE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>src;vendor\spdlog\include;vendor\box2d\include;vendor\Assimp\include;vendor\stb_truetype;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <Optimization>Full</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
@@ -112,178 +115,169 @@
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <ExternalWarningLevel>Level3</ExternalWarningLevel>
-      <LanguageStandard_C>stdc17</LanguageStandard_C>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>d3d11.lib;dxgi.lib;d3dcompiler.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>d3d11.lib;dxgi.lib;d3dcompiler.lib;assimp-vc145-mt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>vendor\Assimp\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <ImportLibrary>..\bin\Release-windows-x86_64\CCEngine.lib</ImportLibrary>
     </Link>
     <ProjectReference>
     </ProjectReference>
+    <PostBuildEvent>
+      <Command>IF EXIST $(ProjectDir)\vendor\Assimp\bin\*.dll\ (xcopy /Q /E /Y /I $(ProjectDir)\vendor\Assimp\bin\*.dll ..\bin\Release-windows-x86_64 &gt; nul) ELSE (xcopy /Q /Y /I $(ProjectDir)\vendor\Assimp\bin\*.dll ..\bin\Release-windows-x86_64 &gt; nul)</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Dist|x64'">
     <ClCompile>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <WarningLevel>Level3</WarningLevel>
-      <PreprocessorDefinitions>CC_PLATFORM_WINDOWS;CC_BUILD_DLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>src;vendor\spdlog\include;src\ImGui;src\box2d\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <Optimization>Disabled</Optimization>
+      <PreprocessorDefinitions>CC_PLATFORM_WINDOWS;CC_BUILD_DLL;_CRT_SECURE_NO_WARNINGS;CC_DIST;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>src;vendor\spdlog\include;vendor\box2d\include;vendor\Assimp\include;vendor\stb_truetype;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <Optimization>Full</Optimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <MinimalRebuild>false</MinimalRebuild>
+      <StringPooling>true</StringPooling>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <ExternalWarningLevel>Level3</ExternalWarningLevel>
-      <LanguageStandard_C>stdc17</LanguageStandard_C>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalDependencies>d3d11.lib;dxgi.lib;d3dcompiler.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <AdditionalDependencies>d3d11.lib;dxgi.lib;d3dcompiler.lib;assimp-vc145-mt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>vendor\Assimp\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <ImportLibrary>..\bin\Dist-windows-x86_64\CCEngine.lib</ImportLibrary>
     </Link>
     <ProjectReference>
     </ProjectReference>
+    <PostBuildEvent>
+      <Command>IF EXIST $(ProjectDir)\vendor\Assimp\bin\*.dll\ (xcopy /Q /E /Y /I $(ProjectDir)\vendor\Assimp\bin\*.dll ..\bin\Dist-windows-x86_64 &gt; nul) ELSE (xcopy /Q /Y /I $(ProjectDir)\vendor\Assimp\bin\*.dll ..\bin\Dist-windows-x86_64 &gt; nul)</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="src\Animation\Animator.h" />
     <ClInclude Include="src\Application.h" />
-    <ClInclude Include="src\box2d\src\aabb.h" />
-    <ClInclude Include="src\box2d\src\arena_allocator.h" />
-    <ClInclude Include="src\box2d\src\array.h" />
-    <ClInclude Include="src\box2d\src\atomic.h" />
-    <ClInclude Include="src\box2d\src\bitset.h" />
-    <ClInclude Include="src\box2d\src\body.h" />
-    <ClInclude Include="src\box2d\src\broad_phase.h" />
-    <ClInclude Include="src\box2d\src\constants.h" />
-    <ClInclude Include="src\box2d\src\constraint_graph.h" />
-    <ClInclude Include="src\box2d\src\contact.h" />
-    <ClInclude Include="src\box2d\src\contact_solver.h" />
-    <ClInclude Include="src\box2d\src\core.h" />
-    <ClInclude Include="src\box2d\src\ctz.h" />
-    <ClInclude Include="src\box2d\src\id_pool.h" />
-    <ClInclude Include="src\box2d\src\island.h" />
-    <ClInclude Include="src\box2d\src\joint.h" />
-    <ClInclude Include="src\box2d\src\sensor.h" />
-    <ClInclude Include="src\box2d\src\shape.h" />
-    <ClInclude Include="src\box2d\src\solver.h" />
-    <ClInclude Include="src\box2d\src\solver_set.h" />
-    <ClInclude Include="src\box2d\src\table.h" />
-    <ClInclude Include="src\box2d\src\world.h" />
     <ClInclude Include="src\Core.h" />
     <ClInclude Include="src\Core\ApplicationEvent.h" />
+    <ClInclude Include="src\Core\Layer.h" />
+    <ClInclude Include="src\Core\LayerStack.h" />
     <ClInclude Include="src\Core\Memory.h" />
     <ClInclude Include="src\Core\MemoryMacro.h" />
     <ClInclude Include="src\Core\Window.h" />
-    <ClInclude Include="src\Editor\SceneHierarchyPanel.h" />
+    <ClInclude Include="src\Editor\EditorCamera.h" />
+    <ClInclude Include="src\Editor\EditorLayer.h" />
     <ClInclude Include="src\EntryPoint.h" />
-    <ClInclude Include="src\ImGui\backends\imgui_impl_dx11.h" />
-    <ClInclude Include="src\ImGui\backends\imgui_impl_win32.h" />
-    <ClInclude Include="src\ImGui\imconfig.h" />
-    <ClInclude Include="src\ImGui\imgui.h" />
-    <ClInclude Include="src\ImGui\imgui_internal.h" />
-    <ClInclude Include="src\ImGui\imstb_rectpack.h" />
-    <ClInclude Include="src\ImGui\imstb_textedit.h" />
-    <ClInclude Include="src\ImGui\imstb_truetype.h" />
+    <ClInclude Include="src\Events\Event.h" />
+    <ClInclude Include="src\Events\MouseEvent.h" />
     <ClInclude Include="src\Platform\DirectX11\DX11Buffer.h" />
     <ClInclude Include="src\Platform\DirectX11\DX11Context.h" />
+    <ClInclude Include="src\Platform\DirectX11\DX11Framebuffer.h" />
     <ClInclude Include="src\Platform\DirectX11\DX11RendererAPI.h" />
     <ClInclude Include="src\Platform\DirectX11\DX11Shader.h" />
     <ClInclude Include="src\Platform\DirectX11\DX11Texture.h" />
+    <ClInclude Include="src\Platform\OpenGL\OpenGLFramebuffer.h" />
+    <ClInclude Include="src\Platform\OpenGL\OpenGLTexture.h" />
+    <ClInclude Include="src\Platform\Vulkan\VulkanTexture.h" />
     <ClInclude Include="src\Platform\Windows\WindowsWindow.h" />
     <ClInclude Include="src\Renderer\Buffer.h" />
+    <ClInclude Include="src\Renderer\Font.h" />
+    <ClInclude Include="src\Renderer\Framebuffer.h" />
     <ClInclude Include="src\Renderer\GraphicsContext.h" />
+    <ClInclude Include="src\Renderer\Mesh.h" />
+    <ClInclude Include="src\Renderer\MeshFactory.h" />
+    <ClInclude Include="src\Renderer\Model.h" />
+    <ClInclude Include="src\Renderer\ModelImporter.h" />
     <ClInclude Include="src\Renderer\PerspectiveCamera.h" />
     <ClInclude Include="src\Renderer\RenderCommand.h" />
+    <ClInclude Include="src\Renderer\RenderState.h" />
     <ClInclude Include="src\Renderer\Renderer.h" />
     <ClInclude Include="src\Renderer\Renderer2D.h" />
+    <ClInclude Include="src\Renderer\Renderer3D.h" />
     <ClInclude Include="src\Renderer\RendererAPI.h" />
     <ClInclude Include="src\Renderer\Shader.h" />
     <ClInclude Include="src\Renderer\Texture.h" />
+    <ClInclude Include="src\Renderer\UIRenderer.h" />
     <ClInclude Include="src\Scene\Components.h" />
     <ClInclude Include="src\Scene\Entity.h" />
     <ClInclude Include="src\Scene\Scene.h" />
     <ClInclude Include="src\Scene\SceneSerializer.h" />
     <ClInclude Include="src\Scene\ScriptableEntity.h" />
+    <ClInclude Include="src\UI\Button.h" />
+    <ClInclude Include="src\UI\EditorRootUI.h" />
+    <ClInclude Include="src\UI\HierarchyItem.h" />
+    <ClInclude Include="src\UI\ImageWidget.h" />
+    <ClInclude Include="src\UI\Panel.h" />
+    <ClInclude Include="src\UI\HierarchyPanel.h" />
+    <ClInclude Include="src\UI\VBoxContainer.h" />
+    <ClInclude Include="src\UI\Widget.h" />
+    <ClInclude Include="src\UI\WindowPanel.h" />
+    <ClInclude Include="src\Utils\MathUtils.h" />
     <ClInclude Include="src\Utils\PlatformUtils.h" />
-    <ClInclude Include="src\box2d\include\box2d\base.h" />
-    <ClInclude Include="src\box2d\include\box2d\box2d.h" />
-    <ClInclude Include="src\box2d\include\box2d\collision.h" />
-    <ClInclude Include="src\box2d\include\box2d\id.h" />
-    <ClInclude Include="src\box2d\include\box2d\math_functions.h" />
-    <ClInclude Include="src\box2d\include\box2d\types.h" />
     <ClInclude Include="src\stb_image.h" />
+    <ClInclude Include="vendor\stb_truetype\stb_truetype.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="src\Animation\Animator.cpp" />
     <ClCompile Include="src\Application.cpp" />
-    <ClCompile Include="src\box2d\src\aabb.c" />
-    <ClCompile Include="src\box2d\src\arena_allocator.c" />
-    <ClCompile Include="src\box2d\src\array.c" />
-    <ClCompile Include="src\box2d\src\bitset.c" />
-    <ClCompile Include="src\box2d\src\body.c" />
-    <ClCompile Include="src\box2d\src\broad_phase.c" />
-    <ClCompile Include="src\box2d\src\constraint_graph.c" />
-    <ClCompile Include="src\box2d\src\contact.c" />
-    <ClCompile Include="src\box2d\src\contact_solver.c" />
-    <ClCompile Include="src\box2d\src\core.c" />
-    <ClCompile Include="src\box2d\src\distance.c" />
-    <ClCompile Include="src\box2d\src\distance_joint.c" />
-    <ClCompile Include="src\box2d\src\dynamic_tree.c" />
-    <ClCompile Include="src\box2d\src\geometry.c" />
-    <ClCompile Include="src\box2d\src\hull.c" />
-    <ClCompile Include="src\box2d\src\id_pool.c" />
-    <ClCompile Include="src\box2d\src\island.c" />
-    <ClCompile Include="src\box2d\src\joint.c" />
-    <ClCompile Include="src\box2d\src\manifold.c" />
-    <ClCompile Include="src\box2d\src\math_functions.c" />
-    <ClCompile Include="src\box2d\src\motor_joint.c" />
-    <ClCompile Include="src\box2d\src\mouse_joint.c" />
-    <ClCompile Include="src\box2d\src\mover.c" />
-    <ClCompile Include="src\box2d\src\prismatic_joint.c" />
-    <ClCompile Include="src\box2d\src\revolute_joint.c" />
-    <ClCompile Include="src\box2d\src\sensor.c" />
-    <ClCompile Include="src\box2d\src\shape.c" />
-    <ClCompile Include="src\box2d\src\solver.c" />
-    <ClCompile Include="src\box2d\src\solver_set.c" />
-    <ClCompile Include="src\box2d\src\table.c" />
-    <ClCompile Include="src\box2d\src\timer.c" />
-    <ClCompile Include="src\box2d\src\types.c" />
-    <ClCompile Include="src\box2d\src\weld_joint.c" />
-    <ClCompile Include="src\box2d\src\wheel_joint.c" />
-    <ClCompile Include="src\box2d\src\world.c" />
+    <ClCompile Include="src\Core\Layer.cpp" />
+    <ClCompile Include="src\Core\LayerStack.cpp" />
     <ClCompile Include="src\Core\Memory.cpp" />
     <ClCompile Include="src\Core\Window.cpp" />
-    <ClCompile Include="src\Editor\SceneHierarchyPanel.cpp" />
-    <ClCompile Include="src\ImGui\backends\imgui_impl_dx11.cpp" />
-    <ClCompile Include="src\ImGui\backends\imgui_impl_win32.cpp" />
-    <ClCompile Include="src\ImGui\imgui.cpp" />
-    <ClCompile Include="src\ImGui\imgui_demo.cpp" />
-    <ClCompile Include="src\ImGui\imgui_draw.cpp" />
-    <ClCompile Include="src\ImGui\imgui_tables.cpp" />
-    <ClCompile Include="src\ImGui\imgui_widgets.cpp" />
+    <ClCompile Include="src\Editor\EditorCamera.cpp" />
+    <ClCompile Include="src\Editor\EditorLayer.cpp" />
     <ClCompile Include="src\Platform\DirectX11\DX11Buffer.cpp" />
     <ClCompile Include="src\Platform\DirectX11\DX11Context.cpp" />
+    <ClCompile Include="src\Platform\DirectX11\DX11Framebuffer.cpp" />
     <ClCompile Include="src\Platform\DirectX11\DX11RendererAPI.cpp" />
     <ClCompile Include="src\Platform\DirectX11\DX11Shader.cpp" />
     <ClCompile Include="src\Platform\DirectX11\DX11Texture.cpp" />
+    <ClCompile Include="src\Platform\OpenGL\OpenGLTexture.cpp" />
+    <ClCompile Include="src\Platform\Vulkan\VulkanTexture.cpp" />
     <ClCompile Include="src\Platform\Windows\WindowsWindow.cpp" />
     <ClCompile Include="src\Renderer\Buffer.cpp" />
+    <ClCompile Include="src\Renderer\Font.cpp" />
+    <ClCompile Include="src\Renderer\Framebuffer.cpp" />
+    <ClCompile Include="src\Renderer\GraphicsContext.cpp" />
+    <ClCompile Include="src\Renderer\Mesh.cpp" />
+    <ClCompile Include="src\Renderer\MeshFactory.cpp" />
+    <ClCompile Include="src\Renderer\Model.cpp" />
+    <ClCompile Include="src\Renderer\ModelImporter.cpp" />
     <ClCompile Include="src\Renderer\PerspectiveCamera.cpp" />
     <ClCompile Include="src\Renderer\RenderCommand.cpp" />
+    <ClCompile Include="src\Renderer\RenderState.cpp" />
     <ClCompile Include="src\Renderer\Renderer.cpp" />
     <ClCompile Include="src\Renderer\Renderer2D.cpp" />
+    <ClCompile Include="src\Renderer\Renderer3D.cpp" />
     <ClCompile Include="src\Renderer\RendererAPI.cpp" />
     <ClCompile Include="src\Renderer\Shader.cpp" />
+    <ClCompile Include="src\Renderer\Texture.cpp" />
+    <ClCompile Include="src\Renderer\UIRenderer.cpp" />
     <ClCompile Include="src\Scene\Entity.cpp" />
     <ClCompile Include="src\Scene\Scene.cpp" />
     <ClCompile Include="src\Scene\SceneSerializer.cpp" />
+    <ClCompile Include="src\UI\Button.cpp" />
+    <ClCompile Include="src\UI\EditorRootUI.cpp" />
+    <ClCompile Include="src\UI\HierarchyItem.cpp" />
+    <ClCompile Include="src\UI\ImageWidget.cpp" />
+    <ClCompile Include="src\UI\Panel.cpp" />
+    <ClCompile Include="src\UI\HierarchyPanel.cpp" />
+    <ClCompile Include="src\UI\VBoxContainer.cpp" />
+    <ClCompile Include="src\UI\Widget.cpp" />
+    <ClCompile Include="src\UI\WindowPanel.cpp" />
     <ClCompile Include="src\Utils\PlatformUtils.cpp" />
     <ClCompile Include="src\stb_image_impl.cpp" />
+    <ClCompile Include="vendor\stb_truetype\stb_truetype.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <Natvis Include="src\box2d\src\box2d.natvis" />
-  </ItemGroup>
-  <ItemGroup>
-    <Text Include="src\box2d\src\CMakeLists.txt" />
+    <ProjectReference Include="vendor\box2d\Box2D.vcxproj">
+      <Project>{A434E80C-1049-10BE-D9CA-B31D459E0CEF}</Project>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

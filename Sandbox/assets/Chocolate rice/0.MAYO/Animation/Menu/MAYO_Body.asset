@@ -1,0 +1,68 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: -340790334, guid: 67cc4cb7839cd3741b63733d5adf0442, type: 3}
+  m_Name: MAYO_Body
+  m_EditorClassIdentifier: 
+  Parameters: {fileID: 11400000, guid: fa1773470c2352d4d86e499293828aeb, type: 2}
+  controls:
+  - name: Body_Hip_Big
+    icon: {fileID: 2800000, guid: 0dc121bd6e9bb504f9d3db634ebc5aaf, type: 3}
+    type: 102
+    parameter:
+      name: Body_Hip_Big
+    value: 1
+    style: 0
+    subMenu: {fileID: 0}
+    subParameters: []
+    labels: []
+  - name: Body_Waist_Slim
+    icon: {fileID: 2800000, guid: b466ee1e17db6524f9df67b862c82d80, type: 3}
+    type: 102
+    parameter:
+      name: Body_Waist_Slim
+    value: 1
+    style: 0
+    subMenu: {fileID: 0}
+    subParameters: []
+    labels: []
+  - name: Body_Legs_Thicker
+    icon: {fileID: 2800000, guid: 2350bef58b345064a9cbfa989720af99, type: 3}
+    type: 102
+    parameter:
+      name: Body_Legs_Thicker
+    value: 1
+    style: 0
+    subMenu: {fileID: 0}
+    subParameters:
+    - name: Breast
+    labels: []
+  - name: Body_Legs_Slim
+    icon: {fileID: 2800000, guid: 2350bef58b345064a9cbfa989720af99, type: 3}
+    type: 102
+    parameter:
+      name: Body_Legs_Slim
+    value: 1
+    style: 0
+    subMenu: {fileID: 0}
+    subParameters: []
+    labels: []
+  - name: Breast_Size
+    icon: {fileID: 2800000, guid: 53adde3436b31c24ab9a15406412c5df, type: 3}
+    type: 203
+    parameter:
+      name: 
+    value: 1
+    style: 0
+    subMenu: {fileID: 0}
+    subParameters:
+    - name: Breast
+    labels: []

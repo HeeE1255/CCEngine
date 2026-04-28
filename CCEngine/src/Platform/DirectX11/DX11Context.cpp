@@ -9,131 +9,167 @@ namespace CCEngine
 {
 	// 엔진 전역에서 현재 DirectX 11 컨텍스트에 접근하기 위한 정적 포인터
 	// 싱글톤 패턴처럼 사용하기 위해 클래스 외부에 정의
-	static DX11Context* s_DX11Context = nullptr;
+	// 정적 변수 초기화
+	ID3D11Device* DX11Context::s_Device = nullptr;
+	ID3D11DeviceContext* DX11Context::s_DeviceContext = nullptr;
+	static DX11Context* s_MainContext = nullptr; // 메인 윈도우 참조용
+	DX11Context* DX11Context::s_CurrentContext = nullptr; // 현재 활성화된 컨텍스트를 추적하기 위한 정적 포인터 (멀티윈도우 지원용)
 
 	DX11Context* DX11Context::Get() 
 	{
-		return s_DX11Context;
+		return s_CurrentContext ? s_CurrentContext : s_MainContext;
+	}
+
+	void DX11Context::MakeCurrent()
+	{
+		s_CurrentContext = this;
+	}
+
+	void DX11Context::BindBackBuffer()
+	{
+		s_DeviceContext->OMSetRenderTargets(1, &m_RenderTargetView, nullptr);
+
+		if (m_hWnd) // m_WindowHandle은 DX11Context가 가지고 있는 HWND 변수입니다.
+		{
+			RECT rect;
+			GetClientRect(m_hWnd, &rect);
+
+			D3D11_VIEWPORT viewport = {};
+			viewport.TopLeftX = 0.0f;
+			viewport.TopLeftY = 0.0f;
+			viewport.Width = static_cast<float>(rect.right - rect.left);
+			viewport.Height = static_cast<float>(rect.bottom - rect.top);
+			viewport.MinDepth = 0.0f;
+			viewport.MaxDepth = 1.0f;
+
+			s_DeviceContext->RSSetViewports(1, &viewport);
+		}
+
+	}
+
+	DX11Context::DX11Context(HWND hwnd) : m_hWnd(hwnd) 
+	{
+		if (s_MainContext == nullptr)
+		{
+			s_MainContext = this;
+		}
+	}
+
+	DX11Context::~DX11Context() 
+	{
+		if (m_RenderTargetView != nullptr) m_RenderTargetView->Release();
+		if (m_SwapChain != nullptr) m_SwapChain->Release();
+
+		if (this == s_MainContext)
+		{
+			if (s_DeviceContext != nullptr)
+			{
+				s_DeviceContext->ClearState();
+				s_DeviceContext->Flush();
+				s_DeviceContext->Release();
+			}
+			if (s_Device != nullptr)
+			{
+				s_Device->Release();
+			}
+			s_MainContext = nullptr;
+		}
+
+		if (this == s_CurrentContext) s_CurrentContext = nullptr;
+	}
+
+	void DX11Context::Init()
+	{
+		HRESULT hr;
+
+		// 1. 디바이스가 아직 없다면 생성 (엔진 실행 후 최초 1회)
+		if (s_Device == nullptr)
+		{
+			UINT createDeviceFlags = 0;
+#ifdef CC_DEBUG
+			createDeviceFlags |= D3D11_CREATE_DEVICE_DEBUG;
+#endif
+			D3D_FEATURE_LEVEL featureLevels[] = { D3D_FEATURE_LEVEL_11_0 };
+
+			hr = D3D11CreateDevice(
+				nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, createDeviceFlags,
+				featureLevels, 1, D3D11_SDK_VERSION,
+				&s_Device, nullptr, &s_DeviceContext
+			);
+
+			if (FAILED(hr))
+			{
+				std::cout << "DirectX 11 Device 생성 실패!" << std::endl;
+				return;
+			}
+		}
+
+		// 2. 스왑 체인 생성을 위한 팩토리 가져오기
+		IDXGIFactory* factory = nullptr;
+		IDXGIDevice* dxgiDevice = nullptr;
+		IDXGIAdapter* dxgiAdapter = nullptr;
+
+		s_Device->QueryInterface(__uuidof(IDXGIDevice), (void**)&dxgiDevice);
+		dxgiDevice->GetParent(__uuidof(IDXGIAdapter), (void**)&dxgiAdapter);
+		dxgiAdapter->GetParent(__uuidof(IDXGIFactory), (void**)&factory);
+
+		// 3. 현재 창(m_hWnd)을 위한 스왑 체인 설정
+		DXGI_SWAP_CHAIN_DESC scd = {};
+		scd.BufferCount = 1;
+		scd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+		scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+		scd.OutputWindow = m_hWnd; // 인스턴스마다 다른 HWND 할당
+		scd.SampleDesc.Count = 1;
+		scd.Windowed = TRUE;
+
+		hr = factory->CreateSwapChain(s_Device, &scd, &m_SwapChain);
+
+		// 사용한 임시 객체 해제
+		factory->Release();
+		dxgiAdapter->Release();
+		dxgiDevice->Release();
+
+		if (FAILED(hr))
+		{
+			std::cout << "스왑 체인 생성 실패! HWND: " << m_hWnd << std::endl;
+			return;
+		}
+
+		// 4. 렌더 타겟 뷰(RTV) 생성 (기존 로직과 동일)
+		ID3D11Texture2D* backBuffer = nullptr;
+		m_SwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&backBuffer);
+		s_Device->CreateRenderTargetView(backBuffer, nullptr, &m_RenderTargetView);
+		backBuffer->Release();
+
+		std::cout << "DirectX 11 윈도우 컨텍스트 초기화 완료 (HWND: " << m_hWnd << ")" << std::endl;
+	}
+
+	void DX11Context::SwapBuffers() 
+	{
+		// 각 인스턴스의 스왑 체인을 개별적으로 Present
+		m_SwapChain->Present(1, 0);
 	}
 
 	void DX11Context::Clear(float r, float g, float b, float a)
 	{
 		float clearColor[4] = { r, g, b, a };
-		m_DeviceContext->ClearRenderTargetView(m_RenderTargetView, clearColor);
-	}
-
-	DX11Context::DX11Context(HWND hwnd) : m_hWnd(hwnd) 
-	{
-		//싱글톤 패턴처럼 엔진 전역에서 이 컨텍스트에 접근할 수 있도록 정적 포인터에 자기 자신을 할당
-		s_DX11Context = this;
-	}
-
-	DX11Context::~DX11Context() 
-	{
-		//모든 셰이더, 버퍼 강제 해제
-		if (m_DeviceContext != nullptr)
-		{
-			m_DeviceContext->ClearState();
-			m_DeviceContext->Flush();
-		}
-
-		//메모리 누스 방지를 위해 역순
-		if (m_RenderTargetView != nullptr)
-		{
-			m_RenderTargetView->Release();
-		}
-
-		if (m_SwapChain != nullptr)
-		{
-			m_SwapChain->Release();
-		}
-		
-		if (m_DeviceContext != nullptr)
-		{
-			m_DeviceContext->Release();
-		}
-		
-		if (m_Device != nullptr) 
-		{
-			m_Device->Release();
-		}
-	}
-
-	void DX11Context::Init()
-	{
-		//스왑 체인 설정
-		DXGI_SWAP_CHAIN_DESC scd = {};
-		scd.BufferCount = 1;                                // 백 버퍼 1개 (더블 버퍼링)
-		scd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM; // 32비트 색상
-		scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;  // 렌더 타겟으로 사용
-		scd.OutputWindow = m_hWnd;							// 윈도우 핸들 연결
-		scd.SampleDesc.Count = 1;                           // 안티앨리어싱 미사용
-		scd.Windowed = TRUE;                                // 창 모드
-
-		// 디바이스 및 스왑 체인 생성
-		HRESULT hr = D3D11CreateDeviceAndSwapChain(
-			nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0,
-			nullptr, 0, D3D11_SDK_VERSION, &scd,
-			&m_SwapChain, &m_Device, nullptr, &m_DeviceContext
-		);
-
-		if (FAILED(hr)) 
-		{
-			std::cout << "DirectX 11 초기화 실패!" << std::endl;
-			return;
-		}
-
-		// 백 버퍼를 가져와서 렌더 타겟 뷰(캔버스) 생성
-		ID3D11Texture2D* backBuffer = nullptr;
-		m_SwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&backBuffer);
-
-		if (backBuffer == nullptr)
-		{
-			std::cout << "백 버퍼 가져오기 실패!" << std::endl;
-			return;
-		}
-
-		m_Device->CreateRenderTargetView(backBuffer, nullptr, &m_RenderTargetView);
-		backBuffer->Release(); // 뷰 생성 후 원본 포인터 해제
-
-		//뷰포트 설정
-		RECT clientRect;
-		GetClientRect(m_hWnd, &clientRect); // 윈도우 창의 실제 해상도를 가져옴
-
-		D3D11_VIEWPORT viewport = {};
-		viewport.TopLeftX = 0.0f;
-		viewport.TopLeftY = 0.0f;
-		viewport.Width = static_cast<float>(clientRect.right - clientRect.left);
-		viewport.Height = static_cast<float>(clientRect.bottom - clientRect.top);
-		viewport.MinDepth = 0.0f; // 3D 깊이 최소값
-		viewport.MaxDepth = 1.0f; // 3D 깊이 최대값
-
-		// 래스터라이저(Rasterizer)에 뷰포트 설정
-		m_DeviceContext->RSSetViewports(1, &viewport);
-
-		// 파이프라인에 렌더 타겟 설정
-		m_DeviceContext->OMSetRenderTargets(1, &m_RenderTargetView, nullptr);
-		std::cout << "DirectX 11 컨텍스트 생성 완료!" << std::endl;
-	}
-
-	void DX11Context::SwapBuffers() 
-	{
-		// 완성된 백 버퍼를 화면(프론트 버퍼)으로 송출
-		m_SwapChain->Present(1, 0); // VSync 켬 (모니터 주사율에 맞춤)
+		// 공유된 DeviceContext를 사용하되, 타겟은 자신의 RTV로 설정
+		s_DeviceContext->OMSetRenderTargets(1, &m_RenderTargetView, nullptr);
+		s_DeviceContext->ClearRenderTargetView(m_RenderTargetView, clearColor);
 	}
 
 	void DX11Context::ResizeBuffers(uint32_t width, uint32_t height)
 	{
-		// 스왑체인이나 디바이스가 없거나, 창이 최소화(0,0) 된 상태면 무시합니다.
-		if (!m_SwapChain || !m_Device || width == 0 || height == 0) return;
+		// 스왑체인이나 디바이스가 없거나, 창이 최소화(0,0) 된 상태면 무시
+		if (!m_SwapChain || !s_Device || width == 0 || height == 0) return;
 
 		// ==========================================
 		// 1. 기존 렌더 타겟 뷰(RTV) 완벽하게 해제
 		// ==========================================
 		if (m_RenderTargetView)
 		{
-			// DX11 파이프라인에서 타겟을 빼버립니다. (안 빼면 리사이즈 실패함)
-			m_DeviceContext->OMSetRenderTargets(0, nullptr, nullptr);
+			// DX11 파이프라인에서 타겟을 해제
+			s_DeviceContext->OMSetRenderTargets(0, nullptr, nullptr);
 
 			m_RenderTargetView->Release();
 			m_RenderTargetView = nullptr;
@@ -145,12 +181,12 @@ namespace CCEngine
 		HRESULT hr = m_SwapChain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0);
 		if (FAILED(hr))
 		{
-			// 리사이즈 실패 시 로그 출력이나 예외 처리를 해야 합니다.
+			// 리사이즈 실패 시 로그 출력이나 예외 처리
 			return;
 		}
 
 		// ==========================================
-		// 3. 크기가 바뀐 새로운 백버퍼(도화지) 텍스처를 스왑체인에서 가져오기
+		// 3. 크기가 바뀐 새로운 백버퍼(버퍼) 텍스처를 스왑체인에서 가져오기
 		// ==========================================
 		ID3D11Texture2D* backBuffer = nullptr;
 		hr = m_SwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&backBuffer);
@@ -159,9 +195,8 @@ namespace CCEngine
 		// ==========================================
 		// 4. 가져온 백버퍼로 새로운 렌더 타겟 뷰(RTV) 생성
 		// ==========================================
-		hr = m_Device->CreateRenderTargetView(backBuffer, nullptr, &m_RenderTargetView);
+		hr = s_Device->CreateRenderTargetView(backBuffer, nullptr, &m_RenderTargetView);
 
-		// 뷰를 만들었으니 백버퍼 텍스처의 원본 참조 카운트는 깎아줍니다. (메모리 누수 방지!)
 		backBuffer->Release();
 
 		if (FAILED(hr)) return;
@@ -169,7 +204,7 @@ namespace CCEngine
 		// ==========================================
 		// 5. 완성된 새 렌더 타겟을 다시 DX11 파이프라인(Output Merger)에 장착!
 		// ==========================================
-		m_DeviceContext->OMSetRenderTargets(1, &m_RenderTargetView, nullptr);
+		s_DeviceContext->OMSetRenderTargets(1, &m_RenderTargetView, nullptr);
 	}
 
 

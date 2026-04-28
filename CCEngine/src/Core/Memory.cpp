@@ -50,6 +50,5 @@ void operator delete(void* memory, size_t size) noexcept {
 
 void operator delete(void* memory) noexcept {
     // 크기를 모르는 delete 호출 시 (Fallback)
-    // 윈도우 환경에서는 크기를 정확히 빼기 어려우므로 일단 해제만 합니다.
     free(memory);
 }

@@ -2,6 +2,7 @@
 #include <string>
 #include "entt.hpp"
 #include "Core.h"
+#include "Renderer/PerspectiveCamera.h"
 
 #include <box2d/id.h>
 
@@ -23,8 +24,11 @@ namespace CCEngine
         Entity CreateEntity(const std::string& name = "Empty Entity");
         void DestroyEntity(Entity entity); // 엔티티 파괴 함수
 
-        // 매 프레임 이 씬 안의 컴포넌트들을 업데이트합니다.
+        // 매 프레임 이 씬 안의 컴포넌트들을 업데이트
         void OnUpdate(float deltaTime);
+
+        // 3D 카메라로 씬을 렌더링하는 함수
+        void OnRender3D(const PerspectiveCamera& camera);
 
         // 
         void OnRuntimeStart();
@@ -39,8 +43,12 @@ namespace CCEngine
         // 씬의 상태를 변경하는 함수
         void SetSceneState(SceneState state) { m_State = state; }
 
+        entt::registry& GetRegistry() { return m_Registry; }
+
+        Entity FindEntityByName(std::string_view name);
+
     private:
-        entt::registry m_Registry; // [핵심] 모든 엔티티와 컴포넌트를 관리하는 EnTT의 메모리 창고!
+        entt::registry m_Registry; // 모든 엔티티와 컴포넌트를 관리하는 EnTT의 관리자
 
         b2WorldId m_PhysicsWorldId = b2_nullWorldId; // Box2D 물리 월드의 ID
         float m_PhysicsUnitScale = 1.0f; // 렌더링 유닛 <-> 미터 비율

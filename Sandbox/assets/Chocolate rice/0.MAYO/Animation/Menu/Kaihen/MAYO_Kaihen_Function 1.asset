@@ -1,0 +1,86 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: -340790334, guid: 67cc4cb7839cd3741b63733d5adf0442, type: 3}
+  m_Name: MAYO_Kaihen_Function 1
+  m_EditorClassIdentifier: 
+  Parameters: {fileID: 11400000, guid: 892c1e45cc3afff45993a0008933d081, type: 2}
+  controls:
+  - name: Jelly_Eye
+    icon: {fileID: 2800000, guid: c0b515f656a72324892538a0b69d0d52, type: 3}
+    type: 102
+    parameter:
+      name: Jelly_Eye_Forced
+    value: 1
+    style: 0
+    subMenu: {fileID: 0}
+    subParameters: []
+    labels: []
+  - name: Jelly_Ear
+    icon: {fileID: 2800000, guid: 5200015a79813ff4ba5a7466320488a1, type: 3}
+    type: 102
+    parameter:
+      name: Jelly_Ear_Forced
+    value: 1
+    style: 0
+    subMenu: {fileID: 0}
+    subParameters: []
+    labels: []
+  - name: Jelly_Tail
+    icon: {fileID: 2800000, guid: 3107adb2c9036704ab4b76fade19dc86, type: 3}
+    type: 102
+    parameter:
+      name: Jelly_shippo_Forced
+    value: 1
+    style: 0
+    subMenu: {fileID: 0}
+    subParameters: []
+    labels: []
+  - name: Taill_Fluffy
+    icon: {fileID: 2800000, guid: 5bbe43cd67ffd324fad95f425b6d2a55, type: 3}
+    type: 102
+    parameter:
+      name: Taill_Fluffy
+    value: 1
+    style: 0
+    subMenu: {fileID: 0}
+    subParameters: []
+    labels: []
+  - name: Tail
+    icon: {fileID: 2800000, guid: 354975c69104edc41957bb4daa26ed8e, type: 3}
+    type: 102
+    parameter:
+      name: Tail
+    value: 1
+    style: 0
+    subMenu: {fileID: 0}
+    subParameters: []
+    labels: []
+  - name: Kemomimi
+    icon: {fileID: 2800000, guid: c47ba4fd80a66bd47a8bbf1b68ce459e, type: 3}
+    type: 102
+    parameter:
+      name: Kemomimi
+    value: 1
+    style: 0
+    subMenu: {fileID: 0}
+    subParameters: []
+    labels: []
+  - name: Rim_Shade
+    icon: {fileID: 2800000, guid: dbd49e2e27645054aaf023e42a640762, type: 3}
+    type: 102
+    parameter:
+      name: Rim_Shade
+    value: 1
+    style: 0
+    subMenu: {fileID: 0}
+    subParameters: []
+    labels: []
