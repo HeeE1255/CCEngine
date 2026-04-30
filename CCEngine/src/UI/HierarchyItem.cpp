@@ -69,26 +69,30 @@ namespace CCEngine
             float mouseX = 0.0f; // 임시: Input::GetMouseX(); 
             float mouseY = 0.0f; // 임시: Input::GetMouseY();
 
+            float headerHeight = UIRenderer::GetDefaultFont() ? UIRenderer::GetDefaultFont()->GetFontSize() : 24.0f; // 폰트 높이 가져오기 (예시로 24.0f 사용)
+            float verticalPadding = 8.0f;
+            headerHeight = headerHeight + verticalPadding;
+
             // 배경은 내 전체 사이즈가 아니라 '헤더(m_HeaderHeight)' 만큼만 칠해야 함!
             bool isHovered = (mouseX >= m_CalculatedPos.x && mouseX <= m_CalculatedPos.x + m_CalculatedSize.x &&
-                mouseY >= m_CalculatedPos.y && mouseY <= m_CalculatedPos.y + m_CalculatedSize.y);
+                mouseY >= m_CalculatedPos.y && mouseY <= m_CalculatedPos.y + headerHeight);
 
             if (m_IsSelected)
             {
                 DirectX::XMFLOAT4 selectedColor = { 44.0f / 255.0f, 93.0f / 255.0f, 135.0f / 255.0f, 1.0f };
-                UIRenderer::DrawRectFilled(m_CalculatedPos.x, m_CalculatedPos.y, m_CalculatedSize.x, m_CalculatedSize.y, selectedColor);
+                UIRenderer::DrawRectFilled(m_CalculatedPos.x, m_CalculatedPos.y, m_CalculatedSize.x, headerHeight, selectedColor);
             }
             else if (isHovered)
             {
                 DirectX::XMFLOAT4 hoverColor = { 60.0f / 255.0f, 60.0f / 255.0f, 60.0f / 255.0f, 1.0f };
-                UIRenderer::DrawRectFilled(m_CalculatedPos.x, m_CalculatedPos.y, m_CalculatedSize.x, m_CalculatedSize.y, hoverColor);
+                UIRenderer::DrawRectFilled(m_CalculatedPos.x, m_CalculatedPos.y, m_CalculatedSize.x, headerHeight, hoverColor);
             }
 
             float indentX = m_CalculatedPos.x + (m_IndentLevel * 14.0f) + 8.0f;
-            float centerY = m_CalculatedPos.y + (m_CalculatedSize.y * 0.5f);
+            float centerY = m_CalculatedPos.y + (headerHeight * 0.5f);
             float arrowAreaWidth = 14.0f;
             bool hoveringArrow = (mouseX >= indentX && mouseX <= indentX + arrowAreaWidth &&
-                mouseY >= m_CalculatedPos.y && mouseY <= m_CalculatedPos.y + m_CalculatedSize.y);
+                mouseY >= m_CalculatedPos.y && mouseY <= m_CalculatedPos.y + headerHeight);
 
             if (m_HasChildren)
             {
@@ -101,7 +105,7 @@ namespace CCEngine
             }
 
             float textX = indentX + 18.0f;
-			float textY = m_CalculatedPos.y + m_CalculatedSize.y * 0.7f; // 텍스트가 중앙에 오도록 약간 조정
+			float textY = m_CalculatedPos.y + headerHeight * 0.7f; // 텍스트가 중앙에 오도록 약간 조정
             DirectX::XMFLOAT4 textColor = { 210.0f / 255.0f, 210.0f / 255.0f, 210.0f / 255.0f, 1.0f };
             UIRenderer::DrawString(m_Text, textX, textY, textColor);
 
