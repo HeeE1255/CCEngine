@@ -38,5 +38,8 @@ namespace CCEngine
 		// 4. 텍스처의 일부분(UV 지정)만 그리는 함수
         static void DrawQuad(const DirectX::XMFLOAT2& position, const DirectX::XMFLOAT2& size, Texture2D* texture, const DirectX::XMFLOAT2* texCoords, const DirectX::XMFLOAT4& tintColor, int entityID = -1);
         static void DrawQuad(const DirectX::XMFLOAT3& position, const DirectX::XMFLOAT2& size, Texture2D* texture, const DirectX::XMFLOAT2* texCoords, const DirectX::XMFLOAT4& tintColor, int entityID = -1);
+
+        static void DrawQuad(const DirectX::XMMATRIX& transform, void* textureID, const DirectX::XMFLOAT4& tintColor = { 1.0f, 1.0f, 1.0f, 1.0f }, int entityID = -1);
+        static void DrawQuad(const DirectX::XMMATRIX& transform, void* textureID, const DirectX::XMFLOAT2* texCoords, const DirectX::XMFLOAT4& tintColor = { 1.0f, 1.0f, 1.0f, 1.0f }, int entityID = -1);
     };
 }
