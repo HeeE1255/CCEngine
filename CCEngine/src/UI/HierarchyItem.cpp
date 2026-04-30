@@ -100,8 +100,8 @@ namespace CCEngine
                     DirectX::XMFLOAT4{ 220.0f / 255.0f, 220.0f / 255.0f, 220.0f / 255.0f, 1.0f } :
                     DirectX::XMFLOAT4{ 150.0f / 255.0f, 150.0f / 255.0f, 150.0f / 255.0f, 1.0f };
 
-                if (m_IsExpanded) UIRenderer::DrawString("v", indentX + 2.0f, centerY - 10.0f, arrowColor);
-                else UIRenderer::DrawString(">", indentX + 4.0f, centerY - 10.0f, arrowColor);
+                if (m_IsExpanded) UIRenderer::DrawString("v", indentX + 2.0f, centerY + 5.0f, arrowColor);
+                else UIRenderer::DrawString(">", indentX + 4.0f, centerY + 6.0f, arrowColor);
             }
 
             float textX = indentX + 18.0f;

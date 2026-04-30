@@ -84,7 +84,7 @@ namespace CCEngine {
         mesh1.MeshData = MeshFactory::CreateCube();
         mesh1.BaseColor = { 0.2f, 0.3f, 0.8f, 1.0f };
 
-        Entity mayoModel = ModelImporter::ImportModel(m_ActiveScene, "assets/Chocolate rice/0.MAYO/FBX/FBX_MAYO.fbx");
+        //Entity mayoModel = ModelImporter::ImportModel(m_ActiveScene, "assets/Chocolate rice/0.MAYO/FBX/FBX_MAYO.fbx");
 
         // =========================================================
         // [완전 자체 UI 구조 조립] (기존과 동일)
@@ -286,9 +286,17 @@ namespace CCEngine {
 
         if (isLeftMouseDown && !s_WasLeftMouseDown)
         {
+            // 눌렀을 때 (Tear-off 시작점 잡기)
             MouseButtonPressedEvent pressEvent(0, mouseX, mouseY);
             OnEvent(pressEvent);
         }
+        else if (!isLeftMouseDown && s_WasLeftMouseDown)
+        {
+            // 놓았을 때 (Redock! 뜯어낸 창을 다시 꽂아넣기)
+            MouseButtonReleasedEvent releaseEvent(0, mouseX, mouseY);
+            OnEvent(releaseEvent);
+        }
+
         s_WasLeftMouseDown = isLeftMouseDown;
 
         //// 1. 하이어라키 갱신 요청 처리
@@ -388,6 +396,157 @@ namespace CCEngine {
             }
         }
         m_GameFramebuffer->Unbind();
+
+  //      auto& mainWindow = CCEngine::Application::Get()->GetWindow();
+  //      auto [mouseX, mouseY] = mainWindow.GetMousePosition();
+
+  //      // ==========================================================
+  //      // 1. 뷰포트(Scene View) 호버/포커스 상태 판별
+  //      // ==========================================================
+  //      bool isViewportHovered = false;
+  //      if (m_ViewportWidget && m_ViewportWindow && m_ViewportWindow->IsVisible())
+  //      {
+  //          // 뷰포트 '내부 이미지 영역(ImageWidget)'의 좌표와 크기를 기준으로 검사
+  //          auto pos = m_ViewportWidget->GetCalculatedPosition();
+  //          auto size = m_ViewportWidget->GetCalculatedSize();
+
+  //          if (mouseX >= pos.x && mouseX <= pos.x + size.x &&
+  //              mouseY >= pos.y && mouseY <= pos.y + size.y)
+  //          {
+  //              isViewportHovered = true;
+  //          }
+  //      }
+
+  //      // ==========================================================
+  //      // 2. 마우스 입력 및 카메라 조작 처리 (포커스가 있을 때만!)
+  //      // ==========================================================
+  //      // 마우스 이동 이벤트 라우팅
+  //      static float s_LastMouseX = 0.0f;
+  //      static float s_LastMouseY = 0.0f;
+  //      if (mouseX != s_LastMouseX || mouseY != s_LastMouseY)
+  //      {
+  //          MouseMovedEvent moveEvent(mouseX, mouseY);
+  //          OnEvent(moveEvent);
+  //          s_LastMouseX = mouseX;
+  //          s_LastMouseY = mouseY;
+  //      }
+
+  //      // 마우스 클릭 이벤트 라우팅
+  //      static bool s_WasLeftMouseDown = false;
+  //      bool isLeftMouseDown = mainWindow.IsMouseButtonPressed(0);
+  //      if (isLeftMouseDown && !s_WasLeftMouseDown)
+  //      {
+  //          MouseButtonPressedEvent pressEvent(0, mouseX, mouseY);
+  //          OnEvent(pressEvent);
+  //      }
+  //      s_WasLeftMouseDown = isLeftMouseDown;
+
+  //      // ★ 뷰포트 위에 마우스가 있을 때만 에디터 카메라 업데이트!
+  //      // (이렇게 해야 UI 패널을 클릭할 때 씬 카메라가 휙휙 돌아가지 않습니다)
+  //      if (isViewportHovered)
+  //      {
+  //          m_Camera.OnUpdate(deltaTime);
+  //      }
+
+  //      HandleShortcuts();
+
+  //      // ==========================================================
+  //      // 3. 뷰포트 리사이즈 처리 (화면 찌그러짐 방지)
+  //      // ==========================================================
+  //      if (m_ViewportWidget)
+  //      {
+  //          auto vpSize = m_ViewportWidget->GetCalculatedSize();
+  //          // 크기가 0보다 크고, 프레임버퍼 크기와 다를 때만 리사이즈 수행
+  //          if (vpSize.x > 0.0f && vpSize.y > 0.0f &&
+  //              (m_Framebuffer->GetSpecification().Width != (uint32_t)vpSize.x ||
+  //                  m_Framebuffer->GetSpecification().Height != (uint32_t)vpSize.y))
+  //          {
+  //              m_ViewportSize = { vpSize.x, vpSize.y };
+  //              m_Framebuffer->Resize((uint32_t)vpSize.x, (uint32_t)vpSize.y);
+
+  //              // ★ 카메라 투영 행렬 비율 업데이트 (가장 중요!)
+  //              m_Camera.SetProjectionMatrix(m_Camera.GetFOV(), vpSize.x / vpSize.y, 0.1f, 100.0f);
+  //          }
+  //      }
+
+  //      // Game View 리사이즈 처리도 동일하게 적용
+  //      if (m_GameViewWidget && m_GameWindow && m_GameWindow->IsVisible())
+  //      {
+  //          auto gvSize = m_GameViewWidget->GetCalculatedSize();
+  //          if (gvSize.x > 0.0f && gvSize.y > 0.0f &&
+  //              (m_GameFramebuffer->GetSpecification().Width != (uint32_t)gvSize.x ||
+  //                  m_GameFramebuffer->GetSpecification().Height != (uint32_t)gvSize.y))
+  //          {
+  //              m_GameViewportSize = { gvSize.x, gvSize.y };
+  //              m_GameFramebuffer->Resize((uint32_t)gvSize.x, (uint32_t)gvSize.y);
+  //              // 게임 카메라는 아래 렌더링 루프에서 aspect ratio를 갱신하므로 프레임버퍼만 조절해도 무방합니다.
+  //          }
+  //      }
+
+  //      // ==========================================================
+  //      // 4. UI 레이아웃 갱신 및 렌더링 준비
+  //      // ==========================================================
+  //      if (m_RootUI)
+  //      {
+  //          float winWidth = (float)mainWindow.GetWidth();
+  //          float winHeight = (float)mainWindow.GetHeight();
+  //          m_RootUI->UpdateLayout({ 0.0f, 0.0f }, { winWidth, winHeight });
+  //      }
+
+  //      if (m_ViewportWidget) m_ViewportWidget->SetTexture(m_Framebuffer->GetColorAttachmentRendererID(0));
+  //      if (m_GameViewWidget) m_GameViewWidget->SetTexture(m_GameFramebuffer->GetColorAttachmentRendererID(0));
+
+
+		//// ==========================================================
+		//// 5. 에디터 프레임버퍼 렌더링
+		//// ==========================================================
+  //      Renderer::SetClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+  //      Renderer::Clear();
+
+  //      m_Framebuffer->Bind();
+  //      //Renderer::SetViewport(0, 0, (uint32_t)m_ViewportSize.x, (uint32_t)m_ViewportSize.y);
+
+  //      Renderer::SetClearColor(m_ClearColor[0], m_ClearColor[1], m_ClearColor[2], m_ClearColor[3]);
+  //      Renderer::Clear();
+  //      m_Framebuffer->ClearAttachment(1, -1);
+
+  //      m_ActiveScene->OnUpdate(deltaTime);
+
+  //      Renderer2D::BeginScene(m_Camera);
+  //      Renderer2D::EndScene();
+  //      m_ActiveScene->OnRender3D(m_Camera);
+  //      m_Framebuffer->Unbind();
+
+  //      m_GameFramebuffer->Bind();
+  //      Renderer::SetClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+  //      Renderer::Clear();
+
+  //      auto view = m_ActiveScene->GetRegistry().view<CameraComponent>();
+  //      for (auto entity : view)
+  //      {
+  //          auto& cameraComp = view.get<CameraComponent>(entity);
+  //          if (cameraComp.Primary)
+  //          {
+  //              CCEngine::Entity cameraEntity(entity, m_ActiveScene);
+  //              auto& transformComp = cameraEntity.GetComponent<TransformComponent>();
+
+  //              float aspect = 16.0f / 9.0f;
+  //              if (m_GameViewportSize.y > 0.001f) {
+  //                  aspect = m_GameViewportSize.x / m_GameViewportSize.y;
+  //              }
+
+  //              PerspectiveCamera gameCamera(cameraComp.FOV, aspect, cameraComp.NearClip, cameraComp.FarClip);
+  //              gameCamera.SetPosition(transformComp.Translation);
+  //              gameCamera.SetRotation(transformComp.QuaternionRotation);
+
+  //              Renderer2D::BeginScene(gameCamera);
+  //              Renderer2D::EndScene();
+  //              m_ActiveScene->OnRender3D(gameCamera);
+  //              break;
+  //          }
+  //      }
+  //      m_GameFramebuffer->Unbind();
+        
     }
 
     // =========================================================================
@@ -396,10 +555,10 @@ namespace CCEngine {
     void EditorLayer::OnEvent(Event& e)
     {
         // 1. UI에게 이벤트를 최우선으로 던집니다 (역순회로 인해 맨 위 클릭 가로채기 가능)
-        //if (m_RootUI)
-        //{
-        //    m_RootUI->OnEvent(e);
-        //}
+        if (m_RootUI)
+        {
+            m_RootUI->OnEvent(e);
+        }
 
         // 2. 드롭다운 바깥 클릭 시 닫히는 Focus Out 로직 
         if (e.GetEventType() == EventType::MouseButtonPressed)

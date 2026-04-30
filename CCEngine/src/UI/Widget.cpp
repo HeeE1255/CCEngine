@@ -87,15 +87,9 @@ namespace CCEngine {
                 }
             }
 
-            // Quick visibility and hit-test rejection to avoid traversing large trees.
+
             if (!m_IsVisible) return false; // 숨겨진 UI는 클릭 불가
-            if (isMouseEvent && !IsPointInside(mouseX, mouseY))
-                return false;
 
-            // Only log non-mouse-move events to reduce spam.
-            // (Debug logging removed in production)
-
-            // If some deeper widget already handled this event, stop propagation
             if (e.Handled)
             {
                 return true;
