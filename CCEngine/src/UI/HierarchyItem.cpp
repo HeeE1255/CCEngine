@@ -66,14 +66,14 @@ namespace CCEngine
         {
             if (!m_IsVisible) return;
 
-            float mouseX = 0.0f; // 임시: Input::GetMouseX(); 
-            float mouseY = 0.0f; // 임시: Input::GetMouseY();
+            // ★ 가짜 0.0f 좌표를 지우고, OS에서 진짜 마우스 좌표를 가져옵니다!
+            auto [mouseX, mouseY] = CCEngine::Application::Get()->GetWindow().GetMousePosition();
 
-            float headerHeight = UIRenderer::GetDefaultFont() ? UIRenderer::GetDefaultFont()->GetFontSize() : 24.0f; // 폰트 높이 가져오기 (예시로 24.0f 사용)
+            float headerHeight = UIRenderer::GetDefaultFont() ? UIRenderer::GetDefaultFont()->GetFontSize() : 24.0f;
             float verticalPadding = 8.0f;
-            headerHeight = headerHeight + verticalPadding;
+            headerHeight += verticalPadding;
 
-            // 배경은 내 전체 사이즈가 아니라 '헤더(m_HeaderHeight)' 만큼만 칠해야 함!
+            // 전체 호버 검사
             bool isHovered = (mouseX >= m_CalculatedPos.x && mouseX <= m_CalculatedPos.x + m_CalculatedSize.x &&
                 mouseY >= m_CalculatedPos.y && mouseY <= m_CalculatedPos.y + headerHeight);
 
@@ -89,27 +89,30 @@ namespace CCEngine
             }
 
             float indentX = m_CalculatedPos.x + (m_IndentLevel * 14.0f) + 8.0f;
-            float centerY = m_CalculatedPos.y + (headerHeight * 0.5f);
-            float arrowAreaWidth = 14.0f;
-            bool hoveringArrow = (mouseX >= indentX && mouseX <= indentX + arrowAreaWidth &&
+            float hitBoxLeft = indentX;
+            float hitBoxRight = indentX + 24.0f;
+
+            // 화살표 호버 검사 (마우스가 올라가면 밝게 빛남)
+            bool hoveringArrow = (mouseX >= hitBoxLeft && mouseX <= hitBoxRight &&
                 mouseY >= m_CalculatedPos.y && mouseY <= m_CalculatedPos.y + headerHeight);
+
+            float centerY = m_CalculatedPos.y + (headerHeight * 0.5f);
 
             if (m_HasChildren)
             {
                 DirectX::XMFLOAT4 arrowColor = hoveringArrow ?
-                    DirectX::XMFLOAT4{ 220.0f / 255.0f, 220.0f / 255.0f, 220.0f / 255.0f, 1.0f } :
-                    DirectX::XMFLOAT4{ 150.0f / 255.0f, 150.0f / 255.0f, 150.0f / 255.0f, 1.0f };
+                    DirectX::XMFLOAT4{ 220.0f / 255.0f, 220.0f / 255.0f, 220.0f / 255.0f, 1.0f } : // 밝은 흰색
+                    DirectX::XMFLOAT4{ 150.0f / 255.0f, 150.0f / 255.0f, 150.0f / 255.0f, 1.0f }; // 어두운 회색
 
                 if (m_IsExpanded) UIRenderer::DrawString("v", indentX + 2.0f, centerY + 5.0f, arrowColor);
                 else UIRenderer::DrawString(">", indentX + 4.0f, centerY + 6.0f, arrowColor);
             }
 
             float textX = indentX + 18.0f;
-			float textY = m_CalculatedPos.y + headerHeight * 0.7f; // 텍스트가 중앙에 오도록 약간 조정
+            float textY = m_CalculatedPos.y + headerHeight * 0.7f;
             DirectX::XMFLOAT4 textColor = { 210.0f / 255.0f, 210.0f / 255.0f, 210.0f / 255.0f, 1.0f };
             UIRenderer::DrawString(m_Text, textX, textY, textColor);
 
-            // 내가 펴져있다면 자식들 렌더링
             if (m_IsExpanded)
             {
                 for (auto child : m_Children)
@@ -119,33 +122,40 @@ namespace CCEngine
 
         bool HierarchyItem::OnMouseButtonPressed(MouseButtonPressedEvent& e)
         {
-            if (!IsPointInside(e.GetX(), e.GetY()))
-            {
-                return false;
-            }
-
             float headerHeight = UIRenderer::GetDefaultFont() ? UIRenderer::GetDefaultFont()->GetFontSize() : 24.0f;
-            float verticalPadding = 8.0f;
-            headerHeight = headerHeight + verticalPadding;
+            headerHeight += 8.0f;
 
-            // If click is in the area below the header, forward the event to children
-            if (e.GetY() > m_CalculatedPos.y + headerHeight && e.GetY() <= m_CalculatedPos.y + m_CalculatedSize.y)
-            {
-                for (auto child : m_Children)
-                {
-                    if (child->OnEvent(e)) return true; // if a child handled it, we're done
-                }
-                return false; // clicked empty child area
-            }
+            bool isInsideHeader = (e.GetX() >= m_CalculatedPos.x && e.GetX() <= m_CalculatedPos.x + m_CalculatedSize.x &&
+                e.GetY() >= m_CalculatedPos.y && e.GetY() <= m_CalculatedPos.y + headerHeight);
 
-            // 헤더를 좌클릭 했을 때
-            if (e.GetButton() == 0)
+            if (isInsideHeader && e.GetButton() == 0)
             {
                 float indentX = m_CalculatedPos.x + (m_IndentLevel * 14.0f) + 8.0f;
-                bool isArrowClicked = (e.GetX() >= indentX && e.GetX() <= indentX + 20.0f);
+                float hitBoxLeft = indentX;
+                float hitBoxRight = indentX + 24.0f;
+
+                bool isArrowClicked = (e.GetX() >= hitBoxLeft && e.GetX() <= hitBoxRight);
 
                 if (isArrowClicked && m_HasChildren)
                 {
+                    // 1. 상태 즉시 토글
+                    m_IsExpanded = !m_IsExpanded;
+
+                    //std::cout << "[Hierarchy] Arrow Clicked! Name: " << m_Text << " | Child Count: " << m_Children.size() << std::endl;
+
+                    // 자식들의 표시 여부를 강제로 세팅
+                    for (auto child : m_Children)
+                    {
+                        child->SetVisible(m_IsExpanded);
+                    }
+
+                    // (중요) 내 레이아웃을 억지로 다시 계산해서 크기를 부풀립니다.
+                    // 원래는 부모의 Pos/Size를 받아야 하지만, 임시로 현재 값을 그대로 넣어서 크기(높이)만 다시 계산하게 만듭니다.
+                    UIVec2 dummyParentPos = { m_CalculatedPos.x - m_OffsetMin.x, m_CalculatedPos.y - m_OffsetMin.y };
+                    UIVec2 dummyParentSize = { 9999.0f, 9999.0f }; // 일단 가로세로 제한 무시
+                    this->UpdateLayout(dummyParentPos, dummyParentSize);
+                    // ==========================================================
+
                     if (m_OnToggleExpand) m_OnToggleExpand();
                 }
                 else
@@ -156,6 +166,15 @@ namespace CCEngine
                 e.Handled = true;
                 return true;
             }
+
+            if (m_IsExpanded && e.GetY() > m_CalculatedPos.y + headerHeight)
+            {
+                for (auto child : m_Children)
+                {
+                    if (child->OnEvent(e)) return true;
+                }
+            }
+
             return false;
         }
     }

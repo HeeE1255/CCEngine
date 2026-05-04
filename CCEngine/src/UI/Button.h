@@ -19,8 +19,13 @@ namespace CCEngine {
             void SetHoverColor(UIColor color) { m_HoverColor = color; }
             void SetClickColor(UIColor color) { m_ClickColor = color; }
 
+            void SetActive(bool active) { m_IsActive = active; }
+            bool IsActive() const { return m_IsActive; }
+
+
             virtual bool OnMouseButtonPressed(MouseButtonPressedEvent& e) override;
             virtual bool OnMouseMoved(MouseMovedEvent& e) override;
+            virtual bool OnMouseButtonReleased(MouseButtonReleasedEvent& e) override;
 
         private:
             std::string m_Text;
@@ -29,9 +34,12 @@ namespace CCEngine {
             UIColor m_NormalColor = { 0.2f, 0.2f, 0.2f, 1.0f };
             UIColor m_HoverColor = { 0.3f, 0.3f, 0.3f, 1.0f };
             UIColor m_ClickColor = { 0.1f, 0.1f, 0.1f, 1.0f };
+            UIColor m_ActiveColor = { 0.2f, 0.4f, 0.6f, 1.0f };
 
             bool m_IsHovered = false;
             bool m_IsPressed = false;
+            bool m_IsActive = false;
+            
         };
 
     }

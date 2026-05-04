@@ -1,4 +1,5 @@
 #pragma once
+#include "Core.h"
 #include "UI/WindowPanel.h"
 #include "Scene/Scene.h"
 #include "Scene/Entity.h"
@@ -8,7 +9,7 @@ namespace CCEngine
 {
     namespace UI 
     {
-        class HierarchyPanel : public WindowPanel
+        class CC_API HierarchyPanel : public WindowPanel
         {
         public:
             HierarchyPanel(const std::string& name = "HierarchyPanel");

@@ -93,6 +93,7 @@ namespace CCEngine
             virtual bool OnMouseMoved(MouseMovedEvent& e) { return false; }
             virtual bool OnMouseButtonReleased(MouseButtonReleasedEvent& e) { return false; }
 
+
             std::string m_Name;
             bool m_IsVisible = true;
 

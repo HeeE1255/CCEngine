@@ -14,6 +14,7 @@
 #include "Renderer/ModelImporter.h"
 #include "Application.h"
 #include "UI/HierarchyItem.h"
+#include "UI/InspectorPanel.h"
 #include <windows.h>
 #include <filesystem>
 #include <iostream>
@@ -84,7 +85,7 @@ namespace CCEngine {
         mesh1.MeshData = MeshFactory::CreateCube();
         mesh1.BaseColor = { 0.2f, 0.3f, 0.8f, 1.0f };
 
-        //Entity mayoModel = ModelImporter::ImportModel(m_ActiveScene, "assets/Chocolate rice/0.MAYO/FBX/FBX_MAYO.fbx");
+        Entity mayoModel = ModelImporter::ImportModel(m_ActiveScene, "assets/Chocolate rice/0.MAYO/FBX/FBX_MAYO.fbx");
 
         // =========================================================
         // [완전 자체 UI 구조 조립] (기존과 동일)
@@ -134,7 +135,7 @@ namespace CCEngine {
         m_HierarchyPanel->SetContext(m_ActiveScene);
         m_HierarchyPanel->Refresh();
 
-        m_InspectorPanel = new UI::WindowPanel("InspectorUI", "Inspector");
+        m_InspectorPanel = new UI::InspectorPanel("InspectorUI", "Inspector");
         m_InspectorPanel->SetAnchorMin(0.8f, 0.0f); m_InspectorPanel->SetAnchorMax(1.0f, 1.0f);
         m_InspectorPanel->SetOffsetMin(0.0f, 48.0f); m_InspectorPanel->SetOffsetMax(0.0f, 0.0f); // 24 -> 48
         m_RootUI->AddChild(m_InspectorPanel);
@@ -220,31 +221,72 @@ namespace CCEngine {
         // 툴바 콜백
         m_BtnPlay->SetOnClick([this]() {
             CCEngine::SceneState state = m_ActiveScene->GetState();
+
             if (state == CCEngine::SceneState::Edit) {
+                // 1. [에디터 -> 시작] 씬을 복사하고 런타임 시작
                 m_EditorScene = m_ActiveScene;
                 m_ActiveScene = CCEngine::Scene::Copy(m_EditorScene);
                 m_ActiveScene->OnRuntimeStart();
+                m_ActiveScene->SetSceneState(CCEngine::SceneState::Play); // 상태 명확히 세팅
                 m_HierarchyPanel->SetContext(m_ActiveScene);
-                m_BtnPlay->SetText("Resume");
+
+                // UI 갱신
+                m_BtnPlay->SetActive(true);
+                m_BtnPause->SetActive(false);
             }
-            else if (state == CCEngine::SceneState::Pause) {
-                m_ActiveScene->SetSceneState(CCEngine::SceneState::Play);
-                m_BtnPlay->SetText("Play");
-            }
-            });
-        m_BtnPause->SetOnClick([this]() {
-            if (m_ActiveScene->GetState() == CCEngine::SceneState::Play) {
-                m_ActiveScene->SetSceneState(CCEngine::SceneState::Pause);
-            }
-            });
-        m_BtnStop->SetOnClick([this]() {
-            if (m_ActiveScene->GetState() != CCEngine::SceneState::Edit) {
+            else if (state == CCEngine::SceneState::Play) {
+                // 2. [플레이 중 -> 한 번 더 클릭] 정지(Stop)와 동일하게 동작하여 에디터로 복귀
                 m_ActiveScene->OnRuntimeStop();
                 delete m_ActiveScene;
                 m_ActiveScene = m_EditorScene;
                 m_EditorScene = nullptr;
+                m_ActiveScene->SetSceneState(CCEngine::SceneState::Edit);
                 m_HierarchyPanel->SetContext(m_ActiveScene);
-                m_BtnPlay->SetText("Play");
+
+                // UI 갱신 (모두 끔)
+                m_BtnPlay->SetActive(false);
+                m_BtnPause->SetActive(false);
+            }
+            else if (state == CCEngine::SceneState::Pause) {
+                // 3. [일시정지 중 -> 플레이 클릭] 퍼즈를 풀고 다시 런타임 재개
+                m_ActiveScene->SetSceneState(CCEngine::SceneState::Play);
+
+                // UI 갱신
+                m_BtnPlay->SetActive(true);
+                m_BtnPause->SetActive(false);
+            }
+            });
+
+        m_BtnPause->SetOnClick([this]() {
+            CCEngine::SceneState state = m_ActiveScene->GetState();
+
+            if (state == CCEngine::SceneState::Play) {
+                // 1. [플레이 중 -> 일시정지]
+                m_ActiveScene->SetSceneState(CCEngine::SceneState::Pause);
+                m_BtnPause->SetActive(true);
+            }
+            else if (state == CCEngine::SceneState::Pause) {
+                // 2. [일시정지 중 -> 한 번 더 클릭] 퍼즈 해제 후 런타임 재개
+                m_ActiveScene->SetSceneState(CCEngine::SceneState::Play);
+                m_BtnPause->SetActive(false); // 퍼즈 불 끄기 (Play 불은 켜진 상태 유지)
+            }
+            });
+
+        m_BtnStop->SetOnClick([this]() {
+            CCEngine::SceneState state = m_ActiveScene->GetState();
+
+            if (state != CCEngine::SceneState::Edit) {
+                // 1. [강제 종료] 현재 상태와 무관하게 런타임을 종료하고 에디터로 복귀
+                m_ActiveScene->OnRuntimeStop();
+                delete m_ActiveScene;
+                m_ActiveScene = m_EditorScene;
+                m_EditorScene = nullptr;
+                m_ActiveScene->SetSceneState(CCEngine::SceneState::Edit);
+                m_HierarchyPanel->SetContext(m_ActiveScene);
+
+                // UI 갱신 (모두 끔)
+                m_BtnPlay->SetActive(false);
+                m_BtnPause->SetActive(false);
             }
             });
 
@@ -284,18 +326,18 @@ namespace CCEngine {
         static bool s_WasLeftMouseDown = false;
         bool isLeftMouseDown = mainWindow.IsMouseButtonPressed(0);
 
-        if (isLeftMouseDown && !s_WasLeftMouseDown)
-        {
-            // 눌렀을 때 (Tear-off 시작점 잡기)
-            MouseButtonPressedEvent pressEvent(0, mouseX, mouseY);
-            OnEvent(pressEvent);
-        }
-        else if (!isLeftMouseDown && s_WasLeftMouseDown)
-        {
-            // 놓았을 때 (Redock! 뜯어낸 창을 다시 꽂아넣기)
-            MouseButtonReleasedEvent releaseEvent(0, mouseX, mouseY);
-            OnEvent(releaseEvent);
-        }
+        //if (isLeftMouseDown && !s_WasLeftMouseDown)
+        //{
+        //    // 눌렀을 때 (Tear-off 시작점 잡기)
+        //    MouseButtonPressedEvent pressEvent(0, mouseX, mouseY);
+        //    OnEvent(pressEvent);
+        //}
+        //else if (!isLeftMouseDown && s_WasLeftMouseDown)
+        //{
+        //    // 놓았을 때 (Redock! 뜯어낸 창을 다시 꽂아넣기)
+        //    MouseButtonReleasedEvent releaseEvent(0, mouseX, mouseY);
+        //    OnEvent(releaseEvent);
+        //}
 
         s_WasLeftMouseDown = isLeftMouseDown;
 
@@ -336,6 +378,12 @@ namespace CCEngine {
         // 3. 카메라 및 로직 업데이트
         m_Camera.OnUpdate(deltaTime);
         HandleShortcuts();
+
+		// 선택된 엔티티가 있다면 인스펙터 패널에 전달하여 UI 갱신
+        if (m_HierarchyPanel && m_InspectorPanel)
+        {
+            m_InspectorPanel->SetSelectedEntity(m_HierarchyPanel->GetSelectedEntity());
+        }
 
         // 렌더링 직전에 현재 창 크기를 기반으로 UI 크기를 재계산합니다.
         if (m_RootUI)

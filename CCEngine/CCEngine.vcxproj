@@ -209,9 +209,11 @@
     <ClInclude Include="src\Scene\SceneSerializer.h" />
     <ClInclude Include="src\Scene\ScriptableEntity.h" />
     <ClInclude Include="src\UI\Button.h" />
+    <ClInclude Include="src\UI\DragFloat.h" />
     <ClInclude Include="src\UI\EditorRootUI.h" />
     <ClInclude Include="src\UI\HierarchyItem.h" />
     <ClInclude Include="src\UI\ImageWidget.h" />
+    <ClInclude Include="src\UI\InspectorPanel.h" />
     <ClInclude Include="src\UI\Panel.h" />
     <ClInclude Include="src\UI\HierarchyPanel.h" />
     <ClInclude Include="src\UI\VBoxContainer.h" />
@@ -262,9 +264,11 @@
     <ClCompile Include="src\Scene\Scene.cpp" />
     <ClCompile Include="src\Scene\SceneSerializer.cpp" />
     <ClCompile Include="src\UI\Button.cpp" />
+    <ClCompile Include="src\UI\DragFloat.cpp" />
     <ClCompile Include="src\UI\EditorRootUI.cpp" />
     <ClCompile Include="src\UI\HierarchyItem.cpp" />
     <ClCompile Include="src\UI\ImageWidget.cpp" />
+    <ClCompile Include="src\UI\InspectorPanel.cpp" />
     <ClCompile Include="src\UI\Panel.cpp" />
     <ClCompile Include="src\UI\HierarchyPanel.cpp" />
     <ClCompile Include="src\UI\VBoxContainer.cpp" />
