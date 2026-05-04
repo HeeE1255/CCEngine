@@ -231,6 +231,12 @@
     <ClInclude Include="src\UI\EditorRootUI.h">
       <Filter>src\UI</Filter>
     </ClInclude>
+    <ClInclude Include="src\UI\InspectorPanel.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
+    <ClInclude Include="src\UI\DragFloat.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\Animation\Animator.cpp">
@@ -381,6 +387,12 @@
       <Filter>src\UI</Filter>
     </ClCompile>
     <ClCompile Include="src\UI\EditorRootUI.cpp">
+      <Filter>src\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UI\InspectorPanel.cpp">
+      <Filter>src\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UI\DragFloat.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
   </ItemGroup>

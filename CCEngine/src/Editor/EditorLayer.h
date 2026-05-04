@@ -18,6 +18,7 @@
 #include "UI/WindowPanel.h"
 #include "UI/VBoxContainer.h"
 #include "UI/HierarchyPanel.h"
+#include "UI/InspectorPanel.h"
 
 namespace CCEngine {
 
@@ -80,7 +81,7 @@ namespace CCEngine {
 
         // 3. 좌/우 패널
         UI::HierarchyPanel* m_HierarchyPanel = nullptr;
-        UI::WindowPanel* m_InspectorPanel = nullptr;
+        UI::InspectorPanel* m_InspectorPanel = nullptr;
         UI::VBoxContainer* m_HierarchyContainer = nullptr;
 
 

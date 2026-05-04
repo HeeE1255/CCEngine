@@ -40,6 +40,7 @@ D:\CCEngine\CCEngine\src\UI\Button.cpp;D:\CCEngine\bin-int\Debug-windows-x86_64\
 D:\CCEngine\CCEngine\src\UI\EditorRootUI.cpp;D:\CCEngine\bin-int\Debug-windows-x86_64\CCEngine\EditorRootUI.obj
 D:\CCEngine\CCEngine\src\UI\HierarchyItem.cpp;D:\CCEngine\bin-int\Debug-windows-x86_64\CCEngine\HierarchyItem.obj
 D:\CCEngine\CCEngine\src\UI\ImageWidget.cpp;D:\CCEngine\bin-int\Debug-windows-x86_64\CCEngine\ImageWidget.obj
+D:\CCEngine\CCEngine\src\UI\InspectorPanel.cpp;D:\CCEngine\bin-int\Debug-windows-x86_64\CCEngine\InspectorPanel.obj
 D:\CCEngine\CCEngine\src\UI\Panel.cpp;D:\CCEngine\bin-int\Debug-windows-x86_64\CCEngine\Panel.obj
 D:\CCEngine\CCEngine\src\UI\HierarchyPanel.cpp;D:\CCEngine\bin-int\Debug-windows-x86_64\CCEngine\HierarchyPanel.obj
 D:\CCEngine\CCEngine\src\UI\VBoxContainer.cpp;D:\CCEngine\bin-int\Debug-windows-x86_64\CCEngine\VBoxContainer.obj
