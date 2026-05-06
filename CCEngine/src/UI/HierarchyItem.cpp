@@ -20,7 +20,7 @@ namespace CCEngine
             SetSize(0.0f, HeaderHeight); // 초기 크기
         }
 
-        void HierarchyItem::UpdateLayout(const UIVec2& parentPos, const UIVec2& parentSize)
+        void HierarchyItem::UpdateLayout(const DirectX::XMFLOAT2& parentPos, const DirectX::XMFLOAT2& parentSize)
         {
             if (!m_IsVisible) return;
 
@@ -151,8 +151,8 @@ namespace CCEngine
 
                     // (중요) 내 레이아웃을 억지로 다시 계산해서 크기를 부풀립니다.
                     // 원래는 부모의 Pos/Size를 받아야 하지만, 임시로 현재 값을 그대로 넣어서 크기(높이)만 다시 계산하게 만듭니다.
-                    UIVec2 dummyParentPos = { m_CalculatedPos.x - m_OffsetMin.x, m_CalculatedPos.y - m_OffsetMin.y };
-                    UIVec2 dummyParentSize = { 9999.0f, 9999.0f }; // 일단 가로세로 제한 무시
+                    DirectX::XMFLOAT2 dummyParentPos = { m_CalculatedPos.x - m_OffsetMin.x, m_CalculatedPos.y - m_OffsetMin.y };
+                    DirectX::XMFLOAT2 dummyParentSize = { 9999.0f, 9999.0f }; // 일단 가로세로 제한 무시
                     this->UpdateLayout(dummyParentPos, dummyParentSize);
                     // ==========================================================
 

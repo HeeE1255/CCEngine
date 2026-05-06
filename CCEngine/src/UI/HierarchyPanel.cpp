@@ -86,7 +86,7 @@ namespace CCEngine {
             }
         }
 
-        void HierarchyPanel::UpdateLayout(const UIVec2& parentPos, const UIVec2& parentSize)
+        void HierarchyPanel::UpdateLayout(const DirectX::XMFLOAT2& parentPos, const DirectX::XMFLOAT2& parentSize)
         {
             if (!m_IsVisible) return;
 

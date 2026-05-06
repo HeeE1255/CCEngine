@@ -1,6 +1,7 @@
 #pragma once
 #include "Core.h"
 #include "Renderer/Texture.h"
+#include "UI/Widget.h"
 #include <DirectXMath.h>
 
 namespace CCEngine

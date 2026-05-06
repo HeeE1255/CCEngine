@@ -1,6 +1,5 @@
 #include "InspectorPanel.h"
-#include "Renderer/UIRenderer.h"
-#include "Scene/Components.h"
+#include "InspectorRegistry.h"
 
 namespace CCEngine 
 {
@@ -12,57 +11,60 @@ namespace CCEngine
         {
         }
 
+        void InspectorPanel::SetSelectedEntity(Entity entity)
+        {
+            // 같은 엔티티를 다시 클릭했으면 무시
+            if (m_SelectedEntity == entity) return;
+
+            m_SelectedEntity = entity;
+
+            // ★ 중요: 다른 엔티티가 선택되었으므로, 기존에 그려져 있던 UI 위젯(DragFloat 등)을 모두 날립니다.
+            m_Children.clear();
+
+            if (!m_SelectedEntity) return;
+
+            // 타이틀 바 아래쪽 여백부터 UI 생성 시작
+            float currentY = 40.0f;
+
+            InspectorRegistry::DrawAllComponents(this, m_SelectedEntity);
+        }
+
         void InspectorPanel::OnRender()
         {
-            // 1. 기본 윈도우 패널 배경 및 타이틀 렌더링
+            // 1. 배경 및 윈도우 타이틀 렌더링
             WindowPanel::OnRender();
 
-            if (!m_IsVisible) return;
+            if (!m_IsVisible || !m_SelectedEntity) return;
 
-            // 2. 선택된 엔티티가 없으면 안내 문구만 띄우고 종료
-            if (!m_SelectedEntity)
+            // 2. 동적으로 생성된 자식 위젯들(DragFloat, Button 등) 렌더링
+            for (auto child : m_Children)
             {
-                UIRenderer::DrawString("No Entity Selected",
-                    m_CalculatedPos.x + 10.0f, m_CalculatedPos.y + 50.0f,
-                    { 0.5f, 0.5f, 0.5f, 1.0f });
-                return;
+                child->OnRender();
             }
+        }
 
-            // ==========================================================
-            // 3. 선택된 엔티티의 컴포넌트 정보 읽어오기
-            // ==========================================================
-            float currentY = m_CalculatedPos.y + 40.0f;
-            float leftPadding = m_CalculatedPos.x + 10.0f;
-            float lineHeight = 30.0f;
-            DirectX::XMFLOAT4 textColor = { 1.0f, 1.0f, 1.0f, 1.0f };
+        void InspectorPanel::UpdateLayout(const DirectX::XMFLOAT2& parentPos, const DirectX::XMFLOAT2& parentSize)
+        {
+            // 1. 윈도우 패널 자체의 배경 및 뼈대 업데이트
+            WindowPanel::UpdateLayout(parentPos, parentSize);
 
-            // [Tag Component] (이름)
-            if (m_SelectedEntity.HasComponent<TagComponent>())
+            if (!m_IsVisible || !m_SelectedEntity) return;
+
+            // 2. 컴포넌트 박스(InspectorItem)들을 세로로 차곡차곡 쌓음
+            float currentY = 40.0f; // 윈도우 타이틀바 바로 아래부터 시작
+            for (auto child : m_Children)
             {
-                auto& tag = m_SelectedEntity.GetComponent<TagComponent>().Tag;
-                UIRenderer::DrawString("Name: " + tag, leftPadding, currentY, textColor);
-                currentY += lineHeight;
-            }
+                if (!child->IsVisible()) continue;
 
-            // 구분선 하나 그어주기
-            UIRenderer::DrawRectFilled(m_CalculatedPos.x + 5.0f, currentY, m_CalculatedSize.x - 10.0f, 2.0f, { 0.3f, 0.3f, 0.3f, 1.0f });
-            currentY += 15.0f;
+                // 자식의 Y좌표를 현재 currentY로 강제 할당
+                child->SetOffsetMin(0.0f, currentY);
+                child->SetOffsetMax(0.0f, currentY); // 높이는 InspectorItem이 스스로 계산해서 늘림!
 
-            // [Transform Component] (트랜스폼)
-            if (m_SelectedEntity.HasComponent<TransformComponent>())
-            {
-                auto& transform = m_SelectedEntity.GetComponent<TransformComponent>();
+                // 자식 레이아웃 갱신
+                child->UpdateLayout(m_CalculatedPos, m_CalculatedSize);
 
-                UIRenderer::DrawString("[ Transform ]", leftPadding, currentY, { 0.7f, 0.9f, 0.7f, 1.0f });
-                currentY += lineHeight;
-
-                std::string posX = "Position X: " + std::to_string(transform.Translation.x);
-                std::string posY = "Position Y: " + std::to_string(transform.Translation.y);
-                std::string posZ = "Position Z: " + std::to_string(transform.Translation.z);
-
-                UIRenderer::DrawString(posX, leftPadding, currentY, textColor); currentY += lineHeight;
-                UIRenderer::DrawString(posY, leftPadding, currentY, textColor); currentY += lineHeight;
-                UIRenderer::DrawString(posZ, leftPadding, currentY, textColor); currentY += lineHeight;
+                // 방금 갱신된 자식의 진짜 높이만큼 Y축을 전진시킴
+                currentY += child->GetCalculatedSize().y + 4.0f;
             }
         }
 

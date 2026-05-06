@@ -34,7 +34,7 @@ namespace CCEngine {
             }
         }
 
-        void Widget::UpdateLayout(const UIVec2& parentPos, const UIVec2& parentSize)
+        void Widget::UpdateLayout(const DirectX::XMFLOAT2& parentPos, const DirectX::XMFLOAT2& parentSize)
         {
             if(!m_IsVisible) return;
 

@@ -20,7 +20,7 @@ namespace CCEngine
             Entity GetSelectedEntity() const { return m_SelectionContext; }
 
             void Refresh();
-            virtual void UpdateLayout(const UIVec2& parentPos, const UIVec2& parentSize) override;
+            virtual void UpdateLayout(const DirectX::XMFLOAT2& parentPos, const DirectX::XMFLOAT2& parentSize) override;
             virtual void OnRender() override;
 
         private:

@@ -8,6 +8,11 @@ namespace CCEngine
 {
     namespace UI
     {
+        enum class ResizeMode {
+            None, Top, Bottom, Left, Right,
+            TopLeft, TopRight, BottomLeft, BottomRight
+        };
+
         class CC_API WindowPanel : public Panel
         {
         public:
@@ -49,6 +54,12 @@ namespace CCEngine
             // 드래그할 때 마우스 포인터와 창 기준점(0,0) 사이의 거리
             float m_DragOffsetX = 0.0f;
             float m_DragOffsetY = 0.0f;
+
+			// 리사이징 상태
+            ResizeMode m_ResizeMode = ResizeMode::None;
+
+            float m_ResizeLastMouseX = 0.0f;
+            float m_ResizeLastMouseY = 0.0f;
         };
     }
 }

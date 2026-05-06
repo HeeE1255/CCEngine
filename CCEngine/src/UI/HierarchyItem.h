@@ -13,7 +13,7 @@ namespace CCEngine
             HierarchyItem(const std::string& name, const std::string& text);
 
             virtual void OnRender() override;
-            virtual void UpdateLayout(const UIVec2& parentPos, const UIVec2& parentSize) override;
+            virtual void UpdateLayout(const DirectX::XMFLOAT2& parentPos, const DirectX::XMFLOAT2& parentSize) override;
 
             // 이벤트 처리
             virtual bool OnMouseButtonPressed(MouseButtonPressedEvent& e) override;

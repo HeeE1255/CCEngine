@@ -1,18 +1,18 @@
 #pragma once
 #include "UI/Widget.h"
+#include "Core.h"
 #include <functional>
 #include <string>
 
-namespace CCEngine {
-    namespace UI {
-
-        class DragFloat : public Widget
+namespace CCEngine 
+{
+    namespace UI 
+    {
+        class CC_API DragFloat : public Widget 
         {
         public:
-            // 값을 읽어오는 함수(getter)와 값을 쓰는 함수(setter)를 받습니다.
             DragFloat(const std::string& name, const std::string& label,
                 std::function<float()> getter, std::function<void(float)> setter);
-
             virtual void OnRender() override;
             virtual bool OnMouseButtonPressed(MouseButtonPressedEvent& e) override;
 
@@ -23,8 +23,10 @@ namespace CCEngine {
 
             bool m_IsDragging = false;
             float m_LastMouseX = 0.0f;
-            float m_Sensitivity = 0.02f; // 드래그 시 값이 변하는 속도
-        };
+            float m_Sensitivity = 0.1f;
 
+            bool m_IsEditing = false;
+            std::string m_InputBuffer;
+        };
     }
 }

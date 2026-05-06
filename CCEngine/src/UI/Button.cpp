@@ -18,7 +18,7 @@ namespace CCEngine {
             m_IsHovered = IsPointInside(mouseX, mouseY);
             if (!m_IsHovered) m_IsPressed = false;
 
-            UIColor currentColor = m_NormalColor;
+            DirectX::XMFLOAT4 currentColor = m_NormalColor;
 
             if (m_IsActive)
             {
@@ -31,9 +31,9 @@ namespace CCEngine {
                 // 만약 UIColor 내부 값이 float(0.0~1.0) 기반이라면 아래처럼 +0.1f 씩 더해줍니다.
                 if (m_IsHovered && !m_IsPressed)
                 {
-                    currentColor.r = std::min(currentColor.r + 0.1f, 1.0f);
-                    currentColor.g = std::min(currentColor.g + 0.1f, 1.0f);
-                    currentColor.b = std::min(currentColor.b + 0.1f, 1.0f);
+                    currentColor.x = std::min(currentColor.x + 0.1f, 1.0f);
+                    currentColor.y = std::min(currentColor.y + 0.1f, 1.0f);
+                    currentColor.z = std::min(currentColor.z + 0.1f, 1.0f);
                 }
             }
             else
@@ -45,7 +45,7 @@ namespace CCEngine {
             // 마우스를 꾹 누르고 있는 순간은 모든 상태를 무시하고 Click 색상 적용
             if (m_IsPressed) currentColor = m_ClickColor;
 
-            DirectX::XMFLOAT4 dxColor = { currentColor.r, currentColor.g, currentColor.b, currentColor.a };
+            DirectX::XMFLOAT4 dxColor = { currentColor.x, currentColor.y, currentColor.z, currentColor.w };
 
             UIRenderer::DrawRectFilled(m_CalculatedPos.x, m_CalculatedPos.y, m_CalculatedSize.x, m_CalculatedSize.y, dxColor);
 

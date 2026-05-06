@@ -6,7 +6,7 @@ namespace CCEngine
     {
         VBoxContainer::VBoxContainer(const std::string& name) : Widget(name) {}
 
-        void VBoxContainer::UpdateLayout(const UIVec2& parentPos, const UIVec2& parentSize)
+        void VBoxContainer::UpdateLayout(const DirectX::XMFLOAT2& parentPos, const DirectX::XMFLOAT2& parentSize)
         {
             if (!m_IsVisible) return;
 

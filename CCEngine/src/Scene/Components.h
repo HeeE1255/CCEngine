@@ -38,6 +38,12 @@ namespace CCEngine
             : Translation(translation) {
         }
 
+        void SetRotationEuler(float x, float y, float z)
+        {
+            Rotation = { DirectX::XMConvertToRadians(x), DirectX::XMConvertToRadians(y), DirectX::XMConvertToRadians(z) };
+            DirectX::XMVECTOR quat = DirectX::XMQuaternionRotationRollPitchYaw(x, y, z);
+            DirectX::XMStoreFloat4(&QuaternionRotation, quat);
+        }
         // 나중에 여기서 SRT 변환 행렬을 뽑아내는 함수를 추가
     };
 

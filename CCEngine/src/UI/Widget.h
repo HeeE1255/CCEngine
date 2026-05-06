@@ -3,6 +3,7 @@
 #include "Application.h"
 #include "Events/Event.h"
 #include "Events/MouseEvent.h"
+#include <DirectXMath.h>
 #include <vector>
 #include <string>
 #include <algorithm>
@@ -11,16 +12,6 @@ namespace CCEngine
 {
     namespace UI
     {
-        struct UIVec2
-        {
-            float x, y;
-        };
-
-        struct UIColor
-        {
-            float r, g, b, a;
-        };
-
         class CC_API Widget
         {
         public:
@@ -34,7 +25,7 @@ namespace CCEngine
 
             virtual void OnUpdate(float deltaTime);
             virtual void OnRender();
-            virtual void UpdateLayout(const UIVec2& parentPos, const UIVec2& parentSize);
+            virtual void UpdateLayout(const DirectX::XMFLOAT2& parentPos, const DirectX::XMFLOAT2& parentSize);
 
             // 이벤트 처리 함수: 마우스 클릭, 이동, 키보드 입력 등
             virtual bool OnEvent(Event& e);
@@ -78,8 +69,13 @@ namespace CCEngine
             void SetOffsetMin(float left, float top){m_OffsetMin = { left, top };}
             void SetOffsetMax(float right, float bottom){m_OffsetMax = { right, bottom };}
 
-           UIVec2 GetCalculatedPosition() const{return m_CalculatedPos;}
-           UIVec2 GetCalculatedSize() const{return m_CalculatedSize;}
+            DirectX::XMFLOAT2 GetAnchorMin() const { return m_AnchorMin; }
+			DirectX::XMFLOAT2 GetAnchorMax() const { return m_AnchorMax; }
+			DirectX::XMFLOAT2 GetOffsetMin() const { return m_OffsetMin; }
+			DirectX::XMFLOAT2 GetOffsetMax() const { return m_OffsetMax; }
+
+           DirectX::XMFLOAT2 GetCalculatedPosition() const{return m_CalculatedPos;}
+           DirectX::XMFLOAT2 GetCalculatedSize() const{return m_CalculatedSize;}
            void SetIndentLevel(float level) { m_IndentLevel = level; } 
            float GetIndentLevel() const { return m_IndentLevel; }
 
@@ -101,13 +97,13 @@ namespace CCEngine
             std::vector<Widget*> m_Children;
             float m_IndentLevel = 0.0f; 
 
-            UIVec2 m_AnchorMin = { 0.0f, 0.0f };
-            UIVec2 m_AnchorMax = { 0.0f, 0.0f };
-            UIVec2 m_OffsetMin = { 0.0f, 0.0f };
-            UIVec2 m_OffsetMax = { 0.0f, 0.0f };
+            DirectX::XMFLOAT2 m_AnchorMin = { 0.0f, 0.0f };
+            DirectX::XMFLOAT2 m_AnchorMax = { 0.0f, 0.0f };
+            DirectX::XMFLOAT2 m_OffsetMin = { 0.0f, 0.0f };
+            DirectX::XMFLOAT2 m_OffsetMax = { 0.0f, 0.0f };
 
-            UIVec2 m_CalculatedPos = { 0.0f, 0.0f };
-            UIVec2 m_CalculatedSize = { 0.0f, 0.0f };
+            DirectX::XMFLOAT2 m_CalculatedPos = { 0.0f, 0.0f };
+            DirectX::XMFLOAT2 m_CalculatedSize = { 0.0f, 0.0f };
         };
     }
 }

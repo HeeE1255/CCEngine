@@ -195,10 +195,22 @@
     <ClInclude Include="src\UI\Button.h">
       <Filter>src\UI</Filter>
     </ClInclude>
+    <ClInclude Include="src\UI\DragFloat.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
+    <ClInclude Include="src\UI\EditorRootUI.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
     <ClInclude Include="src\UI\HierarchyItem.h">
       <Filter>src\UI</Filter>
     </ClInclude>
+    <ClInclude Include="src\UI\HierarchyPanel.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
     <ClInclude Include="src\UI\ImageWidget.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
+    <ClInclude Include="src\UI\InspectorPanel.h">
       <Filter>src\UI</Filter>
     </ClInclude>
     <ClInclude Include="src\UI\Panel.h">
@@ -225,16 +237,16 @@
     <ClInclude Include="vendor\stb_truetype\stb_truetype.h">
       <Filter>vendor\stb_truetype</Filter>
     </ClInclude>
-    <ClInclude Include="src\UI\HierarchyPanel.h">
+    <ClInclude Include="src\UI\InspectorItem.h">
       <Filter>src\UI</Filter>
     </ClInclude>
-    <ClInclude Include="src\UI\EditorRootUI.h">
+    <ClInclude Include="src\UI\DragFloat3.h">
       <Filter>src\UI</Filter>
     </ClInclude>
-    <ClInclude Include="src\UI\InspectorPanel.h">
+    <ClInclude Include="src\UI\DragFloat4.h">
       <Filter>src\UI</Filter>
     </ClInclude>
-    <ClInclude Include="src\UI\DragFloat.h">
+    <ClInclude Include="src\UI\InspectorRegistry.h">
       <Filter>src\UI</Filter>
     </ClInclude>
   </ItemGroup>
@@ -356,10 +368,22 @@
     <ClCompile Include="src\UI\Button.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
+    <ClCompile Include="src\UI\DragFloat.cpp">
+      <Filter>src\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UI\EditorRootUI.cpp">
+      <Filter>src\UI</Filter>
+    </ClCompile>
     <ClCompile Include="src\UI\HierarchyItem.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
+    <ClCompile Include="src\UI\HierarchyPanel.cpp">
+      <Filter>src\UI</Filter>
+    </ClCompile>
     <ClCompile Include="src\UI\ImageWidget.cpp">
+      <Filter>src\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UI\InspectorPanel.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
     <ClCompile Include="src\UI\Panel.cpp">
@@ -383,16 +407,13 @@
     <ClCompile Include="vendor\stb_truetype\stb_truetype.cpp">
       <Filter>vendor\stb_truetype</Filter>
     </ClCompile>
-    <ClCompile Include="src\UI\HierarchyPanel.cpp">
+    <ClCompile Include="src\UI\DragFloat3.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
-    <ClCompile Include="src\UI\EditorRootUI.cpp">
+    <ClCompile Include="src\UI\DragFloat4.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
-    <ClCompile Include="src\UI\InspectorPanel.cpp">
-      <Filter>src\UI</Filter>
-    </ClCompile>
-    <ClCompile Include="src\UI\DragFloat.cpp">
+    <ClCompile Include="src\UI\InspectorItem.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
   </ItemGroup>

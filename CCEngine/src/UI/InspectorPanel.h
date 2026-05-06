@@ -5,22 +5,25 @@
 #include "Scene/Entity.h"
 
 
-namespace CCEngine {
-    namespace UI {
+namespace CCEngine 
+{
+    namespace UI 
+    {
 
-        class InspectorPanel : public WindowPanel 
+        class CC_API InspectorPanel : public WindowPanel
         {
         public:
             InspectorPanel(const std::string& name, const std::string& title);
 
-            // 외부(하이어라키 등)에서 선택된 엔티티를 넘겨줄 세터
-            void SetSelectedEntity(Entity entity) { m_SelectedEntity = entity; }
+            // 외부(하이어라키 등)에서 선택된 엔티티를 세팅
+            void SetSelectedEntity(Entity entity);
             Entity GetSelectedEntity() const { return m_SelectedEntity; }
 
             virtual void OnRender() override;
+            virtual void UpdateLayout(const DirectX::XMFLOAT2& parentPos, const DirectX::XMFLOAT2& parentSize) override;
 
         private:
-            Entity m_SelectedEntity; // 현재 선택된 엔티티 보관
+            Entity m_SelectedEntity;
         };
 
     }

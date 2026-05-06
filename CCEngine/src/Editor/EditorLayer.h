@@ -97,7 +97,6 @@ namespace CCEngine {
         UI::ImageWidget* m_ViewportWidget = nullptr;
         UI::ImageWidget* m_GameViewWidget = nullptr;
 
-
     };
 
 }

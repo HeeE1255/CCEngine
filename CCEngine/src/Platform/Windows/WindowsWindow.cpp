@@ -32,14 +32,11 @@ namespace CCEngine
 				window->SetWidth(width);
 				window->SetHeight(height);
 
-				// ✅ [RHI 추상화] DX11Context 캐스팅 없이 인터페이스로 리사이즈 호출
 				if (window->GetContext())
 				{
 					window->GetContext()->ResizeBuffers(width, height);
 				}
 
-				// ✅ 메인 창 여부를 Application에게 물어보거나 Window 객체 자체의 상태로 판단
-				// 여기서는 간단하게 Application의 메인 윈도우와 주소를 비교합니다.
 				if (CCEngine::Application::Get() &&
 					window == &(CCEngine::Application::Get()->GetWindow()))
 				{
@@ -136,10 +133,9 @@ namespace CCEngine
 
 		case WM_NCHITTEST:  
 		{
-			// 1. OS의 기본 마우스 위치 판정 (테두리 크기 조절 등)
 			LRESULT hit = DefWindowProc(hWnd, message, wParam, lParam);
 
-			// 2. 마우스가 창 내부(Client)에 있을 때만 검사
+			// 마우스가 창 안에 있을 때
 			if (hit == HTCLIENT)
 			{
 				POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
@@ -148,11 +144,34 @@ namespace CCEngine
 				RECT rc;
 				GetClientRect(hWnd, &rc);
 
+				// ==========================================================
+				// ★ 1. 메인 창 8방향 리사이즈 테두리 수동 판정! (두께 8px)
+				// WM_NCCALCSIZE로 OS 테두리를 날렸기 때문에 여기서 부활시켜야 합니다.
+				// ==========================================================
+				int borderWidth = 8;
+				bool isLeft = pt.x < borderWidth;
+				bool isRight = pt.x >= rc.right - borderWidth;
+				bool isTop = pt.y < borderWidth;
+				bool isBottom = pt.y >= rc.bottom - borderWidth;
+
+				if (isTop && isLeft) return HTTOPLEFT;
+				if (isTop && isRight) return HTTOPRIGHT;
+				if (isBottom && isLeft) return HTBOTTOMLEFT;
+				if (isBottom && isRight) return HTBOTTOMRIGHT;
+				if (isLeft) return HTLEFT;
+				if (isRight) return HTRIGHT;
+				if (isBottom) return HTBOTTOM;
+				if (isTop) return HTTOP;
+
+				// ==========================================================
+				// ★ 2. 테두리가 아니라면 커스텀 타이틀 바 판정 (드래그용)
+				// ==========================================================
 				bool isMainWindow = (CCEngine::Application::Get() &&
 					window == &(CCEngine::Application::Get()->GetWindow()));
 
 				if (isMainWindow)
 				{
+					// 상단 24px 영역 (우측 100px의 닫기 버튼 영역 제외)
 					if (pt.y >= 0 && pt.y <= 24 && pt.x < (rc.right - 100))
 					{
 						return HTCAPTION;
@@ -174,6 +193,7 @@ namespace CCEngine
 			}
 		}
 		break;
+
 
 		case WM_MOUSEMOVE:
 		{

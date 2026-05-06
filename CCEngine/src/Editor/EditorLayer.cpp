@@ -15,6 +15,12 @@
 #include "Application.h"
 #include "UI/HierarchyItem.h"
 #include "UI/InspectorPanel.h"
+#include "UI/InspectorRegistry.h"
+#include "UI/DragFloat.h"
+#include "UI/DragFloat4.h"
+#include "UI/DragFloat3.h"
+#include "UI/InspectorItem.h"
+#include "Scene/Components.h"
 #include <windows.h>
 #include <filesystem>
 #include <iostream>
@@ -36,6 +42,7 @@ namespace CCEngine {
 
     void EditorLayer::OnAttach()
     {
+ 
         FramebufferSpecification fbSpec;
         fbSpec.Width = 1280;
         fbSpec.Height = 720;
@@ -49,7 +56,7 @@ namespace CCEngine {
         m_ActiveScene = new Scene();
 
         // ==========================================
-        // 씬 기본 오브젝트 세팅 (기존과 동일)
+        // 씬 기본 오브젝트 세팅 
         // ==========================================
         auto cameraEntity = m_ActiveScene->CreateEntity("Main Camera");
         auto& cameraComp = cameraEntity.AddComponent<CameraComponent>();
@@ -88,18 +95,14 @@ namespace CCEngine {
         Entity mayoModel = ModelImporter::ImportModel(m_ActiveScene, "assets/Chocolate rice/0.MAYO/FBX/FBX_MAYO.fbx");
 
         // =========================================================
-        // [완전 자체 UI 구조 조립] (기존과 동일)
-        // =========================================================
-       // =========================================================
         // [완전 자체 UI 구조 조립]
         // =========================================================
         m_RootUI = new UI::Panel("Root", { 0.05f, 0.05f, 0.05f, 1.0f });
         m_RootUI->SetAnchorMin(0.0f, 0.0f);
         m_RootUI->SetAnchorMax(1.0f, 1.0f);
+        m_RootUI->SetOffsetMin(0.0f, 0.0f);
+        m_RootUI->SetOffsetMax(0.0f, 0.0f);
 
-        // =========================================================
-        // 1단: 메인 창 전용 타이틀 바 (Y: 0 ~ 24px)
-        // =========================================================
         m_TitleBarPanel = new UI::Panel("TitleBarUI", { 0.15f, 0.15f, 0.17f, 1.0f });
         m_TitleBarPanel->SetAnchorMin(0.0f, 0.0f); m_TitleBarPanel->SetAnchorMax(1.0f, 0.0f);
         m_TitleBarPanel->SetOffsetMin(0.0f, 0.0f); m_TitleBarPanel->SetOffsetMax(0.0f, 24.0f);
@@ -111,9 +114,6 @@ namespace CCEngine {
         m_BtnCloseMain->SetOnClick([]() { CCEngine::Application::Get()->GetWindow().SetShouldClose(true); });
         m_TitleBarPanel->AddChild(m_BtnCloseMain);
 
-        // =========================================================
-        // 2단: 메뉴 바 (Y: 24 ~ 48px) - 24px 밀림
-        // =========================================================
         m_MenuBarPanel = new UI::Panel("MenuBarUI", { 0.12f, 0.12f, 0.12f, 1.0f });
         m_MenuBarPanel->SetAnchorMin(0.0f, 0.0f); m_MenuBarPanel->SetAnchorMax(1.0f, 0.0f);
         m_MenuBarPanel->SetOffsetMin(0.0f, 24.0f); m_MenuBarPanel->SetOffsetMax(0.0f, 48.0f);
@@ -124,25 +124,27 @@ namespace CCEngine {
         m_BtnFileMenu->SetOffsetMin(0.0f, 0.0f); m_BtnFileMenu->SetOffsetMax(60.0f, 0.0f);
         m_MenuBarPanel->AddChild(m_BtnFileMenu);
 
-        // =========================================================
-        // 3단: 메인 작업 영역들 (Y 오프셋 +24px씩 적용)
-        // =========================================================
         m_HierarchyPanel = new UI::HierarchyPanel("Hierarchy");
-        m_HierarchyPanel->SetAnchorMin(0.0f, 0.0f); m_HierarchyPanel->SetAnchorMax(0.2f, 1.0f);
-        m_HierarchyPanel->SetOffsetMin(0.0f, 48.0f); m_HierarchyPanel->SetOffsetMax(0.0f, 0.0f); // 24 -> 48
+        m_HierarchyPanel->SetAnchorMin(0.0f, 0.0f);
+        m_HierarchyPanel->SetAnchorMax(0.2f, 1.0f);
+        m_HierarchyPanel->SetOffsetMin(0.0f, 48.0f); // 상단 툴바 여백
+        m_HierarchyPanel->SetOffsetMax(0.0f, 0.0f);
         m_RootUI->AddChild(m_HierarchyPanel);
 
         m_HierarchyPanel->SetContext(m_ActiveScene);
         m_HierarchyPanel->Refresh();
 
+        // ★ WindowPanel에서 방금 만든 InspectorPanel 객체로 교체!
         m_InspectorPanel = new UI::InspectorPanel("InspectorUI", "Inspector");
-        m_InspectorPanel->SetAnchorMin(0.8f, 0.0f); m_InspectorPanel->SetAnchorMax(1.0f, 1.0f);
-        m_InspectorPanel->SetOffsetMin(0.0f, 48.0f); m_InspectorPanel->SetOffsetMax(0.0f, 0.0f); // 24 -> 48
+        m_InspectorPanel->SetAnchorMin(0.8f, 0.0f);
+        m_InspectorPanel->SetAnchorMax(1.0f, 1.0f);
+        m_InspectorPanel->SetOffsetMin(0.0f, 48.0f);
+        m_InspectorPanel->SetOffsetMax(0.0f, 0.0f);
         m_RootUI->AddChild(m_InspectorPanel);
 
         m_ToolbarPanel = new UI::Panel("ToolbarUI", { 0.15f, 0.15f, 0.15f, 1.0f });
         m_ToolbarPanel->SetAnchorMin(0.0f, 0.0f); m_ToolbarPanel->SetAnchorMax(1.0f, 0.0f);
-        m_ToolbarPanel->SetOffsetMin(250.0f, 48.0f); m_ToolbarPanel->SetOffsetMax(-300.0f, 88.0f); // 24,64 -> 48,88
+        m_ToolbarPanel->SetOffsetMin(250.0f, 48.0f); m_ToolbarPanel->SetOffsetMax(-300.0f, 88.0f);
         m_RootUI->AddChild(m_ToolbarPanel);
 
         m_BtnPlay = new UI::Button("BtnPlay", "Play");
@@ -161,8 +163,10 @@ namespace CCEngine {
         m_ToolbarPanel->AddChild(m_BtnStop);
 
         m_ViewportWindow = new UI::WindowPanel("ViewportWindowUI", "Scene View");
-        m_ViewportWindow->SetAnchorMin(0.2f, 0.0f); m_ViewportWindow->SetAnchorMax(0.8f, 0.6f);
-        m_ViewportWindow->SetOffsetMin(0.0f, 88.0f); m_ViewportWindow->SetOffsetMax(0.0f, 0.0f); // 64 -> 88
+        m_ViewportWindow->SetAnchorMin(0.2f, 0.0f);
+        m_ViewportWindow->SetAnchorMax(0.8f, 0.7f); // 아래 게임화면 공간 비워둠
+        m_ViewportWindow->SetOffsetMin(0.0f, 48.0f);
+        m_ViewportWindow->SetOffsetMax(0.0f, 0.0f);
         m_RootUI->AddChild(m_ViewportWindow);
 
         void* editorTex = m_Framebuffer->GetColorAttachmentRendererID(0);
@@ -185,7 +189,7 @@ namespace CCEngine {
         m_FileDropdownPanel = new UI::Panel("FileDropdownUI", { 0.18f, 0.18f, 0.18f, 1.0f });
         m_FileDropdownPanel->SetVisible(false);
         m_FileDropdownPanel->SetAnchorMin(0.0f, 0.0f); m_FileDropdownPanel->SetAnchorMax(0.0f, 0.0f);
-        m_FileDropdownPanel->SetOffsetMin(0.0f, 48.0f); m_FileDropdownPanel->SetOffsetMax(120.0f, 48.0f + 100.0f); // 24 -> 48
+        m_FileDropdownPanel->SetOffsetMin(0.0f, 48.0f); m_FileDropdownPanel->SetOffsetMax(120.0f, 48.0f + 100.0f);
         m_RootUI->AddChild(m_FileDropdownPanel);
 
         m_BtnOpen = new UI::Button("BtnOpen", "Open Scene");
@@ -208,50 +212,36 @@ namespace CCEngine {
         m_BtnExit->SetOffsetMin(0.0f, 75.0f); m_BtnExit->SetOffsetMax(0.0f, 100.0f);
         m_FileDropdownPanel->AddChild(m_BtnExit);
 
-        // 버튼 콜백
-        m_BtnFileMenu->SetOnClick([this]() {
-            m_FileDropdownPanel->SetVisible(!m_FileDropdownPanel->IsVisible());
-            });
+        // --- 버튼 & 툴바 콜백 등록 (이전 코드 유지) ---
+        m_BtnFileMenu->SetOnClick([this]() { m_FileDropdownPanel->SetVisible(!m_FileDropdownPanel->IsVisible()); });
         m_BtnOpen->SetOnClick([this]() { m_FileDropdownPanel->SetVisible(false); OpenScene(); });
         m_BtnSave->SetOnClick([this]() { m_FileDropdownPanel->SetVisible(false); SaveScene(); });
         m_BtnSaveAs->SetOnClick([this]() { m_FileDropdownPanel->SetVisible(false); SaveSceneAs(); });
-        //m_BtnExit->SetOnClick([this]() { PostQuitMessage(0); });
         m_BtnExit->SetOnClick([this]() { CCEngine::Application::Get()->GetWindow().SetShouldClose(true); });
 
-        // 툴바 콜백
         m_BtnPlay->SetOnClick([this]() {
             CCEngine::SceneState state = m_ActiveScene->GetState();
-
             if (state == CCEngine::SceneState::Edit) {
-                // 1. [에디터 -> 시작] 씬을 복사하고 런타임 시작
                 m_EditorScene = m_ActiveScene;
                 m_ActiveScene = CCEngine::Scene::Copy(m_EditorScene);
                 m_ActiveScene->OnRuntimeStart();
-                m_ActiveScene->SetSceneState(CCEngine::SceneState::Play); // 상태 명확히 세팅
+                m_ActiveScene->SetSceneState(CCEngine::SceneState::Play);
                 m_HierarchyPanel->SetContext(m_ActiveScene);
-
-                // UI 갱신
                 m_BtnPlay->SetActive(true);
                 m_BtnPause->SetActive(false);
             }
             else if (state == CCEngine::SceneState::Play) {
-                // 2. [플레이 중 -> 한 번 더 클릭] 정지(Stop)와 동일하게 동작하여 에디터로 복귀
                 m_ActiveScene->OnRuntimeStop();
                 delete m_ActiveScene;
                 m_ActiveScene = m_EditorScene;
                 m_EditorScene = nullptr;
                 m_ActiveScene->SetSceneState(CCEngine::SceneState::Edit);
                 m_HierarchyPanel->SetContext(m_ActiveScene);
-
-                // UI 갱신 (모두 끔)
                 m_BtnPlay->SetActive(false);
                 m_BtnPause->SetActive(false);
             }
             else if (state == CCEngine::SceneState::Pause) {
-                // 3. [일시정지 중 -> 플레이 클릭] 퍼즈를 풀고 다시 런타임 재개
                 m_ActiveScene->SetSceneState(CCEngine::SceneState::Play);
-
-                // UI 갱신
                 m_BtnPlay->SetActive(true);
                 m_BtnPause->SetActive(false);
             }
@@ -259,38 +249,139 @@ namespace CCEngine {
 
         m_BtnPause->SetOnClick([this]() {
             CCEngine::SceneState state = m_ActiveScene->GetState();
-
             if (state == CCEngine::SceneState::Play) {
-                // 1. [플레이 중 -> 일시정지]
                 m_ActiveScene->SetSceneState(CCEngine::SceneState::Pause);
                 m_BtnPause->SetActive(true);
             }
             else if (state == CCEngine::SceneState::Pause) {
-                // 2. [일시정지 중 -> 한 번 더 클릭] 퍼즈 해제 후 런타임 재개
                 m_ActiveScene->SetSceneState(CCEngine::SceneState::Play);
-                m_BtnPause->SetActive(false); // 퍼즈 불 끄기 (Play 불은 켜진 상태 유지)
+                m_BtnPause->SetActive(false);
             }
             });
 
         m_BtnStop->SetOnClick([this]() {
             CCEngine::SceneState state = m_ActiveScene->GetState();
-
             if (state != CCEngine::SceneState::Edit) {
-                // 1. [강제 종료] 현재 상태와 무관하게 런타임을 종료하고 에디터로 복귀
                 m_ActiveScene->OnRuntimeStop();
                 delete m_ActiveScene;
                 m_ActiveScene = m_EditorScene;
                 m_EditorScene = nullptr;
                 m_ActiveScene->SetSceneState(CCEngine::SceneState::Edit);
                 m_HierarchyPanel->SetContext(m_ActiveScene);
-
-                // UI 갱신 (모두 끔)
                 m_BtnPlay->SetActive(false);
                 m_BtnPause->SetActive(false);
             }
             });
 
         CCEngine::Application::Get()->GetWindow().SetRootUI(m_RootUI);
+
+        auto addDragFloat3 = [](UI::InspectorItem* item, std::string name, std::string label, std::function<DirectX::XMFLOAT3()> getter, std::function<void(DirectX::XMFLOAT3)> setter)
+            {
+                auto drag = new UI::DragFloat3(name, label, getter, setter);
+                drag->SetAnchorMin(0.0f, 0.0f); drag->SetAnchorMax(1.0f, 0.0f);
+                drag->SetOffsetMin(15.0f, 0.0f);   // 15px 들여쓰기
+                drag->SetOffsetMax(-10.0f, 24.0f); // 높이는 24px 고정
+                item->AddChild(drag);
+            };
+
+        // ==========================================================
+        // 1. Transform 컴포넌트 (가장 기본이므로 가장 먼저 등록!)
+        // ==========================================================
+        UI::InspectorRegistry::RegisterComponent<TransformComponent>(
+            [addDragFloat3](UI::Widget* parent, CCEngine::Entity entity, TransformComponent& transform)
+            {
+                auto item = new UI::InspectorItem("TransformItem", "Transform");
+                item->SetAnchorMin(0.0f, 0.0f); item->SetAnchorMax(1.0f, 0.0f);
+                parent->AddChild(item);
+
+                // 1. Position 한 줄 추가 (X,Y,Z 포함)
+                addDragFloat3(item, "Position", "Position",
+                    [entity]() mutable -> DirectX::XMFLOAT3 {
+                        return entity.GetComponent<TransformComponent>().Translation;
+                    },
+                    [entity](DirectX::XMFLOAT3 v) mutable {
+                        entity.GetComponent<TransformComponent>().Translation = v;
+                    });
+
+                // 2. Rotation 한 줄 추가 (라디안 <-> 디그리 자동 변환 포함)
+                addDragFloat3(item, "Rotation", "Rotation",
+                    [entity]() mutable -> DirectX::XMFLOAT3 {
+                        auto& rot = entity.GetComponent<TransformComponent>().Rotation;
+                        // 라디안을 각도로 변환 후 0~360도로 정규화
+                        auto normalize = [](float deg) {
+                            float res = fmod(DirectX::XMConvertToDegrees(deg), 360.0f);
+                            return res < 0 ? res + 360.0f : res;
+                            };
+                        return { normalize(rot.x), normalize(rot.y), normalize(rot.z) };
+                    },
+                    [entity](DirectX::XMFLOAT3 v) mutable {
+                        auto& tc = entity.GetComponent<TransformComponent>();
+                        // 입력받은 각도를 라디안으로 변환하여 저장
+                        tc.Rotation = {
+                            DirectX::XMConvertToRadians(v.x),
+                            DirectX::XMConvertToRadians(v.y),
+                            DirectX::XMConvertToRadians(v.z)
+                        };
+                        // ★ 변환된 오일러 각도를 쿼터니언으로 구워야 렌더링에 반영됨!
+                        DirectX::XMVECTOR quat = DirectX::XMQuaternionRotationRollPitchYaw(tc.Rotation.x, tc.Rotation.y, tc.Rotation.z);
+                        DirectX::XMStoreFloat4(&tc.QuaternionRotation, quat);
+                    });
+
+                // 3. Scale 한 줄 추가
+                addDragFloat3(item, "Scale", "Scale",
+                    [entity]() mutable -> DirectX::XMFLOAT3 {
+                        return entity.GetComponent<TransformComponent>().Scale;
+                    },
+                    [entity](DirectX::XMFLOAT3 v) mutable {
+                        entity.GetComponent<TransformComponent>().Scale = v;
+                    });
+            });
+
+        // ==========================================================
+        // 2. Mesh 컴포넌트
+        // ==========================================================
+        auto addDragFloat4 = [](UI::InspectorItem* item, std::string name, std::string label, std::function<DirectX::XMFLOAT4()> getter, std::function<void(DirectX::XMFLOAT4)> setter)
+            {
+                auto drag = new UI::DragFloat4(name, label, getter, setter);
+                drag->SetAnchorMin(0.0f, 0.0f); drag->SetAnchorMax(1.0f, 0.0f);
+                drag->SetOffsetMin(15.0f, 0.0f);   // 15px 들여쓰기
+                drag->SetOffsetMax(-10.0f, 24.0f); // 높이 고정
+                item->AddChild(drag);
+            };
+
+
+        UI::InspectorRegistry::RegisterComponent<MeshComponent>(
+            [addDragFloat4](UI::Widget* parent, CCEngine::Entity entity, MeshComponent& mesh)
+            {
+                auto item = new UI::InspectorItem("MeshItem", "Mesh Renderer");
+                item->SetAnchorMin(0.0f, 0.0f); item->SetAnchorMax(1.0f, 0.0f);
+                parent->AddChild(item);
+
+                // 1. Albedo Color 한 줄 추가 (R,G,B,A 가로 4칸)
+                addDragFloat4(item, "AlbedoColor", "Albedo Color",
+                    [entity]() mutable -> DirectX::XMFLOAT4 {
+                        return entity.GetComponent<MeshComponent>().BaseColor;
+                    },
+                    [entity](DirectX::XMFLOAT4 v) mutable {
+                        entity.GetComponent<MeshComponent>().BaseColor = v;
+                    });
+
+                // 2. 텍스처 로드 버튼 (기존 코드 유지)
+                auto btnTexture = new UI::Button("BtnChangeTexture", "Load Diffuse Texture...");
+                btnTexture->SetAnchorMin(0.0f, 0.0f); btnTexture->SetAnchorMax(1.0f, 0.0f);
+                btnTexture->SetOffsetMin(15.0f, 0.0f); btnTexture->SetOffsetMax(-10.0f, 28.0f);
+                btnTexture->SetOnClick([entity]() mutable
+                    {
+                        std::string filepath = PlatformUtils::OpenFile("PNG Image (*.png)\0*.png\0JPG Image (*.jpg)\0*.jpg\0");
+                        if (!filepath.empty())
+                        {
+                            std::shared_ptr<Texture2D> newTex = std::shared_ptr<Texture2D>(Texture2D::Create(filepath));
+                            entity.GetComponent<MeshComponent>().AlbedoMap = newTex;
+                            std::cout << "Texture Applied to Mesh: " << filepath << std::endl;
+                        }
+                    });
+                item->AddChild(btnTexture);
+            });
     }
 
     void EditorLayer::OnDetach()
