@@ -1,5 +1,6 @@
 #include "Application.h"
 #include "Core/Memory.h"
+#include "Events/ApplicationEvent.h"
 #include "Renderer/RendererAPI.h"
 #include "Renderer/Renderer.h"
 #include "Renderer/UIRenderer.h"
@@ -189,18 +190,37 @@ namespace CCEngine
         std::cout << "CCEngine Shutting Down..." << std::endl;
     }
 
-    void Application::OnWindowResize(WindowResizeEvent& e)
+
+    void Application::OnEvent(Event& e)
     {
-        // 최소화 버튼을 누르면 창 크기가 0이 되므로 렌더링 중지
-        if (e.GetWidth() == 0 || e.GetHeight() == 0)
+        // 1. 엔진 코어 수준의 이벤트(창 조절, 닫기)는 여기서 최우선으로 가로채서 처리
+        if (e.GetEventType() == EventType::WindowResize)
         {
-            m_Minimized = true;
-            return;
+            WindowResizeEvent& resizeEvent = static_cast<WindowResizeEvent&>(e);
+
+            if (resizeEvent.GetWidth() == 0 || resizeEvent.GetHeight() == 0) {
+                m_Minimized = true;
+            }
+            else {
+                m_Minimized = false;
+                Renderer::OnWindowResize(resizeEvent.GetWidth(), resizeEvent.GetHeight());
+            }
+            // 리사이즈는 UI나 카메라 등 다른 곳도 알아야 하므로 e.Handled = true 로 막지 않음
+        }
+        else if (e.GetEventType() == EventType::WindowClose)
+        {
+            // 창 닫기 이벤트가 오면 즉시 게임 루프 종료 플래그 설정
+            m_Window->SetShouldClose(true);
+            e.Handled = true; // 처리 완료!
         }
 
-        m_Minimized = false;
+        // 2. 코어 이벤트를 뺀 나머지(마우스, 키보드 등)는 레이어 스택(Top-Down)으로 전달!
+        for (auto it = m_LayerStack.rbegin(); it != m_LayerStack.rend(); ++it)
+        {
+            if (e.Handled)
+                break; // 위쪽 레이어(ex: EditorLayer, UI)가 이벤트를 먹었다면 아래로 안 내림
 
-        // RHI 사령탑(Renderer)에게 리사이즈 명령 하달!
-        Renderer::OnWindowResize(e.GetWidth(), e.GetHeight());
+            (*it)->OnEvent(e);
+        }
     }
 }

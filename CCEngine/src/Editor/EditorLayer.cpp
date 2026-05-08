@@ -16,11 +16,8 @@
 #include "UI/HierarchyItem.h"
 #include "UI/InspectorPanel.h"
 #include "UI/InspectorRegistry.h"
-#include "UI/DragFloat.h"
-#include "UI/DragFloat4.h"
-#include "UI/DragFloat3.h"
 #include "UI/InspectorItem.h"
-#include "Scene/Components.h"
+#include "UI/InspectorUtils.h"
 #include <windows.h>
 #include <filesystem>
 #include <iostream>
@@ -94,294 +91,11 @@ namespace CCEngine {
 
         Entity mayoModel = ModelImporter::ImportModel(m_ActiveScene, "assets/Chocolate rice/0.MAYO/FBX/FBX_MAYO.fbx");
 
-        // =========================================================
-        // [완전 자체 UI 구조 조립]
-        // =========================================================
-        m_RootUI = new UI::Panel("Root", { 0.05f, 0.05f, 0.05f, 1.0f });
-        m_RootUI->SetAnchorMin(0.0f, 0.0f);
-        m_RootUI->SetAnchorMax(1.0f, 1.0f);
-        m_RootUI->SetOffsetMin(0.0f, 0.0f);
-        m_RootUI->SetOffsetMax(0.0f, 0.0f);
+		// --- 에디터 기본 UI 세팅 ---
+        BuildEditorUI();
 
-        m_TitleBarPanel = new UI::Panel("TitleBarUI", { 0.15f, 0.15f, 0.17f, 1.0f });
-        m_TitleBarPanel->SetAnchorMin(0.0f, 0.0f); m_TitleBarPanel->SetAnchorMax(1.0f, 0.0f);
-        m_TitleBarPanel->SetOffsetMin(0.0f, 0.0f); m_TitleBarPanel->SetOffsetMax(0.0f, 24.0f);
-        m_RootUI->AddChild(m_TitleBarPanel);
-
-        m_BtnCloseMain = new UI::Button("BtnCloseMain", "X");
-        m_BtnCloseMain->SetAnchorMin(1.0f, 0.0f); m_BtnCloseMain->SetAnchorMax(1.0f, 0.0f);
-        m_BtnCloseMain->SetOffsetMin(-30.0f, 0.0f); m_BtnCloseMain->SetOffsetMax(0.0f, 24.0f);
-        m_BtnCloseMain->SetOnClick([]() { CCEngine::Application::Get()->GetWindow().SetShouldClose(true); });
-        m_TitleBarPanel->AddChild(m_BtnCloseMain);
-
-        m_MenuBarPanel = new UI::Panel("MenuBarUI", { 0.12f, 0.12f, 0.12f, 1.0f });
-        m_MenuBarPanel->SetAnchorMin(0.0f, 0.0f); m_MenuBarPanel->SetAnchorMax(1.0f, 0.0f);
-        m_MenuBarPanel->SetOffsetMin(0.0f, 24.0f); m_MenuBarPanel->SetOffsetMax(0.0f, 48.0f);
-        m_RootUI->AddChild(m_MenuBarPanel);
-
-        m_BtnFileMenu = new UI::Button("BtnFileMenu", "File");
-        m_BtnFileMenu->SetAnchorMin(0.0f, 0.0f); m_BtnFileMenu->SetAnchorMax(0.0f, 1.0f);
-        m_BtnFileMenu->SetOffsetMin(0.0f, 0.0f); m_BtnFileMenu->SetOffsetMax(60.0f, 0.0f);
-        m_MenuBarPanel->AddChild(m_BtnFileMenu);
-
-        m_HierarchyPanel = new UI::HierarchyPanel("Hierarchy");
-        m_HierarchyPanel->SetAnchorMin(0.0f, 0.0f);
-        m_HierarchyPanel->SetAnchorMax(0.2f, 1.0f);
-        m_HierarchyPanel->SetOffsetMin(0.0f, 48.0f); // 상단 툴바 여백
-        m_HierarchyPanel->SetOffsetMax(0.0f, 0.0f);
-        m_RootUI->AddChild(m_HierarchyPanel);
-
-        m_HierarchyPanel->SetContext(m_ActiveScene);
-        m_HierarchyPanel->Refresh();
-
-        // ★ WindowPanel에서 방금 만든 InspectorPanel 객체로 교체!
-        m_InspectorPanel = new UI::InspectorPanel("InspectorUI", "Inspector");
-        m_InspectorPanel->SetAnchorMin(0.8f, 0.0f);
-        m_InspectorPanel->SetAnchorMax(1.0f, 1.0f);
-        m_InspectorPanel->SetOffsetMin(0.0f, 48.0f);
-        m_InspectorPanel->SetOffsetMax(0.0f, 0.0f);
-        m_RootUI->AddChild(m_InspectorPanel);
-
-        m_ToolbarPanel = new UI::Panel("ToolbarUI", { 0.15f, 0.15f, 0.15f, 1.0f });
-        m_ToolbarPanel->SetAnchorMin(0.0f, 0.0f); m_ToolbarPanel->SetAnchorMax(1.0f, 0.0f);
-        m_ToolbarPanel->SetOffsetMin(250.0f, 48.0f); m_ToolbarPanel->SetOffsetMax(-300.0f, 88.0f);
-        m_RootUI->AddChild(m_ToolbarPanel);
-
-        m_BtnPlay = new UI::Button("BtnPlay", "Play");
-        m_BtnPlay->SetAnchorMin(0.5f, 0.5f); m_BtnPlay->SetAnchorMax(0.5f, 0.5f);
-        m_BtnPlay->SetOffsetMin(-100.0f, -12.0f); m_BtnPlay->SetOffsetMax(-40.0f, 12.0f);
-        m_ToolbarPanel->AddChild(m_BtnPlay);
-
-        m_BtnPause = new UI::Button("BtnPause", "Pause");
-        m_BtnPause->SetAnchorMin(0.5f, 0.5f); m_BtnPause->SetAnchorMax(0.5f, 0.5f);
-        m_BtnPause->SetOffsetMin(-30.0f, -12.0f); m_BtnPause->SetOffsetMax(30.0f, 12.0f);
-        m_ToolbarPanel->AddChild(m_BtnPause);
-
-        m_BtnStop = new UI::Button("BtnStop", "Stop");
-        m_BtnStop->SetAnchorMin(0.5f, 0.5f); m_BtnStop->SetAnchorMax(0.5f, 0.5f);
-        m_BtnStop->SetOffsetMin(40.0f, -12.0f); m_BtnStop->SetOffsetMax(100.0f, 12.0f);
-        m_ToolbarPanel->AddChild(m_BtnStop);
-
-        m_ViewportWindow = new UI::WindowPanel("ViewportWindowUI", "Scene View");
-        m_ViewportWindow->SetAnchorMin(0.2f, 0.0f);
-        m_ViewportWindow->SetAnchorMax(0.8f, 0.7f); // 아래 게임화면 공간 비워둠
-        m_ViewportWindow->SetOffsetMin(0.0f, 48.0f);
-        m_ViewportWindow->SetOffsetMax(0.0f, 0.0f);
-        m_RootUI->AddChild(m_ViewportWindow);
-
-        void* editorTex = m_Framebuffer->GetColorAttachmentRendererID(0);
-        m_ViewportWidget = new UI::ImageWidget("ViewportWidget", editorTex);
-        m_ViewportWidget->SetAnchorMin(0.0f, 0.0f); m_ViewportWidget->SetAnchorMax(1.0f, 1.0f);
-        m_ViewportWidget->SetOffsetMin(0.0f, 24.0f); m_ViewportWidget->SetOffsetMax(0.0f, 0.0f);
-        m_ViewportWindow->AddChild(m_ViewportWidget);
-
-        m_GameWindow = new UI::WindowPanel("GameWindowUI", "Game View");
-        m_GameWindow->SetAnchorMin(0.2f, 0.6f); m_GameWindow->SetAnchorMax(0.8f, 1.0f);
-        m_GameWindow->SetOffsetMin(0.0f, 0.0f); m_GameWindow->SetOffsetMax(0.0f, 0.0f);
-        m_RootUI->AddChild(m_GameWindow);
-
-        void* gameTex = m_GameFramebuffer->GetColorAttachmentRendererID(0);
-        m_GameViewWidget = new UI::ImageWidget("GameViewWidget", gameTex);
-        m_GameViewWidget->SetAnchorMin(0.0f, 0.0f); m_GameViewWidget->SetAnchorMax(1.0f, 1.0f);
-        m_GameViewWidget->SetOffsetMin(0.0f, 24.0f); m_GameViewWidget->SetOffsetMax(0.0f, 0.0f);
-        m_GameWindow->AddChild(m_GameViewWidget);
-
-        m_FileDropdownPanel = new UI::Panel("FileDropdownUI", { 0.18f, 0.18f, 0.18f, 1.0f });
-        m_FileDropdownPanel->SetVisible(false);
-        m_FileDropdownPanel->SetAnchorMin(0.0f, 0.0f); m_FileDropdownPanel->SetAnchorMax(0.0f, 0.0f);
-        m_FileDropdownPanel->SetOffsetMin(0.0f, 48.0f); m_FileDropdownPanel->SetOffsetMax(120.0f, 48.0f + 100.0f);
-        m_RootUI->AddChild(m_FileDropdownPanel);
-
-        m_BtnOpen = new UI::Button("BtnOpen", "Open Scene");
-        m_BtnOpen->SetAnchorMin(0.0f, 0.0f); m_BtnOpen->SetAnchorMax(1.0f, 0.0f);
-        m_BtnOpen->SetOffsetMin(0.0f, 0.0f); m_BtnOpen->SetOffsetMax(0.0f, 25.0f);
-        m_FileDropdownPanel->AddChild(m_BtnOpen);
-
-        m_BtnSave = new UI::Button("BtnSave", "Save");
-        m_BtnSave->SetAnchorMin(0.0f, 0.0f); m_BtnSave->SetAnchorMax(1.0f, 0.0f);
-        m_BtnSave->SetOffsetMin(0.0f, 25.0f); m_BtnSave->SetOffsetMax(0.0f, 50.0f);
-        m_FileDropdownPanel->AddChild(m_BtnSave);
-
-        m_BtnSaveAs = new UI::Button("BtnSaveAs", "Save As...");
-        m_BtnSaveAs->SetAnchorMin(0.0f, 0.0f); m_BtnSaveAs->SetAnchorMax(1.0f, 0.0f);
-        m_BtnSaveAs->SetOffsetMin(0.0f, 50.0f); m_BtnSaveAs->SetOffsetMax(0.0f, 75.0f);
-        m_FileDropdownPanel->AddChild(m_BtnSaveAs);
-
-        m_BtnExit = new UI::Button("BtnExit", "Exit");
-        m_BtnExit->SetAnchorMin(0.0f, 0.0f); m_BtnExit->SetAnchorMax(1.0f, 0.0f);
-        m_BtnExit->SetOffsetMin(0.0f, 75.0f); m_BtnExit->SetOffsetMax(0.0f, 100.0f);
-        m_FileDropdownPanel->AddChild(m_BtnExit);
-
-        // --- 버튼 & 툴바 콜백 등록 (이전 코드 유지) ---
-        m_BtnFileMenu->SetOnClick([this]() { m_FileDropdownPanel->SetVisible(!m_FileDropdownPanel->IsVisible()); });
-        m_BtnOpen->SetOnClick([this]() { m_FileDropdownPanel->SetVisible(false); OpenScene(); });
-        m_BtnSave->SetOnClick([this]() { m_FileDropdownPanel->SetVisible(false); SaveScene(); });
-        m_BtnSaveAs->SetOnClick([this]() { m_FileDropdownPanel->SetVisible(false); SaveSceneAs(); });
-        m_BtnExit->SetOnClick([this]() { CCEngine::Application::Get()->GetWindow().SetShouldClose(true); });
-
-        m_BtnPlay->SetOnClick([this]() {
-            CCEngine::SceneState state = m_ActiveScene->GetState();
-            if (state == CCEngine::SceneState::Edit) {
-                m_EditorScene = m_ActiveScene;
-                m_ActiveScene = CCEngine::Scene::Copy(m_EditorScene);
-                m_ActiveScene->OnRuntimeStart();
-                m_ActiveScene->SetSceneState(CCEngine::SceneState::Play);
-                m_HierarchyPanel->SetContext(m_ActiveScene);
-                m_BtnPlay->SetActive(true);
-                m_BtnPause->SetActive(false);
-            }
-            else if (state == CCEngine::SceneState::Play) {
-                m_ActiveScene->OnRuntimeStop();
-                delete m_ActiveScene;
-                m_ActiveScene = m_EditorScene;
-                m_EditorScene = nullptr;
-                m_ActiveScene->SetSceneState(CCEngine::SceneState::Edit);
-                m_HierarchyPanel->SetContext(m_ActiveScene);
-                m_BtnPlay->SetActive(false);
-                m_BtnPause->SetActive(false);
-            }
-            else if (state == CCEngine::SceneState::Pause) {
-                m_ActiveScene->SetSceneState(CCEngine::SceneState::Play);
-                m_BtnPlay->SetActive(true);
-                m_BtnPause->SetActive(false);
-            }
-            });
-
-        m_BtnPause->SetOnClick([this]() {
-            CCEngine::SceneState state = m_ActiveScene->GetState();
-            if (state == CCEngine::SceneState::Play) {
-                m_ActiveScene->SetSceneState(CCEngine::SceneState::Pause);
-                m_BtnPause->SetActive(true);
-            }
-            else if (state == CCEngine::SceneState::Pause) {
-                m_ActiveScene->SetSceneState(CCEngine::SceneState::Play);
-                m_BtnPause->SetActive(false);
-            }
-            });
-
-        m_BtnStop->SetOnClick([this]() {
-            CCEngine::SceneState state = m_ActiveScene->GetState();
-            if (state != CCEngine::SceneState::Edit) {
-                m_ActiveScene->OnRuntimeStop();
-                delete m_ActiveScene;
-                m_ActiveScene = m_EditorScene;
-                m_EditorScene = nullptr;
-                m_ActiveScene->SetSceneState(CCEngine::SceneState::Edit);
-                m_HierarchyPanel->SetContext(m_ActiveScene);
-                m_BtnPlay->SetActive(false);
-                m_BtnPause->SetActive(false);
-            }
-            });
-
-        CCEngine::Application::Get()->GetWindow().SetRootUI(m_RootUI);
-
-        auto addDragFloat3 = [](UI::InspectorItem* item, std::string name, std::string label, std::function<DirectX::XMFLOAT3()> getter, std::function<void(DirectX::XMFLOAT3)> setter)
-            {
-                auto drag = new UI::DragFloat3(name, label, getter, setter);
-                drag->SetAnchorMin(0.0f, 0.0f); drag->SetAnchorMax(1.0f, 0.0f);
-                drag->SetOffsetMin(15.0f, 0.0f);   // 15px 들여쓰기
-                drag->SetOffsetMax(-10.0f, 24.0f); // 높이는 24px 고정
-                item->AddChild(drag);
-            };
-
-        // ==========================================================
-        // 1. Transform 컴포넌트 (가장 기본이므로 가장 먼저 등록!)
-        // ==========================================================
-        UI::InspectorRegistry::RegisterComponent<TransformComponent>(
-            [addDragFloat3](UI::Widget* parent, CCEngine::Entity entity, TransformComponent& transform)
-            {
-                auto item = new UI::InspectorItem("TransformItem", "Transform");
-                item->SetAnchorMin(0.0f, 0.0f); item->SetAnchorMax(1.0f, 0.0f);
-                parent->AddChild(item);
-
-                // 1. Position 한 줄 추가 (X,Y,Z 포함)
-                addDragFloat3(item, "Position", "Position",
-                    [entity]() mutable -> DirectX::XMFLOAT3 {
-                        return entity.GetComponent<TransformComponent>().Translation;
-                    },
-                    [entity](DirectX::XMFLOAT3 v) mutable {
-                        entity.GetComponent<TransformComponent>().Translation = v;
-                    });
-
-                // 2. Rotation 한 줄 추가 (라디안 <-> 디그리 자동 변환 포함)
-                addDragFloat3(item, "Rotation", "Rotation",
-                    [entity]() mutable -> DirectX::XMFLOAT3 {
-                        auto& rot = entity.GetComponent<TransformComponent>().Rotation;
-                        // 라디안을 각도로 변환 후 0~360도로 정규화
-                        auto normalize = [](float deg) {
-                            float res = fmod(DirectX::XMConvertToDegrees(deg), 360.0f);
-                            return res < 0 ? res + 360.0f : res;
-                            };
-                        return { normalize(rot.x), normalize(rot.y), normalize(rot.z) };
-                    },
-                    [entity](DirectX::XMFLOAT3 v) mutable {
-                        auto& tc = entity.GetComponent<TransformComponent>();
-                        // 입력받은 각도를 라디안으로 변환하여 저장
-                        tc.Rotation = {
-                            DirectX::XMConvertToRadians(v.x),
-                            DirectX::XMConvertToRadians(v.y),
-                            DirectX::XMConvertToRadians(v.z)
-                        };
-                        // ★ 변환된 오일러 각도를 쿼터니언으로 구워야 렌더링에 반영됨!
-                        DirectX::XMVECTOR quat = DirectX::XMQuaternionRotationRollPitchYaw(tc.Rotation.x, tc.Rotation.y, tc.Rotation.z);
-                        DirectX::XMStoreFloat4(&tc.QuaternionRotation, quat);
-                    });
-
-                // 3. Scale 한 줄 추가
-                addDragFloat3(item, "Scale", "Scale",
-                    [entity]() mutable -> DirectX::XMFLOAT3 {
-                        return entity.GetComponent<TransformComponent>().Scale;
-                    },
-                    [entity](DirectX::XMFLOAT3 v) mutable {
-                        entity.GetComponent<TransformComponent>().Scale = v;
-                    });
-            });
-
-        // ==========================================================
-        // 2. Mesh 컴포넌트
-        // ==========================================================
-        auto addDragFloat4 = [](UI::InspectorItem* item, std::string name, std::string label, std::function<DirectX::XMFLOAT4()> getter, std::function<void(DirectX::XMFLOAT4)> setter)
-            {
-                auto drag = new UI::DragFloat4(name, label, getter, setter);
-                drag->SetAnchorMin(0.0f, 0.0f); drag->SetAnchorMax(1.0f, 0.0f);
-                drag->SetOffsetMin(15.0f, 0.0f);   // 15px 들여쓰기
-                drag->SetOffsetMax(-10.0f, 24.0f); // 높이 고정
-                item->AddChild(drag);
-            };
-
-
-        UI::InspectorRegistry::RegisterComponent<MeshComponent>(
-            [addDragFloat4](UI::Widget* parent, CCEngine::Entity entity, MeshComponent& mesh)
-            {
-                auto item = new UI::InspectorItem("MeshItem", "Mesh Renderer");
-                item->SetAnchorMin(0.0f, 0.0f); item->SetAnchorMax(1.0f, 0.0f);
-                parent->AddChild(item);
-
-                // 1. Albedo Color 한 줄 추가 (R,G,B,A 가로 4칸)
-                addDragFloat4(item, "AlbedoColor", "Albedo Color",
-                    [entity]() mutable -> DirectX::XMFLOAT4 {
-                        return entity.GetComponent<MeshComponent>().BaseColor;
-                    },
-                    [entity](DirectX::XMFLOAT4 v) mutable {
-                        entity.GetComponent<MeshComponent>().BaseColor = v;
-                    });
-
-                // 2. 텍스처 로드 버튼 (기존 코드 유지)
-                auto btnTexture = new UI::Button("BtnChangeTexture", "Load Diffuse Texture...");
-                btnTexture->SetAnchorMin(0.0f, 0.0f); btnTexture->SetAnchorMax(1.0f, 0.0f);
-                btnTexture->SetOffsetMin(15.0f, 0.0f); btnTexture->SetOffsetMax(-10.0f, 28.0f);
-                btnTexture->SetOnClick([entity]() mutable
-                    {
-                        std::string filepath = PlatformUtils::OpenFile("PNG Image (*.png)\0*.png\0JPG Image (*.jpg)\0*.jpg\0");
-                        if (!filepath.empty())
-                        {
-                            std::shared_ptr<Texture2D> newTex = std::shared_ptr<Texture2D>(Texture2D::Create(filepath));
-                            entity.GetComponent<MeshComponent>().AlbedoMap = newTex;
-                            std::cout << "Texture Applied to Mesh: " << filepath << std::endl;
-                        }
-                    });
-                item->AddChild(btnTexture);
-            });
+		// --- 인스펙터 패널에 기본 컴포넌트 등록 ---
+        UI::InspectorUtils::InitStandardComponents();
     }
 
     void EditorLayer::OnDetach()
@@ -397,40 +111,6 @@ namespace CCEngine {
     void EditorLayer::OnUpdate(float deltaTime)
     {
         auto& mainWindow = CCEngine::Application::Get()->GetWindow();
-
-        // 1. RHI나 Win32를 몰라도 창 기준 마우스 좌표를 완벽히 가져옴
-        auto [mouseX, mouseY] = mainWindow.GetMousePosition();
-
-        // 2. 마우스 이동(Hover) 라우팅
-        static float s_LastMouseX = 0.0f;
-        static float s_LastMouseY = 0.0f;
-        if (mouseX != s_LastMouseX || mouseY != s_LastMouseY)
-        {
-            MouseMovedEvent moveEvent(mouseX, mouseY);
-            OnEvent(moveEvent);
-
-            s_LastMouseX = mouseX;
-            s_LastMouseY = mouseY;
-        }
-
-        // 3. 마우스 클릭(Press) 라우팅 (0번: 좌클릭)
-        static bool s_WasLeftMouseDown = false;
-        bool isLeftMouseDown = mainWindow.IsMouseButtonPressed(0);
-
-        //if (isLeftMouseDown && !s_WasLeftMouseDown)
-        //{
-        //    // 눌렀을 때 (Tear-off 시작점 잡기)
-        //    MouseButtonPressedEvent pressEvent(0, mouseX, mouseY);
-        //    OnEvent(pressEvent);
-        //}
-        //else if (!isLeftMouseDown && s_WasLeftMouseDown)
-        //{
-        //    // 놓았을 때 (Redock! 뜯어낸 창을 다시 꽂아넣기)
-        //    MouseButtonReleasedEvent releaseEvent(0, mouseX, mouseY);
-        //    OnEvent(releaseEvent);
-        //}
-
-        s_WasLeftMouseDown = isLeftMouseDown;
 
         //// 1. 하이어라키 갱신 요청 처리
         //if (m_NeedsHierarchyRefresh)
@@ -503,6 +183,12 @@ namespace CCEngine {
         Renderer2D::BeginScene(m_Camera);
         Renderer2D::EndScene();
         m_ActiveScene->OnRender3D(m_Camera);
+
+		// 자체 기즈모 시스템 구현
+        auto selectedEntity = m_HierarchyPanel->GetSelectedEntity();
+        m_GizmoSystem.OnRender(selectedEntity, m_Camera.GetViewMatrix(), m_Camera.GetProjectionMatrix());
+        //
+
         m_Framebuffer->Unbind();
 
         // 5. 게임 프레임버퍼 렌더링
@@ -536,170 +222,12 @@ namespace CCEngine {
         }
         m_GameFramebuffer->Unbind();
 
-  //      auto& mainWindow = CCEngine::Application::Get()->GetWindow();
-  //      auto [mouseX, mouseY] = mainWindow.GetMousePosition();
-
-  //      // ==========================================================
-  //      // 1. 뷰포트(Scene View) 호버/포커스 상태 판별
-  //      // ==========================================================
-  //      bool isViewportHovered = false;
-  //      if (m_ViewportWidget && m_ViewportWindow && m_ViewportWindow->IsVisible())
-  //      {
-  //          // 뷰포트 '내부 이미지 영역(ImageWidget)'의 좌표와 크기를 기준으로 검사
-  //          auto pos = m_ViewportWidget->GetCalculatedPosition();
-  //          auto size = m_ViewportWidget->GetCalculatedSize();
-
-  //          if (mouseX >= pos.x && mouseX <= pos.x + size.x &&
-  //              mouseY >= pos.y && mouseY <= pos.y + size.y)
-  //          {
-  //              isViewportHovered = true;
-  //          }
-  //      }
-
-  //      // ==========================================================
-  //      // 2. 마우스 입력 및 카메라 조작 처리 (포커스가 있을 때만!)
-  //      // ==========================================================
-  //      // 마우스 이동 이벤트 라우팅
-  //      static float s_LastMouseX = 0.0f;
-  //      static float s_LastMouseY = 0.0f;
-  //      if (mouseX != s_LastMouseX || mouseY != s_LastMouseY)
-  //      {
-  //          MouseMovedEvent moveEvent(mouseX, mouseY);
-  //          OnEvent(moveEvent);
-  //          s_LastMouseX = mouseX;
-  //          s_LastMouseY = mouseY;
-  //      }
-
-  //      // 마우스 클릭 이벤트 라우팅
-  //      static bool s_WasLeftMouseDown = false;
-  //      bool isLeftMouseDown = mainWindow.IsMouseButtonPressed(0);
-  //      if (isLeftMouseDown && !s_WasLeftMouseDown)
-  //      {
-  //          MouseButtonPressedEvent pressEvent(0, mouseX, mouseY);
-  //          OnEvent(pressEvent);
-  //      }
-  //      s_WasLeftMouseDown = isLeftMouseDown;
-
-  //      // ★ 뷰포트 위에 마우스가 있을 때만 에디터 카메라 업데이트!
-  //      // (이렇게 해야 UI 패널을 클릭할 때 씬 카메라가 휙휙 돌아가지 않습니다)
-  //      if (isViewportHovered)
-  //      {
-  //          m_Camera.OnUpdate(deltaTime);
-  //      }
-
-  //      HandleShortcuts();
-
-  //      // ==========================================================
-  //      // 3. 뷰포트 리사이즈 처리 (화면 찌그러짐 방지)
-  //      // ==========================================================
-  //      if (m_ViewportWidget)
-  //      {
-  //          auto vpSize = m_ViewportWidget->GetCalculatedSize();
-  //          // 크기가 0보다 크고, 프레임버퍼 크기와 다를 때만 리사이즈 수행
-  //          if (vpSize.x > 0.0f && vpSize.y > 0.0f &&
-  //              (m_Framebuffer->GetSpecification().Width != (uint32_t)vpSize.x ||
-  //                  m_Framebuffer->GetSpecification().Height != (uint32_t)vpSize.y))
-  //          {
-  //              m_ViewportSize = { vpSize.x, vpSize.y };
-  //              m_Framebuffer->Resize((uint32_t)vpSize.x, (uint32_t)vpSize.y);
-
-  //              // ★ 카메라 투영 행렬 비율 업데이트 (가장 중요!)
-  //              m_Camera.SetProjectionMatrix(m_Camera.GetFOV(), vpSize.x / vpSize.y, 0.1f, 100.0f);
-  //          }
-  //      }
-
-  //      // Game View 리사이즈 처리도 동일하게 적용
-  //      if (m_GameViewWidget && m_GameWindow && m_GameWindow->IsVisible())
-  //      {
-  //          auto gvSize = m_GameViewWidget->GetCalculatedSize();
-  //          if (gvSize.x > 0.0f && gvSize.y > 0.0f &&
-  //              (m_GameFramebuffer->GetSpecification().Width != (uint32_t)gvSize.x ||
-  //                  m_GameFramebuffer->GetSpecification().Height != (uint32_t)gvSize.y))
-  //          {
-  //              m_GameViewportSize = { gvSize.x, gvSize.y };
-  //              m_GameFramebuffer->Resize((uint32_t)gvSize.x, (uint32_t)gvSize.y);
-  //              // 게임 카메라는 아래 렌더링 루프에서 aspect ratio를 갱신하므로 프레임버퍼만 조절해도 무방합니다.
-  //          }
-  //      }
-
-  //      // ==========================================================
-  //      // 4. UI 레이아웃 갱신 및 렌더링 준비
-  //      // ==========================================================
-  //      if (m_RootUI)
-  //      {
-  //          float winWidth = (float)mainWindow.GetWidth();
-  //          float winHeight = (float)mainWindow.GetHeight();
-  //          m_RootUI->UpdateLayout({ 0.0f, 0.0f }, { winWidth, winHeight });
-  //      }
-
-  //      if (m_ViewportWidget) m_ViewportWidget->SetTexture(m_Framebuffer->GetColorAttachmentRendererID(0));
-  //      if (m_GameViewWidget) m_GameViewWidget->SetTexture(m_GameFramebuffer->GetColorAttachmentRendererID(0));
-
-
-		//// ==========================================================
-		//// 5. 에디터 프레임버퍼 렌더링
-		//// ==========================================================
-  //      Renderer::SetClearColor(0.1f, 0.1f, 0.1f, 1.0f);
-  //      Renderer::Clear();
-
-  //      m_Framebuffer->Bind();
-  //      //Renderer::SetViewport(0, 0, (uint32_t)m_ViewportSize.x, (uint32_t)m_ViewportSize.y);
-
-  //      Renderer::SetClearColor(m_ClearColor[0], m_ClearColor[1], m_ClearColor[2], m_ClearColor[3]);
-  //      Renderer::Clear();
-  //      m_Framebuffer->ClearAttachment(1, -1);
-
-  //      m_ActiveScene->OnUpdate(deltaTime);
-
-  //      Renderer2D::BeginScene(m_Camera);
-  //      Renderer2D::EndScene();
-  //      m_ActiveScene->OnRender3D(m_Camera);
-  //      m_Framebuffer->Unbind();
-
-  //      m_GameFramebuffer->Bind();
-  //      Renderer::SetClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-  //      Renderer::Clear();
-
-  //      auto view = m_ActiveScene->GetRegistry().view<CameraComponent>();
-  //      for (auto entity : view)
-  //      {
-  //          auto& cameraComp = view.get<CameraComponent>(entity);
-  //          if (cameraComp.Primary)
-  //          {
-  //              CCEngine::Entity cameraEntity(entity, m_ActiveScene);
-  //              auto& transformComp = cameraEntity.GetComponent<TransformComponent>();
-
-  //              float aspect = 16.0f / 9.0f;
-  //              if (m_GameViewportSize.y > 0.001f) {
-  //                  aspect = m_GameViewportSize.x / m_GameViewportSize.y;
-  //              }
-
-  //              PerspectiveCamera gameCamera(cameraComp.FOV, aspect, cameraComp.NearClip, cameraComp.FarClip);
-  //              gameCamera.SetPosition(transformComp.Translation);
-  //              gameCamera.SetRotation(transformComp.QuaternionRotation);
-
-  //              Renderer2D::BeginScene(gameCamera);
-  //              Renderer2D::EndScene();
-  //              m_ActiveScene->OnRender3D(gameCamera);
-  //              break;
-  //          }
-  //      }
-  //      m_GameFramebuffer->Unbind();
-        
     }
 
-    // =========================================================================
-    // [새로운 이벤트 처리 라우팅] (EditorLayer.h에 선언 필요)
-    // =========================================================================
+
     void EditorLayer::OnEvent(Event& e)
     {
-        // 1. UI에게 이벤트를 최우선으로 던집니다 (역순회로 인해 맨 위 클릭 가로채기 가능)
-        if (m_RootUI)
-        {
-            m_RootUI->OnEvent(e);
-        }
-
-        // 2. 드롭다운 바깥 클릭 시 닫히는 Focus Out 로직 
+        // 1. 드롭다운 바깥 클릭 시 닫히는 Focus Out 로직 
         if (e.GetEventType() == EventType::MouseButtonPressed)
         {
             MouseButtonPressedEvent& mouseEvent = static_cast<MouseButtonPressedEvent&>(e);
@@ -713,9 +241,59 @@ namespace CCEngine {
                     m_FileDropdownPanel->SetVisible(false);
                 }
             }
+
         }
 
-        // 3. UI가 이벤트를 먹지 않았다면, 3D 카메라나 씬에 넘겨줌
+		// 2. 마우스 이벤트는 뷰포트 위젯이 우선적으로 처리 (뷰포트 안에서만 기즈모 조작 가능하도록)
+        if (!e.Handled && m_ViewportWidget)
+        {
+            float mouseX = 0.0f; float mouseY = 0.0f;
+            if (e.GetEventType() == EventType::MouseButtonPressed) { auto& me = static_cast<MouseButtonPressedEvent&>(e); mouseX = me.GetX(); mouseY = me.GetY(); }
+            else if (e.GetEventType() == EventType::MouseMoved) { auto& me = static_cast<MouseMovedEvent&>(e); mouseX = me.GetX(); mouseY = me.GetY(); }
+            else if (e.GetEventType() == EventType::MouseButtonReleased) { auto& me = static_cast<MouseButtonReleasedEvent&>(e); mouseX = me.GetX(); mouseY = me.GetY(); }
+
+            auto vpPos = m_ViewportWidget->GetCalculatedPosition();
+            auto vpSize = m_ViewportWidget->GetCalculatedSize();
+
+            // ★ 핵심: 마우스가 뷰포트 안에 있거나, "현재 기즈모를 잡고 끌고 있는 상태" 라면 무조건 이벤트 전달!
+            bool isInsideViewport = (mouseX >= vpPos.x && mouseX <= vpPos.x + vpSize.x && mouseY >= vpPos.y && mouseY <= vpPos.y + vpSize.y);
+
+            if (isInsideViewport || m_GizmoSystem.IsDragging())
+            {
+                auto selectedEntity = m_HierarchyPanel->GetSelectedEntity();
+                m_GizmoSystem.OnEvent(e, selectedEntity, m_Camera.GetViewMatrix(), m_Camera.GetProjectionMatrix(), vpSize.x, vpSize.y, vpPos.x, vpPos.y);
+            }
+        }
+
+        // 마우스 피킹 콜백
+        m_ViewportWidget->SetOnMouseDown([this](float mouseX, float mouseY) {
+            auto vpPos = m_ViewportWidget->GetCalculatedPosition();
+            float localX = mouseX - vpPos.x;
+            float localY = mouseY - vpPos.y;
+            int pixelData = m_Framebuffer->ReadPixel((uint32_t)localX, (uint32_t)localY);
+
+            if (pixelData >= 0 && m_ActiveScene->GetRegistry().valid((entt::entity)pixelData))
+            {
+                CCEngine::Entity clickedEntity{ (entt::entity)pixelData, m_ActiveScene };
+                m_HierarchyPanel->SetSelectedEntity(clickedEntity);
+                std::cout << "[Picking] Picked Entity ID: " << pixelData << std::endl;
+            }
+            else
+            {
+                // 아무것도 하지 않음 (선택 유지)
+                std::cout << "[Picking] Ignored Empty Space!" << std::endl;
+            }
+
+            });
+
+
+		// 3. UI 이벤트 처리 (뷰포트가 처리하지 않은 이벤트는 UI로 전달)
+        if (!e.Handled && m_RootUI)
+        {
+            m_RootUI->OnEvent(e);
+        }
+
+        // 4. UI가 이벤트를 먹지 않았다면, 3D 카메라나 씬에 넘겨줌
         if (!e.Handled)
         {
             // m_Camera.OnEvent(e); 
@@ -777,11 +355,14 @@ namespace CCEngine {
 
         if (!isRightMouseDown)
         {
-            // [임시 주석] ImGuizmo는 ImGui 기반이므로, 자체 기즈모 구현 전까지 비활성화
-            // if (GetAsyncKeyState('Q') & 0x8000) m_GizmoType = -1;
-            // if (GetAsyncKeyState('W') & 0x8000) m_GizmoType = ImGuizmo::TRANSLATE;
-            // if (GetAsyncKeyState('E') & 0x8000) m_GizmoType = ImGuizmo::ROTATE;
-            // if (GetAsyncKeyState('R') & 0x8000) m_GizmoType = ImGuizmo::SCALE;
+            if (GetAsyncKeyState('Q') & 0x8000) m_GizmoSystem.SetMode(GizmoMode::None);
+            if (GetAsyncKeyState('W') & 0x8000) m_GizmoSystem.SetMode(GizmoMode::Translate);
+            if (GetAsyncKeyState('E') & 0x8000) m_GizmoSystem.SetMode(GizmoMode::Rotate);
+            if (GetAsyncKeyState('R') & 0x8000) m_GizmoSystem.SetMode(GizmoMode::Scale);
+            if (GetAsyncKeyState(VK_ESCAPE) & 0x8000)
+            {
+                m_HierarchyPanel->SetSelectedEntity(CCEngine::Entity{});
+            }
         }
 
         bool isCtrlPressed = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
@@ -823,65 +404,184 @@ namespace CCEngine {
         //}
     }
 
-    void EditorLayer::DrawEntityNode(CCEngine::Entity entity, float depth) 
-    { 
-    //    std::string entityName = entity.GetComponent<CCEngine::TagComponent>().Tag;
+    void EditorLayer::BuildEditorUI()
+    {
+        m_RootUI = new UI::Panel("Root", { 0.05f, 0.05f, 0.05f, 1.0f });
+        m_RootUI->SetAnchorMin(0.0f, 0.0f);
+        m_RootUI->SetAnchorMax(1.0f, 1.0f);
+        m_RootUI->SetOffsetMin(0.0f, 0.0f);
+        m_RootUI->SetOffsetMax(0.0f, 0.0f);
 
-    //    // 자식이 있는지 검사
-    //    bool hasChildren = false;
-    //    auto relView = m_ActiveScene->GetRegistry().view<CCEngine::RelationshipComponent>();
-    //    for (auto childID : relView)
-    //    {
-    //        if (relView.get<CCEngine::RelationshipComponent>(childID).Parent == (entt::entity)entity)
-    //        {
-    //            hasChildren = true;
-    //            break;
-    //        }
-    //    }
+        m_TitleBarPanel = new UI::Panel("TitleBarUI", { 0.15f, 0.15f, 0.17f, 1.0f });
+        m_TitleBarPanel->SetAnchorMin(0.0f, 0.0f); m_TitleBarPanel->SetAnchorMax(1.0f, 0.0f);
+        m_TitleBarPanel->SetOffsetMin(0.0f, 0.0f); m_TitleBarPanel->SetOffsetMax(0.0f, 24.0f);
+        m_RootUI->AddChild(m_TitleBarPanel);
 
-    //    bool isExpanded = m_ExpandedNodes.find((entt::entity)entity) != m_ExpandedNodes.end();
+        m_BtnCloseMain = new UI::Button("BtnCloseMain", "X");
+        m_BtnCloseMain->SetAnchorMin(1.0f, 0.0f); m_BtnCloseMain->SetAnchorMax(1.0f, 0.0f);
+        m_BtnCloseMain->SetOffsetMin(-30.0f, 0.0f); m_BtnCloseMain->SetOffsetMax(0.0f, 24.0f);
+        m_BtnCloseMain->SetOnClick([]() { CCEngine::Application::Get()->GetWindow().SetShouldClose(true); });
+        m_TitleBarPanel->AddChild(m_BtnCloseMain);
 
-    //    // ★ 현재 선택된 엔티티인지 확인 (인스펙터 패널 등과 연동하기 위함)
-    //    bool isSelected = (m_HierarchyPanel->GetSelectedEntity() == entity);
+        m_MenuBarPanel = new UI::Panel("MenuBarUI", { 0.12f, 0.12f, 0.12f, 1.0f });
+        m_MenuBarPanel->SetAnchorMin(0.0f, 0.0f); m_MenuBarPanel->SetAnchorMax(1.0f, 0.0f);
+        m_MenuBarPanel->SetOffsetMin(0.0f, 24.0f); m_MenuBarPanel->SetOffsetMax(0.0f, 48.0f);
+        m_RootUI->AddChild(m_MenuBarPanel);
 
-    //    UI::HierarchyItem* itemNode = new UI::HierarchyItem(entityName, entityName);
-    //    itemNode->SetIndentLevel(depth);
-    //    itemNode->SetHasChildren(hasChildren);
-    //    itemNode->SetExpanded(isExpanded);
-    //    itemNode->SetSelected(isSelected);
+        m_BtnFileMenu = new UI::Button("BtnFileMenu", "File");
+        m_BtnFileMenu->SetAnchorMin(0.0f, 0.0f); m_BtnFileMenu->SetAnchorMax(0.0f, 1.0f);
+        m_BtnFileMenu->SetOffsetMin(0.0f, 0.0f); m_BtnFileMenu->SetOffsetMax(60.0f, 0.0f);
+        m_MenuBarPanel->AddChild(m_BtnFileMenu);
 
-    //    // 콜백 1: 항목 자체를 클릭했을 때 (선택)
-    //    itemNode->SetOnSelect([this, entity]() mutable
-    //        {
-    //            m_HierarchyPanel->SetSelectedEntity(entity);
-    //            std::cout << "[Hierarchy] Selected: " << entity.GetComponent<CCEngine::TagComponent>().Tag << std::endl;
-    //            m_NeedsHierarchyRefresh = true; // 선택 상태(파란 배경)를 갱신하기 위해 새로고침
-    //        });
+        m_HierarchyPanel = new UI::HierarchyPanel("Hierarchy");
+        m_HierarchyPanel->SetAnchorMin(0.0f, 0.0f);
+        m_HierarchyPanel->SetAnchorMax(0.2f, 1.0f);
+        m_HierarchyPanel->SetOffsetMin(0.0f, 48.0f);
+        m_HierarchyPanel->SetOffsetMax(0.0f, 0.0f);
+        m_RootUI->AddChild(m_HierarchyPanel);
+        m_HierarchyPanel->SetContext(m_ActiveScene);
+        m_HierarchyPanel->Refresh();
 
-    //    // 콜백 2: 화살표를 클릭했을 때 (접고 펴기)
-    //    itemNode->SetOnToggleExpand([this, entity, isExpanded]() mutable
-    //        {
-    //            if (isExpanded)
-    //                m_ExpandedNodes.erase((entt::entity)entity);
-    //            else
-    //                m_ExpandedNodes.insert((entt::entity)entity);
+        m_InspectorPanel = new UI::InspectorPanel("InspectorUI", "Inspector");
+        m_InspectorPanel->SetAnchorMin(0.8f, 0.0f);
+        m_InspectorPanel->SetAnchorMax(1.0f, 1.0f);
+        m_InspectorPanel->SetOffsetMin(0.0f, 48.0f);
+        m_InspectorPanel->SetOffsetMax(0.0f, 0.0f);
+        m_RootUI->AddChild(m_InspectorPanel);
 
-    //            m_NeedsHierarchyRefresh = true;
-    //        });
+        m_ToolbarPanel = new UI::Panel("ToolbarUI", { 0.15f, 0.15f, 0.15f, 1.0f });
+        m_ToolbarPanel->SetAnchorMin(0.0f, 0.0f); m_ToolbarPanel->SetAnchorMax(1.0f, 0.0f);
+        m_ToolbarPanel->SetOffsetMin(250.0f, 48.0f); m_ToolbarPanel->SetOffsetMax(-300.0f, 88.0f);
+        m_RootUI->AddChild(m_ToolbarPanel);
 
-    //    m_HierarchyContainer->AddChild(itemNode);
+        m_BtnPlay = new UI::Button("BtnPlay", "Play");
+        m_BtnPlay->SetAnchorMin(0.5f, 0.5f); m_BtnPlay->SetAnchorMax(0.5f, 0.5f);
+        m_BtnPlay->SetOffsetMin(-100.0f, -12.0f); m_BtnPlay->SetOffsetMax(-40.0f, 12.0f);
+        m_ToolbarPanel->AddChild(m_BtnPlay);
 
-    //    // 자식들 재귀 호출 (열려 있을 때만)
-    //    if (isExpanded)
-    //    {
-    //        for (auto childID : relView)
-    //        {
-    //            if (relView.get<CCEngine::RelationshipComponent>(childID).Parent == (entt::entity)entity)
-    //            {
-    //                CCEngine::Entity child{ childID, m_ActiveScene };
-    //                DrawEntityNode(child, depth + 1.0f);
-    //            }
-    //        }
-    //    }
+        m_BtnPause = new UI::Button("BtnPause", "Pause");
+        m_BtnPause->SetAnchorMin(0.5f, 0.5f); m_BtnPause->SetAnchorMax(0.5f, 0.5f);
+        m_BtnPause->SetOffsetMin(-30.0f, -12.0f); m_BtnPause->SetOffsetMax(30.0f, 12.0f);
+        m_ToolbarPanel->AddChild(m_BtnPause);
+
+        m_BtnStop = new UI::Button("BtnStop", "Stop");
+        m_BtnStop->SetAnchorMin(0.5f, 0.5f); m_BtnStop->SetAnchorMax(0.5f, 0.5f);
+        m_BtnStop->SetOffsetMin(40.0f, -12.0f); m_BtnStop->SetOffsetMax(100.0f, 12.0f);
+        m_ToolbarPanel->AddChild(m_BtnStop);
+
+        m_ViewportWindow = new UI::WindowPanel("ViewportWindowUI", "Scene View");
+        m_ViewportWindow->SetAnchorMin(0.2f, 0.0f);
+        m_ViewportWindow->SetAnchorMax(0.8f, 0.7f);
+        m_ViewportWindow->SetOffsetMin(0.0f, 48.0f);
+        m_ViewportWindow->SetOffsetMax(0.0f, 0.0f);
+        m_RootUI->AddChild(m_ViewportWindow);
+
+        void* editorTex = m_Framebuffer->GetColorAttachmentRendererID(0);
+        m_ViewportWidget = new UI::ImageWidget("ViewportWidget", editorTex);
+        m_ViewportWidget->SetAnchorMin(0.0f, 0.0f); m_ViewportWidget->SetAnchorMax(1.0f, 1.0f);
+        m_ViewportWidget->SetOffsetMin(0.0f, 24.0f); m_ViewportWidget->SetOffsetMax(0.0f, 0.0f);
+        m_ViewportWindow->AddChild(m_ViewportWidget);
+
+        m_GameWindow = new UI::WindowPanel("GameWindowUI", "Game View");
+        m_GameWindow->SetAnchorMin(0.2f, 0.6f); m_GameWindow->SetAnchorMax(0.8f, 1.0f);
+        m_GameWindow->SetOffsetMin(0.0f, 0.0f); m_GameWindow->SetOffsetMax(0.0f, 0.0f);
+        m_RootUI->AddChild(m_GameWindow);
+
+        void* gameTex = m_GameFramebuffer->GetColorAttachmentRendererID(0);
+        m_GameViewWidget = new UI::ImageWidget("GameViewWidget", gameTex);
+        m_GameViewWidget->SetAnchorMin(0.0f, 0.0f); m_GameViewWidget->SetAnchorMax(1.0f, 1.0f);
+        m_GameViewWidget->SetOffsetMin(0.0f, 24.0f); m_GameViewWidget->SetOffsetMax(0.0f, 0.0f);
+        m_GameWindow->AddChild(m_GameViewWidget);
+
+        m_FileDropdownPanel = new UI::Panel("FileDropdownUI", { 0.18f, 0.18f, 0.18f, 1.0f });
+        m_FileDropdownPanel->SetVisible(false);
+        m_FileDropdownPanel->SetAnchorMin(0.0f, 0.0f); m_FileDropdownPanel->SetAnchorMax(0.0f, 0.0f);
+        m_FileDropdownPanel->SetOffsetMin(0.0f, 48.0f); m_FileDropdownPanel->SetOffsetMax(120.0f, 48.0f + 100.0f);
+        m_RootUI->AddChild(m_FileDropdownPanel);
+
+        m_BtnOpen = new UI::Button("BtnOpen", "Open Scene");
+        m_BtnOpen->SetAnchorMin(0.0f, 0.0f); m_BtnOpen->SetAnchorMax(1.0f, 0.0f);
+        m_BtnOpen->SetOffsetMin(0.0f, 0.0f); m_BtnOpen->SetOffsetMax(0.0f, 25.0f);
+        m_FileDropdownPanel->AddChild(m_BtnOpen);
+
+        m_BtnSave = new UI::Button("BtnSave", "Save");
+        m_BtnSave->SetAnchorMin(0.0f, 0.0f); m_BtnSave->SetAnchorMax(1.0f, 0.0f);
+        m_BtnSave->SetOffsetMin(0.0f, 25.0f); m_BtnSave->SetOffsetMax(0.0f, 50.0f);
+        m_FileDropdownPanel->AddChild(m_BtnSave);
+
+        m_BtnSaveAs = new UI::Button("BtnSaveAs", "Save As...");
+        m_BtnSaveAs->SetAnchorMin(0.0f, 0.0f); m_BtnSaveAs->SetAnchorMax(1.0f, 0.0f);
+        m_BtnSaveAs->SetOffsetMin(0.0f, 50.0f); m_BtnSaveAs->SetOffsetMax(0.0f, 75.0f);
+        m_FileDropdownPanel->AddChild(m_BtnSaveAs);
+
+        m_BtnExit = new UI::Button("BtnExit", "Exit");
+        m_BtnExit->SetAnchorMin(0.0f, 0.0f); m_BtnExit->SetAnchorMax(1.0f, 0.0f);
+        m_BtnExit->SetOffsetMin(0.0f, 75.0f); m_BtnExit->SetOffsetMax(0.0f, 100.0f);
+        m_FileDropdownPanel->AddChild(m_BtnExit);
+
+        // --- 버튼 & 툴바 콜백 등록 ---
+        m_BtnFileMenu->SetOnClick([this]() { m_FileDropdownPanel->SetVisible(!m_FileDropdownPanel->IsVisible()); });
+        m_BtnOpen->SetOnClick([this]() { m_FileDropdownPanel->SetVisible(false); OpenScene(); });
+        m_BtnSave->SetOnClick([this]() { m_FileDropdownPanel->SetVisible(false); SaveScene(); });
+        m_BtnSaveAs->SetOnClick([this]() { m_FileDropdownPanel->SetVisible(false); SaveSceneAs(); });
+        m_BtnExit->SetOnClick([this]() { CCEngine::Application::Get()->GetWindow().SetShouldClose(true); });
+
+        m_BtnPlay->SetOnClick([this]() {
+            CCEngine::SceneState state = m_ActiveScene->GetState();
+            if (state == CCEngine::SceneState::Edit) {
+                m_EditorScene = m_ActiveScene;
+                m_ActiveScene = CCEngine::Scene::Copy(m_EditorScene);
+                m_ActiveScene->OnRuntimeStart();
+                m_ActiveScene->SetSceneState(CCEngine::SceneState::Play);
+                m_HierarchyPanel->SetContext(m_ActiveScene);
+                m_BtnPlay->SetActive(true);
+                m_BtnPause->SetActive(false);
+            }
+            else if (state == CCEngine::SceneState::Play) {
+                m_ActiveScene->OnRuntimeStop();
+                delete m_ActiveScene;
+                m_ActiveScene = m_EditorScene;
+                m_EditorScene = nullptr;
+                m_ActiveScene->SetSceneState(CCEngine::SceneState::Edit);
+                m_HierarchyPanel->SetContext(m_ActiveScene);
+                m_BtnPlay->SetActive(false);
+                m_BtnPause->SetActive(false);
+            }
+            else if (state == CCEngine::SceneState::Pause) {
+                m_ActiveScene->SetSceneState(CCEngine::SceneState::Play);
+                m_BtnPlay->SetActive(true);
+                m_BtnPause->SetActive(false);
+            }
+            });
+
+        m_BtnPause->SetOnClick([this]() {
+            CCEngine::SceneState state = m_ActiveScene->GetState();
+            if (state == CCEngine::SceneState::Play) {
+                m_ActiveScene->SetSceneState(CCEngine::SceneState::Pause);
+                m_BtnPause->SetActive(true);
+            }
+            else if (state == CCEngine::SceneState::Pause) {
+                m_ActiveScene->SetSceneState(CCEngine::SceneState::Play);
+                m_BtnPause->SetActive(false);
+            }
+            });
+
+        m_BtnStop->SetOnClick([this]() {
+            CCEngine::SceneState state = m_ActiveScene->GetState();
+            if (state != CCEngine::SceneState::Edit) {
+                m_ActiveScene->OnRuntimeStop();
+                delete m_ActiveScene;
+                m_ActiveScene = m_EditorScene;
+                m_EditorScene = nullptr;
+                m_ActiveScene->SetSceneState(CCEngine::SceneState::Edit);
+                m_HierarchyPanel->SetContext(m_ActiveScene);
+                m_BtnPlay->SetActive(false);
+                m_BtnPause->SetActive(false);
+            }
+            });
+
+        CCEngine::Application::Get()->GetWindow().SetRootUI(m_RootUI);
     }
+
+   
 }

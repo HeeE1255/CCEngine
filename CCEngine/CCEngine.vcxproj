@@ -164,7 +164,6 @@
     <ClInclude Include="src\Animation\Animator.h" />
     <ClInclude Include="src\Application.h" />
     <ClInclude Include="src\Core.h" />
-    <ClInclude Include="src\Core\ApplicationEvent.h" />
     <ClInclude Include="src\Core\Layer.h" />
     <ClInclude Include="src\Core\LayerStack.h" />
     <ClInclude Include="src\Core\Memory.h" />
@@ -172,7 +171,9 @@
     <ClInclude Include="src\Core\Window.h" />
     <ClInclude Include="src\Editor\EditorCamera.h" />
     <ClInclude Include="src\Editor\EditorLayer.h" />
+    <ClInclude Include="src\Editor\GizmoSystem.h" />
     <ClInclude Include="src\EntryPoint.h" />
+    <ClInclude Include="src\Events\ApplicationEvent.h" />
     <ClInclude Include="src\Events\Event.h" />
     <ClInclude Include="src\Events\MouseEvent.h" />
     <ClInclude Include="src\Platform\DirectX11\DX11Buffer.h" />
@@ -219,6 +220,7 @@
     <ClInclude Include="src\UI\InspectorItem.h" />
     <ClInclude Include="src\UI\InspectorPanel.h" />
     <ClInclude Include="src\UI\InspectorRegistry.h" />
+    <ClInclude Include="src\UI\InspectorUtils.h" />
     <ClInclude Include="src\UI\Panel.h" />
     <ClInclude Include="src\UI\VBoxContainer.h" />
     <ClInclude Include="src\UI\Widget.h" />
@@ -237,6 +239,7 @@
     <ClCompile Include="src\Core\Window.cpp" />
     <ClCompile Include="src\Editor\EditorCamera.cpp" />
     <ClCompile Include="src\Editor\EditorLayer.cpp" />
+    <ClCompile Include="src\Editor\GizmoSystem.cpp" />
     <ClCompile Include="src\Platform\DirectX11\DX11Buffer.cpp" />
     <ClCompile Include="src\Platform\DirectX11\DX11Context.cpp" />
     <ClCompile Include="src\Platform\DirectX11\DX11Framebuffer.cpp" />
@@ -277,6 +280,7 @@
     <ClCompile Include="src\UI\ImageWidget.cpp" />
     <ClCompile Include="src\UI\InspectorItem.cpp" />
     <ClCompile Include="src\UI\InspectorPanel.cpp" />
+    <ClCompile Include="src\UI\InspectorUtils.cpp" />
     <ClCompile Include="src\UI\Panel.cpp" />
     <ClCompile Include="src\UI\VBoxContainer.cpp" />
     <ClCompile Include="src\UI\Widget.cpp" />

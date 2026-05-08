@@ -49,5 +49,31 @@ namespace CCEngine
             Widget::OnRender();
         }
 
+        bool ImageWidget::OnMouseButtonPressed(MouseButtonPressedEvent& e)
+        {
+            float edgeSize = 8.0f;
+            if (e.GetX() >= (m_CalculatedPos.x + m_CalculatedSize.x - edgeSize) ||
+                e.GetY() >= (m_CalculatedPos.y + m_CalculatedSize.y - edgeSize))
+            {
+                return false; // 내가 안 먹고 부모(WindowPanel)에게 넘김!
+            }
+
+            if (e.GetX() >= m_CalculatedPos.x && e.GetX() <= m_CalculatedPos.x + m_CalculatedSize.x &&
+                e.GetY() >= m_CalculatedPos.y && e.GetY() <= m_CalculatedPos.y + m_CalculatedSize.y)
+            {
+                // 0번(좌클릭)일 때만 콜백 실행
+                if (e.GetButton() == 0 && m_OnMouseDown)
+                {
+                    m_OnMouseDown(e.GetX(), e.GetY());
+
+                    // 이벤트를 여기서 먹어치움! (뒤에 있는 다른 패널로 넘어가지 않게 함)
+                    e.Handled = true;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
     }
 }

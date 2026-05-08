@@ -1,7 +1,7 @@
 #include "WindowsWindow.h"
 #include "Renderer/GraphicsContext.h"
 #include "Application.h" 
-#include "Core/ApplicationEvent.h"
+#include "Events/ApplicationEvent.h"
 #include "UI/Widget.h"
 #include "Events/MouseEvent.h"
 #include <iostream>
@@ -41,7 +41,7 @@ namespace CCEngine
 					window == &(CCEngine::Application::Get()->GetWindow()))
 				{
 					CCEngine::WindowResizeEvent e(width, height);
-					CCEngine::Application::Get()->OnWindowResize(e);
+					CCEngine::Application::Get()->OnEvent(e);
 				}
 			}
 			return 0;
@@ -53,7 +53,8 @@ namespace CCEngine
 			if (CCEngine::Application::Get() &&
 				window == &(CCEngine::Application::Get()->GetWindow()))
 			{
-				PostQuitMessage(0);
+				CCEngine::WindowCloseEvent e;
+				CCEngine::Application::Get()->OnEvent(e);
 			}
 			else
 			{
@@ -91,19 +92,22 @@ namespace CCEngine
 			if (window)
 			{
 				ReleaseCapture();
-
 				float mouseX = static_cast<float>((short)LOWORD(lParam));
 				float mouseY = static_cast<float>((short)HIWORD(lParam));
 
 				CCEngine::MouseButtonReleasedEvent e(0, mouseX, mouseY);
-				if (window->GetRootUI())
+
+				// ★ 1. Application 먼저!
+				if (CCEngine::Application::Get())
+				{
+					CCEngine::Application::Get()->OnEvent(e);
+				}
+
+				// ★ 2. !e.Handled 체크 필수!
+				if (!e.Handled && window->GetRootUI())
 				{
 					window->GetRootUI()->OnEvent(e);
 				}
-
-				// (참고: Application의 LayerStack 이벤트를 사용 중이라면 아래처럼 전달할 수도 있습니다)
-				// if (CCEngine::Application::Get())
-				// 	   CCEngine::Application::Get()->OnEvent(e);
 			}
 			return 0;
 		}
@@ -112,24 +116,55 @@ namespace CCEngine
 		//
 		case WM_LBUTTONDOWN:
 		{
-			//창 밖으로 드래그할 때 OS가 마우스 이벤트를 끊지 않도록 캡처
 			SetCapture(hWnd);
-
 			if (window)
 			{
 				float mouseX = static_cast<float>((short)LOWORD(lParam));
 				float mouseY = static_cast<float>((short)HIWORD(lParam));
 
-				// 0은 좌클릭. 클릭 이벤트를 생성해서 UI로 쏴줍니다!
 				CCEngine::MouseButtonPressedEvent e(0, mouseX, mouseY);
-				if (window->GetRootUI())
+
+				// ★ 1. 무조건 Application(에디터/기즈모) 먼저!
+				if (CCEngine::Application::Get())
+				{
+					CCEngine::Application::Get()->OnEvent(e);
+				}
+
+				// ★ 2. 기즈모가 안 먹었을 때만(!e.Handled) UI로!
+				if (!e.Handled && window->GetRootUI())
 				{
 					window->GetRootUI()->OnEvent(e);
 				}
 			}
-			break;
+			return 0;
 		}
 		break;
+
+		case WM_MOUSEMOVE:
+		{
+			if (window)
+			{
+				float mouseX = static_cast<float>((short)LOWORD(lParam));
+				float mouseY = static_cast<float>((short)HIWORD(lParam));
+
+				CCEngine::MouseMovedEvent e(mouseX, mouseY);
+
+				// ★ 1. Application 먼저!
+				if (CCEngine::Application::Get())
+				{
+					CCEngine::Application::Get()->OnEvent(e);
+				}
+
+				// ★ 2. !e.Handled 체크 필수!
+				if (!e.Handled && window->GetRootUI())
+				{
+					window->GetRootUI()->OnEvent(e);
+				}
+			}
+			return 0;
+		}
+		break;
+
 
 		case WM_NCHITTEST:  
 		{
@@ -191,24 +226,6 @@ namespace CCEngine
 			{
 				return 0;
 			}
-		}
-		break;
-
-
-		case WM_MOUSEMOVE:
-		{
-			if (window)
-			{
-				float mouseX = static_cast<float>((short)LOWORD(lParam));
-				float mouseY = static_cast<float>((short)HIWORD(lParam));
-
-				CCEngine::MouseMovedEvent e(mouseX, mouseY);
-				if (window->GetRootUI())
-				{
-					window->GetRootUI()->OnEvent(e);
-				}
-			}
-			break;
 		}
 		break;
 

@@ -1,7 +1,7 @@
 #pragma once
 #include "Core.h"
 #include "Core/Window.h"
-#include "Core/ApplicationEvent.h"
+#include "Events/ApplicationEvent.h"
 #include "Core/LayerStack.h" 
 #include <memory>
 #include <string>
@@ -18,7 +18,7 @@ namespace CCEngine
 
         void Run();
         virtual void OnUpdate();
-        void OnWindowResize(WindowResizeEvent& e);
+        void OnEvent(Event& e);
 
         // ==========================================
         //  레이어 및 오버레이 장착 함수

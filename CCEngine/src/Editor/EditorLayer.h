@@ -19,6 +19,7 @@
 #include "UI/VBoxContainer.h"
 #include "UI/HierarchyPanel.h"
 #include "UI/InspectorPanel.h"
+#include "GizmoSystem.h"
 
 namespace CCEngine {
 
@@ -41,7 +42,7 @@ namespace CCEngine {
         void HandleShortcuts();
 
     private:
-        void DrawEntityNode(CCEngine::Entity entity, float depth);
+        void BuildEditorUI();
         void RefreshHierarchy();
         bool m_NeedsHierarchyRefresh = false; // 재조립 트리거 (메모리 뻑 방지용)
         std::unordered_set<entt::entity> m_ExpandedNodes; // 열려있는(Expanded) 엔티티들의 ID를 기억하는 장부
@@ -96,6 +97,8 @@ namespace CCEngine {
         UI::WindowPanel* m_GameWindow = nullptr;
         UI::ImageWidget* m_ViewportWidget = nullptr;
         UI::ImageWidget* m_GameViewWidget = nullptr;
+
+        GizmoSystem m_GizmoSystem;
 
     };
 

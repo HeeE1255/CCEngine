@@ -68,7 +68,8 @@ namespace CCEngine
 
         // 매 프레임 시작 시, 카메라 행렬(ViewProjection)을 계산하여 상수 버퍼에 세팅!
         CameraData camData;
-        camData.ViewProjection = CCEngine::Math::GetMatrixForShader(camera.GetViewProjectionMatrix());
+		camData.ViewProjection = CCEngine::Math::MathUtils::GetMatrixForShader(camera.GetViewProjectionMatrix());
+            //CCEngine::Math::MathUtils::GetMatrixForShader(camera.GetViewProjectionMatrix());
 
         s_Data->CameraConstantBuffer->SetData(&camData, sizeof(CameraData));
 
@@ -108,7 +109,7 @@ namespace CCEngine
 
         // 1. 현재 그릴 오브젝트의 데이터를 세팅
         TransformData transformData;
-        transformData.Transform = CCEngine::Math::GetMatrixForShader(transform);
+        transformData.Transform = CCEngine::Math::MathUtils::GetMatrixForShader(transform);
         transformData.BaseColor = color;
         transformData.EntityID = entityID;
         transformData.HasAnimation = 0;
@@ -147,7 +148,7 @@ namespace CCEngine
 
         // 1. 일반 트랜스폼 데이터 세팅
         TransformData transformData;
-        transformData.Transform = CCEngine::Math::GetMatrixForShader(transform);
+        transformData.Transform = CCEngine::Math::MathUtils::GetMatrixForShader(transform);
         transformData.BaseColor = color;
         transformData.EntityID = entityID;
         transformData.HasAnimation = 1;
@@ -162,13 +163,13 @@ namespace CCEngine
         for (size_t i = 0; i < copyCount; ++i)
         {
             // 셰이더로 넘기기 위해 전치(Transpose) 처리
-            boneData.BoneMatrices[i] = CCEngine::Math::GetMatrixForShader(boneMatrices[i]);
+            boneData.BoneMatrices[i] = CCEngine::Math::MathUtils::GetMatrixForShader(boneMatrices[i]);
         }
 
         DirectX::XMMATRIX identityMatrix = DirectX::XMMatrixIdentity();
         for (size_t i = copyCount; i < 512; ++i)
         {
-            boneData.BoneMatrices[i] = CCEngine::Math::GetMatrixForShader(identityMatrix);
+            boneData.BoneMatrices[i] = CCEngine::Math::MathUtils::GetMatrixForShader(identityMatrix);
         }
 
         // b2 (슬롯 2번)에 뼈대 상수 버퍼 바인딩

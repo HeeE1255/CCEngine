@@ -1,5 +1,6 @@
 #pragma once
 #include "Core.h" // CC_API (__declspec) 매크로가 정의된 파일
+#include "Events/Event.h"
 
 namespace CCEngine {
 
@@ -8,7 +9,7 @@ namespace CCEngine {
     // ==========================================
     // 윈도우 OS가 "창 크기 변했어!" 라고 알려준 가로/세로 픽셀 값을 
     // 엔진 내부로 안전하게 전달하기 위한 포장 박스
-    class CC_API WindowResizeEvent
+    class CC_API WindowResizeEvent : public Event
     {
     public:
         WindowResizeEvent(unsigned int width, unsigned int height)
@@ -17,6 +18,8 @@ namespace CCEngine {
 
         unsigned int GetWidth() const { return m_Width; }
         unsigned int GetHeight() const { return m_Height; }
+
+        virtual EventType GetEventType() const override { return EventType::WindowResize; }
 
     private:
         unsigned int m_Width;
@@ -28,10 +31,12 @@ namespace CCEngine {
     // 2. 창 닫기 이벤트 (WindowCloseEvent)
     // ==========================================
     // 오른쪽 위 X 버튼을 눌렀을 때 엔진을 안전하게 종료시키기 위한 박스
-    class CC_API WindowCloseEvent
+    class CC_API WindowCloseEvent : public Event
     {
     public:
         WindowCloseEvent() = default;
+
+        virtual EventType GetEventType() const override { return EventType::WindowClose; }
     };
 
 }

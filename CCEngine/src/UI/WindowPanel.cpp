@@ -20,9 +20,6 @@ namespace CCEngine
         void WindowPanel::OnRender()
         {
             if (!m_IsVisible) return;
-            // If we're in the middle of an internal drag/resize, poll the current
-            // mouse position each frame so the panel follows the cursor smoothly
-            // even when WM_MOUSEMOVE messages are delayed (e.g. during debugging).
             if (m_ResizeMode != ResizeMode::None || m_IsDragging)
             {
                 auto& mainWindow = Application::Get()->GetWindow();
