@@ -11,5 +11,6 @@ namespace CCEngine
         static std::shared_ptr<Mesh> CreateCube();
         static std::shared_ptr<Mesh> CreatePlane(float width = 1.0f, float height = 1.0f);
         static std::shared_ptr<Mesh> CreateSphere(float radius = 0.5f, uint32_t sliceCount = 30, uint32_t stackCount = 30);
+        static std::shared_ptr<Mesh> CreateTorus(float majorRadius = 1.0f, float minorRadius = 0.02f, uint32_t radialSegments = 32, uint32_t tubularSegments = 12);
     };
 }

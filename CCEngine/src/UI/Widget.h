@@ -12,6 +12,39 @@ namespace CCEngine
 {
     namespace UI
     {
+        struct ScrollState 
+        {
+            float ScrollY = 0.0f;           // 현재 스크롤된 양
+            float ContentHeight = 0.0f;     // 전체 내용물의 높이
+            float ViewportHeight = 0.0f;    // 화면에 보이는 높이
+            float ScrollSpeed = 40.0f;
+
+            float GetMaxScroll() const { return (std::max)(0.0f, ContentHeight - ViewportHeight); }
+
+            void ApplyScroll(float delta) 
+            {
+                ScrollY -= delta * ScrollSpeed;
+                ScrollY = (std::clamp)(ScrollY, 0.0f, GetMaxScroll());
+            }
+
+            // 스크롤바 손잡이(Thumb)의 높이 계산
+            float GetThumbHeight() const 
+            {
+                if (ContentHeight <= 0) return ViewportHeight;
+                float ratio = ViewportHeight / ContentHeight;
+                return (std::max)(ViewportHeight * ratio, 30.0f); // 최소 30픽셀 보장
+            }
+
+            // 스크롤바 손잡이의 Y 위치 계산
+            float GetThumbY(float trackStartY) const 
+            {
+                if (GetMaxScroll() <= 0) return trackStartY;
+                float scrollRatio = ScrollY / GetMaxScroll();
+                float trackSpace = ViewportHeight - GetThumbHeight();
+                return trackStartY + (scrollRatio * trackSpace);
+            }
+        };
+
         class CC_API Widget
         {
         public:

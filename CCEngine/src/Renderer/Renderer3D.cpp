@@ -138,6 +138,32 @@ namespace CCEngine
         RenderCommand::DrawIndexed(mesh->GetIndexBuffer().get());
     }
 
+    // =================================================================
+      // ★ 커스텀 쉐이더(기즈모 등) 전용 최적화 DrawMesh
+      // =================================================================
+    void Renderer3D::DrawMesh(const DirectX::XMMATRIX& transform, const std::shared_ptr<Mesh>& mesh, const std::shared_ptr<Shader>& shader, const DirectX::XMFLOAT4& color)
+    {
+        if (!mesh || !shader) return;
+
+        // 1. 필요한 데이터(트랜스폼, 색상)만 채우고 나머지는 0/-1 처리
+        TransformData transformData = {};
+        transformData.Transform = CCEngine::Math::MathUtils::GetMatrixForShader(transform);
+        transformData.BaseColor = color;
+        transformData.EntityID = -1; // 피킹 무시
+
+        s_Data->TransformConstantBuffer->SetData(&transformData, sizeof(TransformData));
+        s_Data->TransformConstantBuffer->Bind(1);
+
+        // ★ 쓸데없는 텍스처 바인딩(DefaultWhiteTexture->Bind) 완전히 제거됨!
+
+        // 2. 쉐이더 및 메쉬 바인딩 후 드로우
+        shader->Bind();
+        shader->BindLayout(mesh->GetVertexBuffer()->GetLayout());
+        mesh->Bind();
+
+        RenderCommand::DrawIndexed(mesh->GetIndexBuffer().get());
+    }
+
     //  뼈대가 있는 스킨드 메쉬 드로우 콜
     void Renderer3D::DrawSkinnedMesh(const DirectX::XMMATRIX& transform, const std::shared_ptr<Mesh>& mesh, const std::shared_ptr<Texture2D>& texture, const DirectX::XMFLOAT4& color, int entityID, const std::vector<DirectX::XMMATRIX>& boneMatrices)
     {

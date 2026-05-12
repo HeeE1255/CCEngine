@@ -217,6 +217,33 @@ namespace CCEngine
 		}
 		break;
 
+		case WM_MOUSEWHEEL:
+		{
+			if (window)
+			{
+				// GET_WHEEL_DELTA_WPARAM은 휠 회전 방향과 크기를 반환합니다. (보통 120 단위)
+				// 120으로 나누면 한 틱당 1.0 또는 -1.0이 됩니다.
+				float yOffset = (float)GET_WHEEL_DELTA_WPARAM(wParam) / (float)WHEEL_DELTA;
+
+				// X축 휠(틸트)은 지금 사용하지 않으므로 0.0f로 줍니다.
+				CCEngine::MouseScrolledEvent e(0.0f, yOffset);
+
+				// ★ 1. Application 먼저! (기존 패턴 유지)
+				if (CCEngine::Application::Get())
+				{
+					CCEngine::Application::Get()->OnEvent(e);
+				}
+
+				// ★ 2. !e.Handled 체크 필수! (기존 패턴 유지)
+				if (!e.Handled && window->GetRootUI())
+				{
+					window->GetRootUI()->OnEvent(e);
+				}
+			}
+			return 0;
+		}
+		break;
+
 		case WM_NCCALCSIZE:
 		{
 			// wParam이 TRUE일 때 0을 반환하면, OS가 기본적으로 그리는 창 테두리 영역을 무시하고
@@ -228,6 +255,7 @@ namespace CCEngine
 			}
 		}
 		break;
+
 
 		}
 		return DefWindowProc(hWnd, message, wParam, lParam);

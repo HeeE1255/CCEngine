@@ -126,4 +126,14 @@ namespace CCEngine
     {
         DrawString(text, s_DefaultFont, x, y, color);
     }
+
+    void UIRenderer::DrawRect(float x, float y, float width, float height, const DirectX::XMFLOAT4& color, int entityID)
+    {
+        DrawRectFilled(x, y, width, height, color, entityID);
+    }
+
+    void UIRenderer::DrawRect(const DirectX::XMFLOAT2& position, const DirectX::XMFLOAT2& size, const DirectX::XMFLOAT4& color, int entityID)
+    {
+        DrawRectFilled(position.x, position.y, size.x, size.y, color, entityID);
+    }
 }

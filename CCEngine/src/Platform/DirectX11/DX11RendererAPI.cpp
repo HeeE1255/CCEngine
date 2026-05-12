@@ -114,4 +114,51 @@ namespace CCEngine
             context->OMSetDepthStencilState(enable ? enabledState : disabledState, 1);
         }
     }
+
+    void DX11RendererAPI::SetScissorEnable(bool enable)
+    {
+        auto device = DX11Context::Get()->GetDevice();
+        auto context = DX11Context::Get()->GetDeviceContext();
+
+        // SetDepthTest와 동일하게 static 변수로 RasterizerState를 캐싱합니다.
+        static ID3D11RasterizerState* enabledState = nullptr;
+        static ID3D11RasterizerState* disabledState = nullptr;
+
+        if (!enabledState)
+        {
+            D3D11_RASTERIZER_DESC desc = {};
+            desc.FillMode = D3D11_FILL_SOLID;
+            // UI 렌더링이 주 목적이므로 Culling을 끄거나, 기존 엔진 설정에 맞춥니다.
+            desc.CullMode = D3D11_CULL_NONE;
+            desc.DepthClipEnable = TRUE;
+
+            // 가위질 켜기 상태 생성
+            desc.ScissorEnable = TRUE;
+            device->CreateRasterizerState(&desc, &enabledState);
+
+            // 가위질 끄기 상태 생성
+            desc.ScissorEnable = FALSE;
+            device->CreateRasterizerState(&desc, &disabledState);
+        }
+
+        // 상태가 정상적으로 생성되었을 때만 파이프라인에 적용
+        if (enabledState && disabledState)
+        {
+            context->RSSetState(enable ? enabledState : disabledState);
+        }
+    }
+
+    void DX11RendererAPI::SetScissor(uint32_t x, uint32_t y, uint32_t width, uint32_t height)
+    {
+        // 렌더링 컨텍스트를 가져와서 영역만 던져줍니다.
+        auto context = DX11Context::Get()->GetDeviceContext();
+
+        D3D11_RECT rect;
+        rect.left = (LONG)x;
+        rect.top = (LONG)y;
+        rect.right = (LONG)(x + width);
+        rect.bottom = (LONG)(y + height);
+
+        context->RSSetScissorRects(1, &rect);
+    }
 }

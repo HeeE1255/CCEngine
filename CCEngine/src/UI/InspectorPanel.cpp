@@ -1,5 +1,7 @@
 #include "InspectorPanel.h"
 #include "InspectorRegistry.h"
+#include "Renderer/RenderCommand.h"
+#include "Renderer/UIRenderer.h"
 
 namespace CCEngine 
 {
@@ -36,10 +38,28 @@ namespace CCEngine
 
             if (!m_IsVisible || !m_SelectedEntity) return;
 
-            // 2. 동적으로 생성된 자식 위젯들(DragFloat, Button 등) 렌더링
+            // ★ 1. 가위질 시작 (타이틀 바 40.0f 아래부터)
+            RenderCommand::SetScissorEnable(true);
+            RenderCommand::SetScissor((uint32_t)m_CalculatedPos.x, (uint32_t)(m_CalculatedPos.y + 40.0f),
+                (uint32_t)m_CalculatedSize.x, (uint32_t)(m_CalculatedSize.y - 40.0f));
+
             for (auto child : m_Children)
             {
                 child->OnRender();
+            }
+
+            // ★ 2. 가위질 해제
+            RenderCommand::SetScissorEnable(false);
+
+            // ★ 3. 스크롤바 그리기
+            if (m_ScrollState.GetMaxScroll() > 0)
+            {
+                float thumbH = m_ScrollState.GetThumbHeight();
+                float thumbY = m_ScrollState.GetThumbY(m_CalculatedPos.y + 40.0f);
+                float thumbX = m_CalculatedPos.x + m_CalculatedSize.x - 20.0f;
+
+                UIRenderer::DrawRect({ thumbX, m_CalculatedPos.y + 40.0f }, { 8.0f, m_ScrollState.ViewportHeight }, { 0.1f, 0.1f, 0.1f, 0.5f });
+                UIRenderer::DrawRect({ thumbX, thumbY }, { 8.0f, thumbH }, { 0.4f, 0.4f, 0.4f, 1.0f });
             }
         }
 
@@ -51,7 +71,9 @@ namespace CCEngine
             if (!m_IsVisible || !m_SelectedEntity) return;
 
             // 2. 컴포넌트 박스(InspectorItem)들을 세로로 차곡차곡 쌓음
-            float currentY = 40.0f; // 윈도우 타이틀바 바로 아래부터 시작
+            float startY = 40.0f; // 윈도우 타이틀바 바로 아래부터 시작
+            float currentY = startY - m_ScrollState.ScrollY;
+
             for (auto child : m_Children)
             {
                 if (!child->IsVisible()) continue;
@@ -66,6 +88,9 @@ namespace CCEngine
                 // 방금 갱신된 자식의 진짜 높이만큼 Y축을 전진시킴
                 currentY += child->GetCalculatedSize().y + 4.0f;
             }
+
+            m_ScrollState.ContentHeight = (currentY + m_ScrollState.ScrollY) - startY;
+            m_ScrollState.ViewportHeight = m_CalculatedSize.y - startY;
         }
 
     }

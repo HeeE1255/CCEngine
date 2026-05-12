@@ -23,6 +23,8 @@ namespace CCEngine
             virtual void UpdateLayout(const DirectX::XMFLOAT2& parentPos, const DirectX::XMFLOAT2& parentSize) override;
             virtual void OnRender() override;
 
+            virtual bool OnEvent(Event& e) override;
+
         private:
             // 트리 구조를 만들 때 부모 위젯을 인자로 받습니다.
             void BuildEntityTree(Entity entity, int depth, Widget* parentWidget);
@@ -33,6 +35,11 @@ namespace CCEngine
             std::map<uint32_t, bool> m_ExpandedStates;
             bool m_NeedsRefresh = false;
             bool m_NeedsSelectionUpdate = false;
+            ScrollState m_ScrollState;
+
+            bool m_IsDraggingScrollbar = false;
+            float m_DragMouseStartY = 0.0f;
+            float m_DragScrollStartY = 0.0f;
 
             // Simple deferred UI ops queue (prototype).
             // NOTE: (Deferred UI OPS 아직 미적용) -> 기능은 구현되어 있지만 기본적으로 주석 처리되어 있습니다.

@@ -123,4 +123,67 @@ namespace CCEngine
 
         return std::make_shared<Mesh>(vertices, indices);
     }
+    std::shared_ptr<Mesh> MeshFactory::CreateTorus(float majorRadius, float minorRadius, uint32_t radialSegments, uint32_t tubularSegments)
+    {
+        std::vector<Vertex3D> vertices;
+        std::vector<uint32_t> indices;
+
+        // 1. 정점(Vertex) 생성
+        for (uint32_t i = 0; i <= radialSegments; ++i)
+        {
+            float u = (float)i / radialSegments * DirectX::XM_2PI; // 큰 원의 각도
+            float cosU = cos(u);
+            float sinU = sin(u);
+
+            for (uint32_t j = 0; j <= tubularSegments; ++j)
+            {
+                float v = (float)j / tubularSegments * DirectX::XM_2PI; // 튜브 단면의 각도
+                float cosV = cos(v);
+                float sinV = sin(v);
+
+                DirectX::XMFLOAT3 pos;
+                pos.x = (majorRadius + minorRadius * cosV) * cosU;
+                pos.y = (majorRadius + minorRadius * cosV) * sinU;
+                pos.z = minorRadius * sinV;
+
+                // 노멀(법선) 벡터도 필요하다면 아래처럼 계산합니다.
+                /*
+                DirectX::XMFLOAT3 center = { majorRadius * cosU, majorRadius * sinU, 0.0f };
+                DirectX::XMFLOAT3 normal = { pos.x - center.x, pos.y - center.y, pos.z - center.z };
+                // normal 정규화(Normalize) 후 Vertex에 삽입...
+                */
+
+                Vertex3D vertex;
+                vertex.Position = pos;
+                // vertex.Normal = ...; 
+                // vertex.TexCoord = ...;
+
+                vertices.push_back(vertex);
+            }
+        }
+
+        // 2. 인덱스(Index) 생성 (삼각형 폴리곤 연결)
+        for (uint32_t i = 0; i < radialSegments; ++i)
+        {
+            for (uint32_t j = 0; j < tubularSegments; ++j)
+            {
+                uint32_t a = i * (tubularSegments + 1) + j;
+                uint32_t b = a + tubularSegments + 1;
+                uint32_t c = a + 1;
+                uint32_t d = b + 1;
+
+                // 삼각형 1
+                indices.push_back(a);
+                indices.push_back(b);
+                indices.push_back(c);
+
+                // 삼각형 2
+                indices.push_back(c);
+                indices.push_back(b);
+                indices.push_back(d);
+            }
+        }
+
+        return std::make_shared<Mesh>(vertices, indices);
+    }
 }

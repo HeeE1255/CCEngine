@@ -8,7 +8,8 @@ namespace CCEngine {
     {
         None = 0,
         WindowClose, WindowResize,
-        MouseMoved, MouseButtonPressed, MouseButtonReleased
+        MouseMoved, MouseButtonPressed, MouseButtonReleased,
+        MouseScrolled
     };
 
     class CC_API Event

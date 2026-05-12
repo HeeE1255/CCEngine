@@ -51,4 +51,20 @@ namespace CCEngine {
             float m_MouseX, m_MouseY;
 	};
 
+    class CC_API MouseScrolledEvent : public Event
+    {
+    public:
+        MouseScrolledEvent(float xOffset, float yOffset)
+            : m_XOffset(xOffset), m_YOffset(yOffset) {
+        }
+
+        float GetXOffset() const { return m_XOffset; }
+        float GetYOffset() const { return m_YOffset; }
+
+        virtual EventType GetEventType() const override { return EventType::MouseScrolled; }
+
+    private:
+        float m_XOffset, m_YOffset;
+    };
+
 }

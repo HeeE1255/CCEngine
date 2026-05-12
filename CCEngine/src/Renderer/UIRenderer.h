@@ -28,6 +28,9 @@ namespace CCEngine
         static void DrawString(const std::string& text, Font* font, float x, float y, const DirectX::XMFLOAT4& color);
         static void DrawString(const std::string& text, float x, float y, const DirectX::XMFLOAT4& color);
 
+        static void DrawRect(float x, float y, float width, float height, const DirectX::XMFLOAT4& color, int entityID = -1);
+        static void DrawRect(const DirectX::XMFLOAT2& position, const DirectX::XMFLOAT2& size, const DirectX::XMFLOAT4& color, int entityID = -1);
+
         static Font* GetDefaultFont() { return s_DefaultFont; }
 
     private:

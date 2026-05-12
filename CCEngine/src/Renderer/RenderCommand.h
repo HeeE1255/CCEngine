@@ -39,6 +39,16 @@ namespace CCEngine
             s_RendererAPI->SetDepthTest(enable);
         }
 
+        inline static void SetScissor(uint32_t x, uint32_t y, uint32_t width, uint32_t height)
+        {
+            s_RendererAPI->SetScissor(x, y, width, height);
+        }
+
+        inline static void SetScissorEnable(bool enable)
+        {
+            s_RendererAPI->SetScissorEnable(enable);
+        }
+
     private:
         static std::unique_ptr<RendererAPI> s_RendererAPI;
     };

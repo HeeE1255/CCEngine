@@ -35,6 +35,7 @@ namespace CCEngine {
     EditorLayer::EditorLayer()
         : Layer("EditorLayer"), m_Camera(45.0f, 1280.0f / 720.0f, 0.1f, 100.0f)
     {
+		m_GizmoSystem.Init(); // 기즈모 시스템 초기화
     }
 
     void EditorLayer::OnAttach()
