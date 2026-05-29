@@ -6,37 +6,37 @@ namespace CCEngine
     std::shared_ptr<Mesh> MeshFactory::CreateCube()
     {
         std::vector<Vertex3D> vertices = {
-                        // 1. [앞면] - Normal: (0, 0, -1)
+                        // 1. 앞면 - 법선: (0, 0, -1)
                         { {-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}, {0.0f, 1.0f} }, // 0
                         { { 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}, {1.0f, 1.0f} }, // 1
                         { { 0.5f,  0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}, {1.0f, 0.0f} }, // 2
                         { {-0.5f,  0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}, {0.0f, 0.0f} }, // 3
 
-                        // 2. [뒷면] - Normal: (0, 0, 1)
+                        // 2. 뒷면 - 법선: (0, 0, 1)
                         { { 0.5f, -0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f} },  // 4
                         { {-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f} },  // 5
                         { {-0.5f,  0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f} },  // 6
                         { { 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f} },  // 7
 
-                        // 3. [윗면] - Normal: (0, 1, 0)
+                        // 3. 윗면 - 법선: (0, 1, 0)
                         { {-0.5f,  0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f} },  // 8
                         { { 0.5f,  0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f} },  // 9
                         { { 0.5f,  0.5f,  0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f} },  // 10
                         { {-0.5f,  0.5f,  0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f} },  // 11
 
-                        // 4. [아랫면] - Normal: (0, -1, 0)
+                        // 4. 아랫면 - 법선: (0, -1, 0)
                         { {-0.5f, -0.5f,  0.5f}, {0.0f, -1.0f, 0.0f}, {0.0f, 1.0f} }, // 12
                         { { 0.5f, -0.5f,  0.5f}, {0.0f, -1.0f, 0.0f}, {1.0f, 1.0f} }, // 13
                         { { 0.5f, -0.5f, -0.5f}, {0.0f, -1.0f, 0.0f}, {1.0f, 0.0f} }, // 14
                         { {-0.5f, -0.5f, -0.5f}, {0.0f, -1.0f, 0.0f}, {0.0f, 0.0f} }, // 15
 
-                        // 5. [우측면] - Normal: (1, 0, 0)
+                        // 5. 우측면 - 법선: (1, 0, 0)
                         { { 0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f} },  // 16
                         { { 0.5f, -0.5f,  0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 1.0f} },  // 17
                         { { 0.5f,  0.5f,  0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f} },  // 18
                         { { 0.5f,  0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f} },  // 19
 
-                        // 6. [좌측면] - Normal: (-1, 0, 0)
+                        // 6. 좌측면 - 법선: (-1, 0, 0)
                         { {-0.5f, -0.5f,  0.5f}, {-1.0f, 0.0f, 0.0f}, {0.0f, 1.0f} }, // 20
                         { {-0.5f, -0.5f, -0.5f}, {-1.0f, 0.0f, 0.0f}, {1.0f, 1.0f} }, // 21
                         { {-0.5f,  0.5f, -0.5f}, {-1.0f, 0.0f, 0.0f}, {1.0f, 0.0f} }, // 22
@@ -128,41 +128,33 @@ namespace CCEngine
         std::vector<Vertex3D> vertices;
         std::vector<uint32_t> indices;
 
-        // 1. 정점(Vertex) 생성
+        // 1. 정점 생성
         for (uint32_t i = 0; i <= radialSegments; ++i)
         {
             float u = (float)i / radialSegments * DirectX::XM_2PI; // 큰 원의 각도
-            float cosU = cos(u);
-            float sinU = sin(u);
+            float cosU = cosf(u);
+            float sinU = sinf(u);
 
             for (uint32_t j = 0; j <= tubularSegments; ++j)
             {
                 float v = (float)j / tubularSegments * DirectX::XM_2PI; // 튜브 단면의 각도
-                float cosV = cos(v);
-                float sinV = sin(v);
+                float cosV = cosf(v);
+                float sinV = sinf(v);
 
                 DirectX::XMFLOAT3 pos;
                 pos.x = (majorRadius + minorRadius * cosV) * cosU;
                 pos.y = (majorRadius + minorRadius * cosV) * sinU;
                 pos.z = minorRadius * sinV;
 
-                // 노멀(법선) 벡터도 필요하다면 아래처럼 계산합니다.
-                /*
-                DirectX::XMFLOAT3 center = { majorRadius * cosU, majorRadius * sinU, 0.0f };
-                DirectX::XMFLOAT3 normal = { pos.x - center.x, pos.y - center.y, pos.z - center.z };
-                // normal 정규화(Normalize) 후 Vertex에 삽입...
-                */
-
+                // 법선이 필요하면 중심점에서 정점 방향으로 계산합니다.
                 Vertex3D vertex;
                 vertex.Position = pos;
-                // vertex.Normal = ...; 
-                // vertex.TexCoord = ...;
 
                 vertices.push_back(vertex);
             }
         }
 
-        // 2. 인덱스(Index) 생성 (삼각형 폴리곤 연결)
+        // 2. 삼각형 인덱스 생성
         for (uint32_t i = 0; i < radialSegments; ++i)
         {
             for (uint32_t j = 0; j < tubularSegments; ++j)

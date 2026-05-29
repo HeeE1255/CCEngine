@@ -15,7 +15,7 @@ namespace CCEngine
         virtual void Unbind(uint32_t slot = 0) const override;
 
         virtual void SetData(void* data, uint32_t size) override;
-        virtual void* GetRendererID() const override { return (void*)(uintptr_t)m_RendererID; }
+        virtual RendererHandle GetRendererID() const override { return (RendererHandle)(uintptr_t)m_RendererID; }
 
     private:
         std::string m_Path;

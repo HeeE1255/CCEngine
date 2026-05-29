@@ -20,6 +20,8 @@ namespace CCEngine
 
             // 상태 설정
             void SetSelected(bool selected) { m_IsSelected = selected; }
+            void SetEntityID(uint32_t id) { m_EntityID = id; }
+            uint32_t GetEntityID() const { return m_EntityID; }
             void SetExpanded(bool expanded) { m_IsExpanded = expanded; }
             void SetHasChildren(bool has) { m_HasChildren = has; }
             bool GetExpanded() const { return m_IsExpanded; }
@@ -30,6 +32,7 @@ namespace CCEngine
 
         private:
             std::string m_Text;
+            uint32_t m_EntityID = 0;
             bool m_IsSelected = false;
             bool m_IsExpanded = false;
             bool m_HasChildren = false;

@@ -9,7 +9,7 @@ namespace CCEngine
     namespace UI 
     {
 
-        ImageWidget::ImageWidget(const std::string& name, void* textureID)
+        ImageWidget::ImageWidget(const std::string& name, RendererHandle textureID)
             : Widget(name), m_TextureID(textureID)
         {
         }

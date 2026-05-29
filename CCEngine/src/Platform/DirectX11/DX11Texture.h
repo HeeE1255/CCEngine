@@ -18,7 +18,7 @@ namespace CCEngine
 
         // 구현할 가상 함수들
         virtual void SetData(void* data, uint32_t size) override;
-        virtual void* GetRendererID() const override { return (void*)m_TextureView; }
+        virtual RendererHandle GetRendererID() const override { return (RendererHandle)m_TextureView; }
 
     private:
         std::string m_Path;

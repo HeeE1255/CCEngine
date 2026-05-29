@@ -25,6 +25,7 @@ namespace CCEngine
 
             virtual bool OnEvent(Event& e) override;
 
+
         private:
             // 트리 구조를 만들 때 부모 위젯을 인자로 받습니다.
             void BuildEntityTree(Entity entity, int depth, Widget* parentWidget);

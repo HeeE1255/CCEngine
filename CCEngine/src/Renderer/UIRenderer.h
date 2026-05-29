@@ -1,8 +1,8 @@
 #pragma once
 #include "Core.h"
-#include "Renderer/Texture.h"
-#include "UI/Widget.h"
+#include "Renderer/RendererHandle.h"
 #include <DirectXMath.h>
+#include <string>
 
 namespace CCEngine
 {
@@ -14,26 +14,35 @@ namespace CCEngine
         static void Init();
         static void Shutdown();
 
-        // 창의 너비와 높이를 받아서 픽셀 1:1 매칭 행렬을 만듭니다.
         static void BeginUI(uint32_t windowWidth, uint32_t windowHeight);
         static void EndUI();
 
-        // UI 렌더링 함수 (기준점: 왼쪽 위 Top-Left)
+        // ★ 클리핑 제어
+        static void SetClipRect(float x, float y, float w, float h);
+        static void ClearClipRect();
+
+        // 사각형 그리기
         static void DrawRectFilled(float x, float y, float width, float height, const DirectX::XMFLOAT4& color, int entityID = -1);
-
-        // 텍스처를 받는 함수 (void* 를 Texture2D* 로 캐스팅해서 사용)
-        static void DrawImage(float x, float y, float width, float height, void* textureID, const DirectX::XMFLOAT4& tintColor = { 1.0f, 1.0f, 1.0f, 1.0f }, int entityID = -1);
-
-		// 텍스트 렌더링 함수 (Font* 타입의 폰트와 텍스트 문자열을 받아서 그립니다)
-        static void DrawString(const std::string& text, Font* font, float x, float y, const DirectX::XMFLOAT4& color);
-        static void DrawString(const std::string& text, float x, float y, const DirectX::XMFLOAT4& color);
-
         static void DrawRect(float x, float y, float width, float height, const DirectX::XMFLOAT4& color, int entityID = -1);
         static void DrawRect(const DirectX::XMFLOAT2& position, const DirectX::XMFLOAT2& size, const DirectX::XMFLOAT4& color, int entityID = -1);
+
+        // 이미지 그리기
+        static void DrawImage(float x, float y, float width, float height, RendererHandle textureID, const DirectX::XMFLOAT4& tintColor = { 1.0f, 1.0f, 1.0f, 1.0f }, int entityID = -1);
+
+        // 텍스트 그리기
+        static void DrawString(const std::string& text, Font* font, float x, float y, const DirectX::XMFLOAT4& color);
+        static void DrawString(const std::string& text, float x, float y, const DirectX::XMFLOAT4& color);
 
         static Font* GetDefaultFont() { return s_DefaultFont; }
 
     private:
-        static Font* s_DefaultFont; // UIRenderer가 관리할 기본 폰트
+        static Font* s_DefaultFont;
+
+        // ★ 클리핑 상태 변수 (DLL 에러 방지를 위해 개별 선언)
+        static bool s_ClipEnabled;
+        static float s_ClipX;
+        static float s_ClipY;
+        static float s_ClipW;
+        static float s_ClipH;
     };
 }

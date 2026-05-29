@@ -206,9 +206,11 @@
     <ClInclude Include="src\Renderer\UIRenderer.h" />
     <ClInclude Include="src\Scene\Components.h" />
     <ClInclude Include="src\Scene\Entity.h" />
+    <ClInclude Include="src\Scene\PrefabSerializer.h" />
     <ClInclude Include="src\Scene\Scene.h" />
     <ClInclude Include="src\Scene\SceneSerializer.h" />
     <ClInclude Include="src\Scene\ScriptableEntity.h" />
+    <ClInclude Include="src\UI\AssetBrowserPanel.h" />
     <ClInclude Include="src\UI\Button.h" />
     <ClInclude Include="src\UI\DragFloat.h" />
     <ClInclude Include="src\UI\DragFloat3.h" />
@@ -268,8 +270,10 @@
     <ClCompile Include="src\Renderer\Texture.cpp" />
     <ClCompile Include="src\Renderer\UIRenderer.cpp" />
     <ClCompile Include="src\Scene\Entity.cpp" />
+    <ClCompile Include="src\Scene\PrefabSerializer.cpp" />
     <ClCompile Include="src\Scene\Scene.cpp" />
     <ClCompile Include="src\Scene\SceneSerializer.cpp" />
+    <ClCompile Include="src\UI\AssetBrowserPanel.cpp" />
     <ClCompile Include="src\UI\Button.cpp" />
     <ClCompile Include="src\UI\DragFloat.cpp" />
     <ClCompile Include="src\UI\DragFloat3.cpp" />

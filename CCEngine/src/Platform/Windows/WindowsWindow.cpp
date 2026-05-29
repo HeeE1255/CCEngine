@@ -97,13 +97,14 @@ namespace CCEngine
 
 				CCEngine::MouseButtonReleasedEvent e(0, mouseX, mouseY);
 
-				// ★ 1. Application 먼저!
-				if (CCEngine::Application::Get())
+				bool isMainWindow = (CCEngine::Application::Get() &&
+					window == &(CCEngine::Application::Get()->GetWindow()));
+
+				if (isMainWindow)
 				{
 					CCEngine::Application::Get()->OnEvent(e);
 				}
 
-				// ★ 2. !e.Handled 체크 필수!
 				if (!e.Handled && window->GetRootUI())
 				{
 					window->GetRootUI()->OnEvent(e);
@@ -124,13 +125,14 @@ namespace CCEngine
 
 				CCEngine::MouseButtonPressedEvent e(0, mouseX, mouseY);
 
-				// ★ 1. 무조건 Application(에디터/기즈모) 먼저!
-				if (CCEngine::Application::Get())
+				bool isMainWindow = (CCEngine::Application::Get() &&
+					window == &(CCEngine::Application::Get()->GetWindow()));
+
+				if (isMainWindow)
 				{
 					CCEngine::Application::Get()->OnEvent(e);
 				}
 
-				// ★ 2. 기즈모가 안 먹었을 때만(!e.Handled) UI로!
 				if (!e.Handled && window->GetRootUI())
 				{
 					window->GetRootUI()->OnEvent(e);
@@ -149,13 +151,14 @@ namespace CCEngine
 
 				CCEngine::MouseMovedEvent e(mouseX, mouseY);
 
-				// ★ 1. Application 먼저!
-				if (CCEngine::Application::Get())
+				bool isMainWindow = (CCEngine::Application::Get() &&
+					window == &(CCEngine::Application::Get()->GetWindow()));
+
+				if (isMainWindow)
 				{
 					CCEngine::Application::Get()->OnEvent(e);
 				}
 
-				// ★ 2. !e.Handled 체크 필수!
 				if (!e.Handled && window->GetRootUI())
 				{
 					window->GetRootUI()->OnEvent(e);
@@ -228,13 +231,14 @@ namespace CCEngine
 				// X축 휠(틸트)은 지금 사용하지 않으므로 0.0f로 줍니다.
 				CCEngine::MouseScrolledEvent e(0.0f, yOffset);
 
-				// ★ 1. Application 먼저! (기존 패턴 유지)
-				if (CCEngine::Application::Get())
+				bool isMainWindow = (CCEngine::Application::Get() &&
+					window == &(CCEngine::Application::Get()->GetWindow()));
+
+				if (isMainWindow)
 				{
 					CCEngine::Application::Get()->OnEvent(e);
 				}
 
-				// ★ 2. !e.Handled 체크 필수! (기존 패턴 유지)
 				if (!e.Handled && window->GetRootUI())
 				{
 					window->GetRootUI()->OnEvent(e);

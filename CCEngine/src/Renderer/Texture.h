@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include "Core.h"
+#include "Renderer/RendererHandle.h"
 
 namespace CCEngine
 {
@@ -14,7 +15,7 @@ namespace CCEngine
 
         // 데이터 덮어쓰기 및 ImGui 출력을 위한 함수
         virtual void SetData(void* data, uint32_t size) = 0;
-        virtual void* GetRendererID() const = 0;
+        virtual RendererHandle GetRendererID() const = 0;
 
         // 기존 파일 경로 로드 함수
         static Texture2D* Create(const std::string& path);

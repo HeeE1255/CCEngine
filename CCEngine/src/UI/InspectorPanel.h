@@ -25,6 +25,7 @@ namespace CCEngine
         private:
             Entity m_SelectedEntity;
             ScrollState m_ScrollState;
+
         };
 
     }

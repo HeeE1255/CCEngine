@@ -7,10 +7,10 @@
 #include "UI/Widget.h"
 #include <iostream>
 
-// RHI: 각 API별 ImGui 백엔드 헤더
+// RHI별 ImGui 백엔드 헤더
 // #include "backends/imgui_impl_opengl3.h"
 
-// RHI: 각 API별 컨텍스트 헤더
+// RHI별 컨텍스트 헤더
 //#include "Platform/DirectX11/DX11Context.h"
 // #include "Platform/OpenGL/OpenGLContext.h"
 
@@ -21,7 +21,7 @@ namespace CCEngine
 
     Application::Application(const std::string& commandLineArg)
     {
-        // 1. 실행 시점에 명령줄 인수를 분석하여 API 결정 (RHI 런타임 스위칭)
+        // 실행 시점의 명령줄 인수로 렌더링 API를 선택합니다.
         if (commandLineArg == "-opengl")
             RendererAPI::SetAPI(RendererAPI::API::OpenGL);
         else if (commandLineArg == "-vulkan")
@@ -34,7 +34,7 @@ namespace CCEngine
 
         s_Instance = this;
 
-        // 이제 Window::Create를 호출하면 내부적으로 WindowsWindow가 생성
+        // 플랫폼별 Window 구현은 Window::Create 내부에서 선택됩니다.
         m_Window = std::unique_ptr<Window>(Window::Create());
     }
 
@@ -59,12 +59,11 @@ namespace CCEngine
     {
         WindowProps props(title, width, height);
 
-        // 1. 추상화된 팩토리 함수로 창 생성
+        // 추상화된 팩토리 함수로 창을 생성합니다.
         Window* newWindow = Window::Create(props);
         m_SecondaryWindows.push_back(newWindow);
 
-        // 2. [RHI 추상화 준수] 특정 API나 OS API 호출 없이 인터페이스만 사용!
-        // 메인 윈도우에게 현재 마우스 위치를 물어보고, 새 윈도우를 그 위치로 이동시킵니다.
+        // 메인 윈도우의 화면 좌표를 기준으로 새 창의 초기 위치를 정합니다.
         auto [mouseX, mouseY] = m_Window->GetScreenMousePosition();
 
         newWindow->SetPosition(mouseX - (width / 2), mouseY - 15);
@@ -89,7 +88,7 @@ namespace CCEngine
 
     void Application::OnUpdate()
     {
-        // Sandbox의 기존 OnUpdate (Sandbox가 Layer로 완전히 전환되면 삭제될 예정)
+        // Sandbox가 레이어로 완전히 전환되기 전까지 유지되는 업데이트 경로입니다.
     }
 
     void Application::Run()
@@ -99,7 +98,7 @@ namespace CCEngine
         while (!m_Window->ShouldClose()) // 게임 루프
         {
             // =========================================================
-            // 1. OS 메시지 처리 (모든 창 숨쉬기)
+            // 1. 모든 창의 OS 메시지를 처리합니다.
             // =========================================================
             m_Window->OnUpdate(); // 메인 창 메시지 펌프
 
@@ -120,7 +119,7 @@ namespace CCEngine
             }
 
             // =========================================================
-            // 2. 엔진 로직 업데이트 (기존 Sandbox 및 레이어)
+            // 2. 엔진 로직과 레이어를 업데이트합니다.
             // =========================================================
             OnUpdate();
 
@@ -130,7 +129,7 @@ namespace CCEngine
             }
 
             // =========================================================
-            // 3. 통합 렌더링 파이프라인 (메인 창 + 서브 창 동등 처리!)
+            // 3. 메인 창과 서브 창을 같은 렌더링 경로에서 처리합니다.
             // =========================================================
 
             // 렌더링할 모든 창을 하나의 리스트로 묶습니다.
@@ -141,45 +140,54 @@ namespace CCEngine
                 allWindows.push_back(secWin);
             }
 
-            // 각 창을 순회하며 독립적인 도화지에 자체 UI를 그립니다.
+            // 각 창의 백버퍼에 해당 창의 UI 트리만 그립니다.
             for (Window* win : allWindows)
             {
                 auto context = win->GetContext();
 
-                if (!context) continue; // 컨텍스트 안정성 검사
+                if (!context) continue; // 컨텍스트가 없는 창은 렌더링하지 않습니다.
 
-                // 1) 렌더링 타겟을 이 윈도우의 스왑체인으로 강제 전환
+                // 현재 렌더링 대상을 이 창의 백버퍼로 전환합니다.
                 context->MakeCurrent();
                 context->BindBackBuffer();
 
-                // 2) 도화지 지우기 
-                // (투명도나 잔상 문제가 생기면 주석을 풀고 Clear를 활성화하세요)
+                // 필요하면 창별 백버퍼를 여기서 지웁니다.
                 // context->Clear(0.15f, 0.15f, 0.15f, 1.0f);
 
-                // 3) 이 창이 가진 고유의 자체 UI 트리 그리기!
-                if (win->GetRootUI() != nullptr)
+                // 이 창이 소유한 UI 트리를 업데이트하고 렌더링합니다.
+                UI::Widget* rootUI = win->GetRootUI();
+                if (rootUI != nullptr)
                 {
-					// UI 트리의 레이아웃을 현재 창 크기에 맞게 업데이트 (재계산)
-                    win->GetRootUI()->UpdateLayout(
+                    rootUI->OnUpdate(0.016f);
+
+                    rootUI = win->GetRootUI();
+                    if (rootUI == nullptr || win->ShouldClose())
+                    {
+                        context->SwapBuffers();
+                        continue;
+                    }
+
+                    // UI 업데이트 중 창이 닫히지 않은 경우에만 레이아웃을 갱신합니다.
+                    rootUI->UpdateLayout(
                         { 0.0f, 0.0f },
                         { (float)win->GetWidth(), (float)win->GetHeight() }
                     );
 
-                    // 현재 창의 크기에 맞춰서 도화지(Ortho 행렬) 세팅
+                    // 현재 창 크기에 맞는 UI 투영 행렬을 설정합니다.
                     UIRenderer::BeginUI(win->GetWidth(), win->GetHeight());
 
-                    // 이 창에 속한 UI만 딱 한 번 그립니다. (이중 루프 제거됨!)
-                    win->GetRootUI()->OnRender();
+                    // 현재 창에 속한 UI만 렌더링합니다.
+                    rootUI->OnRender();
 
-                    // 화면에 진짜로 출력 (DrawIndexed 호출)
+                    // 누적된 UI 드로우 콜을 제출합니다.
                     UIRenderer::EndUI();
                 }
 
-                // 4) 화면에 출력
+                // 백버퍼를 화면에 표시합니다.
                 context->SwapBuffers();
             }
 
-            // 렌더 타겟을 다시 메인 창으로 복구 (안전 장치)
+            // 다음 프레임을 위해 렌더링 컨텍스트를 메인 창으로 되돌립니다.
             if (m_Window->GetContext())
             {
                 m_Window->GetContext()->MakeCurrent();
@@ -193,7 +201,7 @@ namespace CCEngine
 
     void Application::OnEvent(Event& e)
     {
-        // 1. 엔진 코어 수준의 이벤트(창 조절, 닫기)는 여기서 최우선으로 가로채서 처리
+        // 창 크기 변경과 닫기 이벤트는 애플리케이션에서 먼저 처리합니다.
         if (e.GetEventType() == EventType::WindowResize)
         {
             WindowResizeEvent& resizeEvent = static_cast<WindowResizeEvent&>(e);
@@ -205,20 +213,20 @@ namespace CCEngine
                 m_Minimized = false;
                 Renderer::OnWindowResize(resizeEvent.GetWidth(), resizeEvent.GetHeight());
             }
-            // 리사이즈는 UI나 카메라 등 다른 곳도 알아야 하므로 e.Handled = true 로 막지 않음
+            // 리사이즈 이벤트는 UI와 카메라에도 전달되어야 하므로 여기서 소비하지 않습니다.
         }
         else if (e.GetEventType() == EventType::WindowClose)
         {
             // 창 닫기 이벤트가 오면 즉시 게임 루프 종료 플래그 설정
             m_Window->SetShouldClose(true);
-            e.Handled = true; // 처리 완료!
+            e.Handled = true;
         }
 
-        // 2. 코어 이벤트를 뺀 나머지(마우스, 키보드 등)는 레이어 스택(Top-Down)으로 전달!
+        // 나머지 입력 이벤트는 위쪽 레이어부터 전달합니다.
         for (auto it = m_LayerStack.rbegin(); it != m_LayerStack.rend(); ++it)
         {
             if (e.Handled)
-                break; // 위쪽 레이어(ex: EditorLayer, UI)가 이벤트를 먹었다면 아래로 안 내림
+                break; // 위쪽 레이어에서 처리한 이벤트는 아래로 전달하지 않습니다.
 
             (*it)->OnEvent(e);
         }

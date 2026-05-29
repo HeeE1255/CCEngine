@@ -233,15 +233,7 @@ namespace CCEngine
     // ====================================================================
     void Scene::OnUpdate(float deltaTime)
     {
-        // 1. 2D 렌더링
-        auto renderView = m_Registry.view<TransformComponent, SpriteRendererComponent>();
-        renderView.each([](auto entityID, auto& transform, auto& sprite)
-            {
-                DirectX::XMFLOAT2 size = { transform.Scale.x, transform.Scale.y };
-                Renderer2D::DrawQuad(transform.Translation, size, sprite.Color, (int)entityID);
-            });
-
-        // 2. 물리 & 로직 (오직 Play 모드에서만!)
+        // 1. 물리 & 로직 (오직 Play 모드에서만!)
         if (m_State == SceneState::Play)
         {
             if (b2World_IsValid(m_PhysicsWorldId))
@@ -273,7 +265,7 @@ namespace CCEngine
         } 
 
         // =========================================================
-        // 3. 애니메이터 재생 업데이트 
+        // 2. 애니메이터 재생 업데이트 
         // =========================================================
         auto animView = m_Registry.view<AnimatorComponent>();
         animView.each([&](auto entityID, auto& animComp)
@@ -302,6 +294,23 @@ namespace CCEngine
                     animComp.AnimPlayer.Update(deltaTime, model.get(), this);
                 }
             });
+    }
+
+    // ====================================================================
+    // 2D 렌더링
+    // ====================================================================
+    void Scene::OnRender2D(const PerspectiveCamera& camera)
+    {
+        Renderer2D::BeginScene(camera);
+
+        auto renderView = m_Registry.view<TransformComponent, SpriteRendererComponent>();
+        renderView.each([](auto entityID, auto& transform, auto& sprite)
+            {
+                DirectX::XMFLOAT2 size = { transform.Scale.x, transform.Scale.y };
+                Renderer2D::DrawQuad(transform.Translation, size, sprite.Color, (int)entityID);
+            });
+
+        Renderer2D::EndScene();
     }
 
     // ====================================================================
@@ -440,11 +449,11 @@ namespace CCEngine
 
                 if (animatorComp)
                 {
-                    DirectX::XMMATRIX rootWorldTransform = getTransform(entity);
+                    DirectX::XMMATRIX rootWorldTransform = getTransform(rootEntity);
                     auto& animator = animatorComp->AnimPlayer;
 
                     Renderer3D::DrawSkinnedMesh(
-                        rootWorldTransform, // <--- 내 트랜스폼이 아니라 루트 트랜스폼을 넘김!
+                        rootWorldTransform,
                         mesh.MeshData,
                         mesh.AlbedoMap,
                         mesh.BaseColor,

@@ -1,11 +1,8 @@
 #include "Renderer/Renderer2D.h"
 #include "Renderer/Buffer.h"
 #include "Renderer/Shader.h"
-#include "Platform/DirectX11/DX11Context.h"
 #include "Renderer/RenderCommand.h"
 #include "Renderer/Texture.h"
-#include "Renderer/RenderState.h" 
-#include <d3d11.h>
 
 namespace CCEngine
 {
@@ -34,8 +31,8 @@ namespace CCEngine
         QuadVertex* QuadVertexBufferBase = nullptr;
         QuadVertex* QuadVertexBufferPtr = nullptr;
 
-        // ★ [핵심] Texture2D* 배열에서 void*(SRV) 배열로 변경!
-        void* TextureSlots[MaxTextureSlots];
+        // 렌더러별 텍스처 핸들을 슬롯 단위로 보관합니다.
+        RendererHandle TextureSlots[MaxTextureSlots];
         uint32_t TextureSlotIndex = 0;
     };
 
@@ -99,11 +96,8 @@ namespace CCEngine
         s_Data.CameraConstantBuffer->SetData(&viewProj, sizeof(DirectX::XMMATRIX));
         s_Data.CameraConstantBuffer->Bind(0);
 
-        auto context = DX11Context::Get()->GetDeviceContext();
-        float blendFactor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-
-        context->OMSetBlendState(RenderState::MRTPicking, blendFactor, 0xffffffff);
-        context->RSSetState(RenderState::CullNone);
+        RenderCommand::SetBlendMode(RendererAPI::BlendMode::MRTPicking);
+        RenderCommand::SetCullMode(RendererAPI::CullMode::None);
 
         StartBatch();
     }
@@ -116,11 +110,8 @@ namespace CCEngine
         s_Data.CameraConstantBuffer->SetData(&transposed, sizeof(DirectX::XMMATRIX));
         s_Data.CameraConstantBuffer->Bind(0);
 
-        auto context = DX11Context::Get()->GetDeviceContext();
-        float blendFactor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-
-        context->OMSetBlendState(RenderState::Transparent, blendFactor, 0xffffffff);
-        context->RSSetState(RenderState::CullNone);
+        RenderCommand::SetBlendMode(RendererAPI::BlendMode::Transparent);
+        RenderCommand::SetCullMode(RendererAPI::CullMode::None);
 
         StartBatch();
     }
@@ -144,17 +135,11 @@ namespace CCEngine
         uint32_t dataSize = (uint32_t)((uint8_t*)s_Data.QuadVertexBufferPtr - (uint8_t*)s_Data.QuadVertexBufferBase);
         s_Data.QuadVertexBuffer->SetData(s_Data.QuadVertexBufferBase, dataSize);
 
-        // =====================================================================
-        // ★ [핵심] void* (SRV) 배열을 DX11 파이프라인에 직접 장착합니다.
-        // Texture2D 클래스의 Bind()에 의존하지 않으므로 구조가 훨씬 안전해집니다.
-        // =====================================================================
-        auto context = DX11Context::Get()->GetDeviceContext();
         for (uint32_t i = 0; i < s_Data.TextureSlotIndex; i++)
         {
             if (s_Data.TextureSlots[i])
             {
-                ID3D11ShaderResourceView* srv = static_cast<ID3D11ShaderResourceView*>(s_Data.TextureSlots[i]);
-                context->PSSetShaderResources(i, 1, &srv);
+                RenderCommand::BindTexture(i, s_Data.TextureSlots[i]);
             }
         }
 
@@ -163,8 +148,7 @@ namespace CCEngine
         s_Data.QuadVertexBuffer->Bind();
         s_Data.QuadIndexBuffer->Bind();
 
-        context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        context->DrawIndexed(s_Data.QuadIndexCount, 0, 0);
+        RenderCommand::DrawIndexed(s_Data.QuadIndexCount);
     }
 
     // =========================================================================
@@ -200,15 +184,15 @@ namespace CCEngine
     }
 
     // =========================================================================
-    // 2. ★ void* (SRV) 기반 메인 사각형 그리기 (새로 추가됨)
+    // 2. 렌더러 핸들 기반 텍스처 사각형 그리기
     // =========================================================================
-    void Renderer2D::DrawQuad(const DirectX::XMMATRIX& transform, void* textureID, const DirectX::XMFLOAT4& tintColor, int entityID)
+    void Renderer2D::DrawQuad(const DirectX::XMMATRIX& transform, RendererHandle textureID, const DirectX::XMFLOAT4& tintColor, int entityID)
     {
         DirectX::XMFLOAT2 texCoords[4] = { { 0.0f, 0.0f }, { 1.0f, 0.0f }, { 1.0f, 1.0f }, { 0.0f, 1.0f } };
         DrawQuad(transform, textureID, texCoords, tintColor, entityID);
     }
 
-    void Renderer2D::DrawQuad(const DirectX::XMMATRIX& transform, void* textureID, const DirectX::XMFLOAT2* texCoords, const DirectX::XMFLOAT4& tintColor, int entityID)
+    void Renderer2D::DrawQuad(const DirectX::XMMATRIX& transform, RendererHandle textureID, const DirectX::XMFLOAT2* texCoords, const DirectX::XMFLOAT4& tintColor, int entityID)
     {
         if (s_Data.QuadIndexCount >= Renderer2DData::MaxIndices || s_Data.TextureSlotIndex >= Renderer2DData::MaxTextureSlots)
         {
@@ -253,22 +237,22 @@ namespace CCEngine
     }
 
     // =========================================================================
-    // 3. Texture2D* 래퍼 함수 (void* 메인 함수로 포워딩)
-    // (이 부분이 있으므로 기존에 Texture2D를 넘기던 폰트, 스프라이트 코드도 그대로 작동합니다)
+    // 3. Texture2D 래퍼 함수
+    // 기존 Texture2D 호출 경로를 렌더러 핸들 기반 함수로 전달합니다.
     // =========================================================================
     void Renderer2D::DrawQuad(const DirectX::XMMATRIX& transform, Texture2D* texture, const DirectX::XMFLOAT4& tintColor, int entityID)
     {
-        void* srv = texture ? texture->GetRendererID() : nullptr;
+        RendererHandle srv = texture ? texture->GetRendererID() : nullptr;
         DrawQuad(transform, srv, tintColor, entityID);
     }
 
     void Renderer2D::DrawQuad(const DirectX::XMMATRIX& transform, Texture2D* texture, const DirectX::XMFLOAT2* texCoords, const DirectX::XMFLOAT4& tintColor, int entityID)
     {
-        void* srv = texture ? texture->GetRendererID() : nullptr;
+        RendererHandle srv = texture ? texture->GetRendererID() : nullptr;
         DrawQuad(transform, srv, texCoords, tintColor, entityID);
     }
 
-    // (기타 Position, Size를 받는 Wrapper 함수들 - 내부적으로 transform 행렬을 만들어 위 핵심 함수 호출)
+    // 위치와 크기를 받는 래퍼 함수들은 내부에서 변환 행렬을 구성합니다.
     void Renderer2D::DrawQuad(const DirectX::XMFLOAT2& position, const DirectX::XMFLOAT2& size, const DirectX::XMFLOAT4& color, int entityID)
     {
         DrawQuad({ position.x, position.y, 0.0f }, size, color, entityID);

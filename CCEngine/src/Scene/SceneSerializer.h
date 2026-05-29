@@ -1,5 +1,6 @@
 #pragma once
 #include "Core.h"
+#include "Scene/Entity.h"
 #include "Scene/Scene.h"
 #include <string>
 #include <memory>
@@ -17,6 +18,7 @@ namespace CCEngine
 
         // JSON 에서 씬 복원
         bool Deserialize(const std::string& filepath);
+        Entity DeserializeAppend(const std::string& filepath);
 
     private:
         Scene* m_Scene;

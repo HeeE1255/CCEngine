@@ -19,7 +19,7 @@ namespace CCEngine {
         // ====================================================================
         // index를 받는 MRT(다중 렌더 타겟)
         // ====================================================================
-        virtual void* GetColorAttachmentRendererID(uint32_t index = 0) const override
+        virtual RendererHandle GetColorAttachmentRendererID(uint32_t index = 0) const override
         {
             // 배열 범위 초과를 막기 위한 안전 검사
             if (index < m_ColorAttachments.size())

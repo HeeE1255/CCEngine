@@ -62,6 +62,7 @@ namespace CCEngine
 
         operator uint32_t() const { return (uint32_t)m_EntityHandle; } // 엔티티 핸들을 32비트 정수로 변환 (디버깅이나 ImGui 트리 노드 ID로 사용하기 편하게)
         operator entt::entity() const { return m_EntityHandle; } // EnTT의 entity 타입으로도 변환 가능하게
+        Scene* GetScene() const { return m_Scene; }
 
     private:
         entt::entity m_EntityHandle{ entt::null }; // EnTT가 발급하는 고유 ID (실제 엔티티의 정체성)

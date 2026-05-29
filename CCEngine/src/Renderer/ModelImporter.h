@@ -16,7 +16,7 @@ namespace CCEngine {
 
     private:
         // 내부에서 재귀적으로 트리를 구성하는 헬퍼 함수
-        static void BuildTree(Scene* scene, const ModelNode& node, entt::entity parentHandle, bool isRootNode, DirectX::XMMATRIX correctionMat);
+        static void BuildTree(Scene* scene, const ModelNode& node, entt::entity parentHandle, bool isRootNode);
     };
 
 }

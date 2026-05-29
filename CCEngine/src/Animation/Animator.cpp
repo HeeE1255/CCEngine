@@ -69,8 +69,8 @@ namespace CCEngine
         if (scene && scene->mAnimations)
         {
             aiAnimation* anim = scene->mAnimations[0]; // 0번째 애니메이션 로드
-            m_Duration = anim->mDuration;
-            m_TicksPerSecond = anim->mTicksPerSecond != 0.0 ? anim->mTicksPerSecond : 25.0f;
+            m_Duration = static_cast<float>(anim->mDuration);
+            m_TicksPerSecond = anim->mTicksPerSecond != 0.0 ? static_cast<float>(anim->mTicksPerSecond) : 25.0f;
 
             for (unsigned int i = 0; i < anim->mNumChannels; ++i)
             {
@@ -81,21 +81,21 @@ namespace CCEngine
                 for (unsigned int p = 0; p < channel->mNumPositionKeys; ++p)
                 {
                     aiVector3D pos = channel->mPositionKeys[p].mValue;
-                    float time = channel->mPositionKeys[p].mTime;
+                    float time = static_cast<float>(channel->mPositionKeys[p].mTime);
                     boneChannel.PositionKeys.push_back({ time, {pos.x, pos.y, pos.z} });
                 }
 
                 for (unsigned int r = 0; r < channel->mNumRotationKeys; ++r)
                 {
                     aiQuaternion rot = channel->mRotationKeys[r].mValue;
-                    float time = channel->mRotationKeys[r].mTime;
+                    float time = static_cast<float>(channel->mRotationKeys[r].mTime);
                     boneChannel.RotationKeys.push_back({ time, {rot.x, rot.y, rot.z, rot.w} });
                 }
 
                 for (unsigned int s = 0; s < channel->mNumScalingKeys; ++s)
                 {
                     aiVector3D scale = channel->mScalingKeys[s].mValue;
-                    float time = channel->mScalingKeys[s].mTime;
+                    float time = static_cast<float>(channel->mScalingKeys[s].mTime);
                     boneChannel.ScaleKeys.push_back({ time, {scale.x, scale.y, scale.z} });
                 }
 
@@ -182,12 +182,12 @@ namespace CCEngine
         std::string nodeName = node.Name;
         DirectX::XMMATRIX nodeTransform;
 
-        // 1. [안전 장치] m_CurrentClip이 nullptr인지 반드시 먼저 확인!
+        // 현재 클립이 없으면 원본 노드 또는 씬 엔티티 트랜스폼을 사용합니다.
         BoneAnimChannel* channel = m_CurrentClip ? m_CurrentClip->GetBoneChannel(nodeName) : nullptr;
 
         if (channel)
         {
-            // 2-A. 애니메이션 재생 중: 키프레임 데이터 사용
+            // 애니메이션 재생 중에는 키프레임 데이터를 사용합니다.
             DirectX::XMFLOAT3 pos, scale;
             DirectX::XMFLOAT4 rot;
             channel->UpdateLocalTransform(m_CurrentTime, pos, rot, scale);
@@ -196,7 +196,7 @@ namespace CCEngine
         }
         else
         {
-            // 2-B. 애니메이션이 없을 때: 씬에서 엔티티 트랜스폼 훔쳐오기!
+            // 애니메이션 채널이 없으면 씬 엔티티 트랜스폼을 우선 사용합니다.
             Entity entity = scene ? scene->FindEntityByName(nodeName) : Entity{};
 
             if (entity)
@@ -212,22 +212,22 @@ namespace CCEngine
             }
         }
 
-        // 3. 부모 행렬과 곱해서 월드 행렬 완성
+        // 부모 행렬과 결합해 노드의 월드 행렬을 계산합니다.
         DirectX::XMMATRIX globalTransform = nodeTransform * parentTransform;
         m_GlobalBoneMatrices[nodeName] = globalTransform;
 
-        // 4. 이 노드가 뼈(Bone)라면, 최종 행렬 저장!
+        // 뼈 노드라면 스키닝에 사용할 최종 행렬을 저장합니다.
         auto& boneInfoMap = model->GetBoneInfoMap();
         if (boneInfoMap.find(nodeName) != boneInfoMap.end())
         {
             int index = boneInfoMap[nodeName].id;
             DirectX::XMMATRIX offset = boneInfoMap[nodeName].offset;
 
-            // Final Matrix = Offset Matrix * Global Transform
+            // 최종 행렬은 오프셋 행렬과 월드 행렬의 곱입니다.
             m_FinalBoneMatrices[index] = offset * globalTransform;
         }
 
-        // 5. 자식들도 똑같이 계산
+        // 자식 노드도 같은 규칙으로 재귀 계산합니다.
         for (const auto& child : node.Children)
         {
             CalculateBoneTransform(child, globalTransform, model, scene);

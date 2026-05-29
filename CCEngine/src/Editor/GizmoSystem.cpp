@@ -5,7 +5,56 @@
 #include "Renderer/MeshFactory.h"
 #include "Utils/MathUtils.h"
 
-        namespace CCEngine {
+namespace CCEngine {
+    namespace
+    {
+        DirectX::XMMATRIX GetLocalTransform(Entity entity)
+        {
+            auto& tc = entity.GetComponent<TransformComponent>();
+            return DirectX::XMMatrixScaling(tc.Scale.x, tc.Scale.y, tc.Scale.z) *
+                DirectX::XMMatrixRotationQuaternion(DirectX::XMLoadFloat4(&tc.QuaternionRotation)) *
+                DirectX::XMMatrixTranslation(tc.Translation.x, tc.Translation.y, tc.Translation.z);
+        }
+
+        DirectX::XMMATRIX GetWorldTransform(Entity entity)
+        {
+            DirectX::XMMATRIX transform = GetLocalTransform(entity);
+
+            if (entity.HasComponent<RelationshipComponent>())
+            {
+                entt::entity parentID = entity.GetComponent<RelationshipComponent>().Parent;
+                if (parentID != entt::null)
+                {
+                    Entity parent{ parentID, entity.GetScene() };
+                    transform = transform * GetWorldTransform(parent);
+                }
+            }
+
+            return transform;
+        }
+
+        DirectX::XMFLOAT3 GetWorldPosition(Entity entity)
+        {
+            DirectX::XMFLOAT3 position;
+            DirectX::XMStoreFloat3(&position, GetWorldTransform(entity).r[3]);
+            return position;
+        }
+
+        DirectX::XMMATRIX GetParentWorldTransform(Entity entity)
+        {
+            if (entity.HasComponent<RelationshipComponent>())
+            {
+                entt::entity parentID = entity.GetComponent<RelationshipComponent>().Parent;
+                if (parentID != entt::null)
+                {
+                    return GetWorldTransform(Entity{ parentID, entity.GetScene() });
+                }
+            }
+
+            return DirectX::XMMatrixIdentity();
+        }
+    }
+
     void GizmoSystem::Init()
     {
         m_GizmoShader.reset(Shader::Create("assets/shaders/GizmoShader.hlsl"));
@@ -17,7 +66,9 @@
         if (!selectedEntity.HasComponent<TransformComponent>()) return;
 
         auto& tc = selectedEntity.GetComponent<TransformComponent>();
-        DirectX::XMVECTOR objPos = DirectX::XMLoadFloat3(&tc.Translation);
+        DirectX::XMMATRIX worldTransform = GetWorldTransform(selectedEntity);
+        DirectX::XMFLOAT3 worldPosition = GetWorldPosition(selectedEntity);
+        DirectX::XMVECTOR objPos = DirectX::XMLoadFloat3(&worldPosition);
 
         // =========================================================
         // ★ 1. 거리 비례 스케일 유지 (항상 같은 크기/굵기로 보임)
@@ -37,11 +88,17 @@
         DirectX::XMMATRIX rotationMat = DirectX::XMMatrixIdentity();
         if (m_Space == GizmoSpace::Local)
         {
-            rotationMat = DirectX::XMMatrixRotationQuaternion(DirectX::XMLoadFloat4(&tc.QuaternionRotation));
+            DirectX::XMVECTOR scale;
+            DirectX::XMVECTOR rotation;
+            DirectX::XMVECTOR translation;
+            if (DirectX::XMMatrixDecompose(&scale, &rotation, &translation, worldTransform))
+            {
+                rotationMat = DirectX::XMMatrixRotationQuaternion(rotation);
+            }
         }
 
         // 최종 기즈모의 기준 트랜스폼 (오브젝트 위치 + 거리 비례 스케일 + 회전)
-        DirectX::XMMATRIX baseTransform = scaleMat * rotationMat * DirectX::XMMatrixTranslation(tc.Translation.x, tc.Translation.y, tc.Translation.z);
+        DirectX::XMMATRIX baseTransform = scaleMat * rotationMat * DirectX::XMMatrixTranslation(worldPosition.x, worldPosition.y, worldPosition.z);
 
         // =========================================================
         // ★ 2. 그림자 끄기 (Unlit) & Depth 무시
@@ -115,6 +172,8 @@
         if (!selectedEntity.HasComponent<TransformComponent>()) return false;
 
         auto& tc = selectedEntity.GetComponent<TransformComponent>();
+        DirectX::XMMATRIX worldTransform = GetWorldTransform(selectedEntity);
+        DirectX::XMFLOAT3 worldPosition = GetWorldPosition(selectedEntity);
 
         bool isLocal = (m_Space == GizmoSpace::Local) || (m_Mode == GizmoMode::Scale);
         DirectX::XMFLOAT3 localAxes[3] = { {1,0,0}, {0,1,0}, {0,0,1} };
@@ -122,7 +181,13 @@
 
         DirectX::XMMATRIX rotMat = DirectX::XMMatrixIdentity();
         if (isLocal) {
-            rotMat = DirectX::XMMatrixRotationQuaternion(DirectX::XMLoadFloat4(&tc.QuaternionRotation));
+            DirectX::XMVECTOR scale;
+            DirectX::XMVECTOR rotation;
+            DirectX::XMVECTOR translation;
+            if (DirectX::XMMatrixDecompose(&scale, &rotation, &translation, worldTransform))
+            {
+                rotMat = DirectX::XMMatrixRotationQuaternion(rotation);
+            }
         }
 
         for (int i = 0; i < 3; i++) {
@@ -143,7 +208,7 @@
             Math::Ray mouseRay = Math::MathUtils::ScreenPosToWorldRay(mouseX, mouseY, viewportWidth, viewportHeight, viewMatrix, projMatrix);
 
             DirectX::XMVECTOR camPos = DirectX::XMMatrixInverse(nullptr, viewMatrix).r[3];
-            float distToCam = DirectX::XMVectorGetX(DirectX::XMVector3Length(DirectX::XMVectorSubtract(camPos, DirectX::XMLoadFloat3(&tc.Translation))));
+            float distToCam = DirectX::XMVectorGetX(DirectX::XMVector3Length(DirectX::XMVectorSubtract(camPos, DirectX::XMLoadFloat3(&worldPosition))));
             float dynamicThickness = distToCam * 0.1f;
             float dynamicLength = distToCam * 0.2f;
 
@@ -154,7 +219,7 @@
             {
                 for (int i = 0; i < 3; i++)
                 {
-                    Math::Ray axisRay = { tc.Translation, axisDirs[i] };
+                    Math::Ray axisRay = { worldPosition, axisDirs[i] };
                     float tA, tR;
                     float dist = Math::MathUtils::ClosestPointBetweenTwoLines(axisRay, mouseRay, tA, tR);
                     if (dist < dynamicThickness && tA > 0.0f && tA < dynamicLength && dist < closestDist)
@@ -185,10 +250,10 @@
                     float compensatedThickness = baseThickness * angleCompensation;
 
                     float t;
-                    if (Math::MathUtils::RayPlaneIntersection(mouseRay, DirectX::XMLoadFloat3(&tc.Translation), normal, t))
+                    if (Math::MathUtils::RayPlaneIntersection(mouseRay, DirectX::XMLoadFloat3(&worldPosition), normal, t))
                     {
                         DirectX::XMVECTOR hitPoint = DirectX::XMVectorAdd(DirectX::XMLoadFloat3(&mouseRay.Origin), DirectX::XMVectorScale(camDir, t));
-                        float distFromCenter = DirectX::XMVectorGetX(DirectX::XMVector3Length(DirectX::XMVectorSubtract(hitPoint, DirectX::XMLoadFloat3(&tc.Translation))));
+                        float distFromCenter = DirectX::XMVectorGetX(DirectX::XMVector3Length(DirectX::XMVectorSubtract(hitPoint, DirectX::XMLoadFloat3(&worldPosition))));
 
                         // 보정된 두께를 사용하여 반지름 근처를 클릭했는지 넉넉하게 확인
                         if (abs(distFromCenter - ringRadius) < compensatedThickness)
@@ -209,7 +274,7 @@
             {
                 m_IsDragging = true;
                 m_ActiveAxis = hitAxis;
-                m_OriginalPosition = tc.Translation;
+                m_OriginalPosition = worldPosition;
                 m_OriginalScale = tc.Scale;
                 m_OriginalQuat = tc.QuaternionRotation;
 
@@ -269,8 +334,12 @@
                     float currentPoint = DirectX::XMVectorGetX(DirectX::XMVector3Dot(DirectX::XMVectorSubtract(hitPoint, DirectX::XMLoadFloat3(&m_OriginalPosition)), D));
 
                     float delta = currentPoint - m_InitialDragOffset;
-                    DirectX::XMVECTOR newPos = DirectX::XMVectorAdd(DirectX::XMLoadFloat3(&m_OriginalPosition), DirectX::XMVectorScale(D, delta));
-                    DirectX::XMStoreFloat3(&tc.Translation, newPos);
+                    DirectX::XMVECTOR newWorldPos = DirectX::XMVectorAdd(DirectX::XMLoadFloat3(&m_OriginalPosition), DirectX::XMVectorScale(D, delta));
+                    DirectX::XMMATRIX parentWorld = GetParentWorldTransform(selectedEntity);
+                    DirectX::XMVECTOR det;
+                    DirectX::XMMATRIX invParentWorld = DirectX::XMMatrixInverse(&det, parentWorld);
+                    DirectX::XMVECTOR newLocalPos = DirectX::XMVector3TransformCoord(newWorldPos, invParentWorld);
+                    DirectX::XMStoreFloat3(&tc.Translation, newLocalPos);
                 }
             }
             else if (m_Mode == GizmoMode::Scale)

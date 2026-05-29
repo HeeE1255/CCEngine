@@ -18,7 +18,7 @@ namespace CCEngine {
         virtual void Resize(uint32_t width, uint32_t height) override;
 
         // 슬롯 인덱스에 따라 0번은 색상, 1번은 ID 텍스처를 반환
-        virtual void* GetColorAttachmentRendererID(uint32_t index = 0) const override
+        virtual RendererHandle GetColorAttachmentRendererID(uint32_t index = 0) const override
         {
             if (index == 1) return (void*)m_IDShaderResourceView;
             return (void*)m_ShaderResourceView;

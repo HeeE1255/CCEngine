@@ -18,7 +18,9 @@ namespace CCEngine
         public:
             WindowPanel(const std::string& name = "WindowPanel", const std::string& title = "Window");
 
+            virtual void OnUpdate(float deltaTime) override;
             virtual void OnRender() override;
+            virtual bool WantsMouseCapture() const override { return m_IsDragging || m_ResizeMode != ResizeMode::None; }
 
             virtual bool OnMouseButtonPressed(MouseButtonPressedEvent& e) override;
             virtual bool OnMouseMoved(MouseMovedEvent& e) override;
@@ -37,6 +39,8 @@ namespace CCEngine
 
             void SetOwnerWindow(Window* window) { m_OwnerWindow = window; }
             Window* GetOwnerWindow() const { return m_OwnerWindow; }
+
+        protected:
 
 
         private:

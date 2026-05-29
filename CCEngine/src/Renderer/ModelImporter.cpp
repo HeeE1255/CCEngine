@@ -32,45 +32,22 @@ namespace CCEngine {
         }
 
         // 4. 트리 빌드 시작
-        BuildTree(scene, myModel->GetRootNode(), (entt::entity)modelRootEntity, true, DirectX::XMMatrixIdentity());
+        BuildTree(scene, myModel->GetRootNode(), (entt::entity)modelRootEntity, true);
 
         return modelRootEntity;
     }
 
-    void ModelImporter::BuildTree(Scene* scene, const ModelNode& node, entt::entity parentHandle, bool isRootNode, DirectX::XMMATRIX correctionMat) 
+    void ModelImporter::BuildTree(Scene* scene, const ModelNode& node, entt::entity parentHandle, bool isRootNode) 
     {
-        //평탄화를 위해 최초 행렬은 아이덴티티로 시작, RootNode에서만 교정 행렬을 곱해서 내려보냄
         entt::entity currentHandle = parentHandle;
 
-        // 1. RootNode인 경우: 엔티티를 만들지 않고, 자식들에게 넘겨줄 '교정행렬'을 준비
+        // 1. Assimp RootNode 자체는 파일명 루트 엔티티가 대신하고,
+        //    Armature 같은 자식 노드의 원본 보정(-90도 등)은 하이어라키에 그대로 유지합니다.
         if (isRootNode)
         {
-            float angle = DirectX::XMConvertToRadians(-90.0f);
-            DirectX::XMVECTOR q = DirectX::XMQuaternionRotationRollPitchYaw(angle, 0.0f, 0.0f);
-
-            //XMMatrixMultiply 사용 (S * R * T 순서)
-            DirectX::XMMATRIX S = DirectX::XMMatrixScaling(node.Scale.x, node.Scale.y, node.Scale.z);
-            DirectX::XMMATRIX R = DirectX::XMMatrixRotationQuaternion(q);
-            DirectX::XMMATRIX T = DirectX::XMMatrixTranslation(node.Translation.x, node.Translation.y, node.Translation.z);
-
-            DirectX::XMMATRIX SR = DirectX::XMMatrixMultiply(S, R);
-            DirectX::XMMATRIX rootTransform = DirectX::XMMatrixMultiply(SR, T);
-
-            for (size_t i = 0; i < node.Children.size(); ++i)
+            for (const auto& childNode : node.Children)
             {
-                DirectX::XMMATRIX currentCorrection = rootTransform;
-
-                // 첫 번째 자식(Index 0, 보통 Armature)일 때만 x축 90도 회전을 추가 적용
-                if (i == 0)
-                {
-                    float firstChildAngle = DirectX::XMConvertToRadians(90.0f);
-                    DirectX::XMMATRIX firstChildRot = DirectX::XMMatrixRotationX(firstChildAngle);
-
-                    // 자식의 로컬 회전이 부모(RootNode) 공간으로 넘어가기 전(-90도)에 적용되도록 앞에 곱함
-                    currentCorrection = DirectX::XMMatrixMultiply(firstChildRot, rootTransform);
-                }
-
-                BuildTree(scene, node.Children[i], parentHandle, false, currentCorrection);
+                BuildTree(scene, childNode, parentHandle, false);
             }
             return;
         }
@@ -90,13 +67,9 @@ namespace CCEngine {
         DirectX::XMMATRIX localSR = DirectX::XMMatrixMultiply(localS, localR);
         DirectX::XMMATRIX localMat = DirectX::XMMatrixMultiply(localSR, localT);
 
-        // 부모로부터 받은 correctionMat 곱하기 (Local * Correction)
-        DirectX::XMMATRIX finalMat = DirectX::XMMatrixMultiply(localMat, correctionMat);
-
-
-        // 최종 행렬을 다시 Translation, Rotation, Scale로 분해해서 TransformComponent에 박습니다.
+        // Unity처럼 임포트 보정은 하이어라키 트랜스폼에 남기고, 노드 로컬 트랜스폼을 그대로 씁니다.
         DirectX::XMVECTOR s, r, t;
-        if (DirectX::XMMatrixDecompose(&s, &r, &t, finalMat))
+        if (DirectX::XMMatrixDecompose(&s, &r, &t, localMat))
         {
             DirectX::XMStoreFloat3(&tc.Scale, s);
             DirectX::XMStoreFloat4(&tc.QuaternionRotation, r);
@@ -128,7 +101,7 @@ namespace CCEngine {
         // 4. 자식 노드 재귀 호출 (상속 끝났으니 다음 레벨은 Identity를 넘김)
         for (const auto& childNode : node.Children)
         {
-            BuildTree(scene, childNode, currentHandle, false, DirectX::XMMatrixIdentity());
+            BuildTree(scene, childNode, currentHandle, false);
         }
     }
 

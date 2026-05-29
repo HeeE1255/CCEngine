@@ -28,6 +28,7 @@ namespace CCEngine
         void OnUpdate(float deltaTime);
 
         // 3D 카메라로 씬을 렌더링하는 함수
+        void OnRender2D(const PerspectiveCamera& camera);
         void OnRender3D(const PerspectiveCamera& camera);
 
         // 

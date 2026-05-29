@@ -8,6 +8,7 @@
 // ==========================================
 #include "json.hpp"
 #include <fstream>
+#include <filesystem>
 #include <iostream>
 
 //#include "Core/MemoryMacro.h" //직렬화에선 사용안하기
@@ -154,5 +155,59 @@ namespace CCEngine
         }
 
         return true;
+    }
+
+    Entity SceneSerializer::DeserializeAppend(const std::string& filepath)
+    {
+        std::ifstream stream(filepath);
+        if (!stream.is_open())
+        {
+            return {};
+        }
+
+        nlohmann::json data;
+        stream >> data;
+
+        if (!data.contains("Entities"))
+        {
+            return {};
+        }
+
+        std::filesystem::path scenePath(filepath);
+        Entity sceneRoot = m_Scene->CreateEntity("Scene: " + scenePath.stem().string());
+        sceneRoot.AddComponent<RelationshipComponent>();
+
+        auto entities = data["Entities"];
+        for (auto& entityData : entities)
+        {
+            std::string tag = "Untitled Entity";
+            if (entityData.contains("TagComponent"))
+                tag = entityData["TagComponent"]["Tag"];
+
+            Entity deserializedEntity = m_Scene->CreateEntity(tag);
+
+            auto& rel = deserializedEntity.AddComponent<RelationshipComponent>();
+            rel.Parent = (entt::entity)sceneRoot;
+            sceneRoot.GetComponent<RelationshipComponent>().Children.push_back((entt::entity)deserializedEntity);
+
+            if (entityData.contains("TransformComponent"))
+            {
+                auto& tc = deserializedEntity.GetComponent<TransformComponent>();
+                auto& transformData = entityData["TransformComponent"];
+
+                tc.Translation = { transformData["Translation"][0], transformData["Translation"][1], transformData["Translation"][2] };
+                tc.Rotation = { transformData["Rotation"][0], transformData["Rotation"][1], transformData["Rotation"][2] };
+                tc.Scale = { transformData["Scale"][0], transformData["Scale"][1], transformData["Scale"][2] };
+            }
+
+            if (entityData.contains("SpriteRendererComponent"))
+            {
+                auto& spriteData = entityData["SpriteRendererComponent"];
+                auto& src = deserializedEntity.AddComponent<SpriteRendererComponent>();
+                src.Color = { spriteData["Color"][0], spriteData["Color"][1], spriteData["Color"][2], spriteData["Color"][3] };
+            }
+        }
+
+        return sceneRoot;
     }
 }

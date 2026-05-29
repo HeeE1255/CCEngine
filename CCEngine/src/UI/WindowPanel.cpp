@@ -17,71 +17,113 @@ namespace CCEngine
         {
         }
 
-        void WindowPanel::OnRender()
+        void WindowPanel::OnUpdate(float deltaTime)
         {
-            if (!m_IsVisible) return;
-            if (m_ResizeMode != ResizeMode::None || m_IsDragging)
+            Panel::OnUpdate(deltaTime);
+
+            if (!m_IsVisible)
             {
-                auto& mainWindow = Application::Get()->GetWindow();
-                auto [mouseX, mouseY] = mainWindow.GetMousePosition();
+                return;
+            }
 
-                if (m_ResizeMode != ResizeMode::None)
+            if (m_ResizeMode == ResizeMode::None && !m_IsDragging)
+            {
+                return;
+            }
+
+            if (m_OwnerWindow != nullptr)
+            {
+                bool isLMBDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+                if (!isLMBDown)
                 {
-                    float deltaX = mouseX - m_ResizeLastMouseX;
-                    float deltaY = mouseY - m_ResizeLastMouseY;
-                    float minWidth = 150.0f; float minHeight = 100.0f;
+                    m_ResizeMode = ResizeMode::None;
+                    m_IsDragging = false;
 
-                    if (m_ResizeMode == ResizeMode::Right || m_ResizeMode == ResizeMode::TopRight || m_ResizeMode == ResizeMode::BottomRight) {
-                        m_OffsetMax.x += deltaX;
-                        if (m_OffsetMax.x - m_OffsetMin.x < minWidth) m_OffsetMax.x = m_OffsetMin.x + minWidth;
+                    auto& mainWindow = Application::Get()->GetWindow();
+                    auto [localX, localY] = mainWindow.GetMousePosition();
+                    if (localX >= 0.0f && localX <= (float)mainWindow.GetWidth() &&
+                        localY >= 0.0f && localY <= (float)mainWindow.GetHeight())
+                    {
+                        Redock(mainWindow.GetRootUI());
                     }
-                    if (m_ResizeMode == ResizeMode::Left || m_ResizeMode == ResizeMode::TopLeft || m_ResizeMode == ResizeMode::BottomLeft) {
-                        m_OffsetMin.x += deltaX;
-                        if (m_OffsetMax.x - m_OffsetMin.x < minWidth) m_OffsetMin.x = m_OffsetMax.x - minWidth;
-                    }
-                    if (m_ResizeMode == ResizeMode::Bottom || m_ResizeMode == ResizeMode::BottomLeft || m_ResizeMode == ResizeMode::BottomRight) {
-                        m_OffsetMax.y += deltaY;
-                        if (m_OffsetMax.y - m_OffsetMin.y < minHeight) m_OffsetMax.y = m_OffsetMin.y + minHeight;
-                    }
-                    if (m_ResizeMode == ResizeMode::Top || m_ResizeMode == ResizeMode::TopLeft || m_ResizeMode == ResizeMode::TopRight) {
-                        m_OffsetMin.y += deltaY;
-                        if (m_OffsetMax.y - m_OffsetMin.y < minHeight) m_OffsetMin.y = m_OffsetMax.y - minHeight;
-                    }
-
-                    m_CalculatedSize.x = m_OffsetMax.x - m_OffsetMin.x;
-                    m_CalculatedSize.y = m_OffsetMax.y - m_OffsetMin.y;
-                    m_ResizeLastMouseX = mouseX;
-                    m_ResizeLastMouseY = mouseY;
+                    return;
                 }
+
+                auto [screenX, screenY] = m_OwnerWindow->GetScreenMousePosition();
 
                 if (m_IsDragging)
                 {
-                    // If floating we shouldn't perform internal drag logic here
-                    if (m_OwnerWindow == nullptr)
-                    {
-                        float deltaX = mouseX - m_LastMouseX;
-                        float deltaY = mouseY - m_LastMouseY;
-                        m_OffsetMin.x += deltaX; m_OffsetMin.y += deltaY;
-                        m_OffsetMax.x += deltaX; m_OffsetMax.y += deltaY;
-                        m_LastMouseX = mouseX; m_LastMouseY = mouseY;
-                    }
+                    m_OwnerWindow->SetPosition((int)(screenX - m_DragOffsetX), (int)(screenY - m_DragOffsetY));
+                    return;
                 }
+
+                HWND hwnd = static_cast<HWND>(m_OwnerWindow->GetNativeWindow());
+                RECT rect;
+                GetWindowRect(hwnd, &rect);
+
+                float deltaX = (float)screenX - m_ResizeLastMouseX;
+                float deltaY = (float)screenY - m_ResizeLastMouseY;
+                float minWidth = 150.0f;
+                float minHeight = 100.0f;
+
+                float newLeft = (float)rect.left;
+                float newTop = (float)rect.top;
+                float newRight = (float)rect.right;
+                float newBottom = (float)rect.bottom;
+
+                if (m_ResizeMode == ResizeMode::Left || m_ResizeMode == ResizeMode::TopLeft || m_ResizeMode == ResizeMode::BottomLeft) newLeft += deltaX;
+                if (m_ResizeMode == ResizeMode::Right || m_ResizeMode == ResizeMode::TopRight || m_ResizeMode == ResizeMode::BottomRight) newRight += deltaX;
+                if (m_ResizeMode == ResizeMode::Top || m_ResizeMode == ResizeMode::TopLeft || m_ResizeMode == ResizeMode::TopRight) newTop += deltaY;
+                if (m_ResizeMode == ResizeMode::Bottom || m_ResizeMode == ResizeMode::BottomLeft || m_ResizeMode == ResizeMode::BottomRight) newBottom += deltaY;
+
+                if (newRight - newLeft < minWidth)
+                {
+                    if (m_ResizeMode == ResizeMode::Left || m_ResizeMode == ResizeMode::TopLeft || m_ResizeMode == ResizeMode::BottomLeft) newLeft = newRight - minWidth;
+                    if (m_ResizeMode == ResizeMode::Right || m_ResizeMode == ResizeMode::TopRight || m_ResizeMode == ResizeMode::BottomRight) newRight = newLeft + minWidth;
+                }
+                if (newBottom - newTop < minHeight)
+                {
+                    if (m_ResizeMode == ResizeMode::Top || m_ResizeMode == ResizeMode::TopLeft || m_ResizeMode == ResizeMode::TopRight) newTop = newBottom - minHeight;
+                    if (m_ResizeMode == ResizeMode::Bottom || m_ResizeMode == ResizeMode::BottomLeft || m_ResizeMode == ResizeMode::BottomRight) newBottom = newTop + minHeight;
+                }
+
+                SetWindowPos(
+                    hwnd,
+                    nullptr,
+                    (int)newLeft,
+                    (int)newTop,
+                    (int)(newRight - newLeft),
+                    (int)(newBottom - newTop),
+                    SWP_NOZORDER
+                );
+
+                m_ResizeLastMouseX = (float)screenX;
+                m_ResizeLastMouseY = (float)screenY;
+                return;
             }
+
+            auto& mainWindow = Application::Get()->GetWindow();
+            auto [mouseX, mouseY] = mainWindow.GetMousePosition();
+
+            MouseMovedEvent moveEvent(mouseX, mouseY);
+            OnMouseMoved(moveEvent);
+        }
+
+        void WindowPanel::OnRender()
+        {
+            if (!m_IsVisible) return;
+
             Panel::OnRender();
 
-            float HeadeHeight = UIRenderer::GetDefaultFont() ? UIRenderer::GetDefaultFont()->GetFontSize() : 24.0f;
 
-            // 1. 패널 상단 커스텀 타이틀 바
+            float HeadeHeight = UIRenderer::GetDefaultFont() ? UIRenderer::GetDefaultFont()->GetFontSize() : 24.0f;
             DirectX::XMFLOAT4 titleColor = { 0.15f, 0.15f, 0.17f, 1.0f };
             UIRenderer::DrawRectFilled(m_CalculatedPos.x, m_CalculatedPos.y, m_CalculatedSize.x, HeadeHeight, titleColor);
             UIRenderer::DrawString(m_Title, m_CalculatedPos.x + 10.0f, m_CalculatedPos.y + HeadeHeight * 0.7f, { 0.8f, 0.8f, 0.8f, 1.0f });
 
-            // 2. 우측 닫기 버튼
             float closeBtnX = m_CalculatedPos.x + m_CalculatedSize.x - 30.0f;
             UIRenderer::DrawRectFilled(closeBtnX, m_CalculatedPos.y, 30.0f, HeadeHeight, { 0.8f, 0.2f, 0.2f, 1.0f });
             UIRenderer::DrawString("X", closeBtnX + 10.0f, m_CalculatedPos.y + HeadeHeight * 0.7f, { 1.0f, 1.0f, 1.0f, 1.0f });
-
-            // (이전에 있던 우측 하단 점 4개 그리는 코드는 이제 필요 없으므로 삭제합니다!)
         }
 
         bool WindowPanel::OnMouseButtonPressed(MouseButtonPressedEvent& e)
@@ -103,20 +145,18 @@ namespace CCEngine
                 {
                     if (isTornOff)
                     {
-                        // ★ [핵심] 독립된 OS 윈도우일 경우: Win32 API를 호출해 OS에게 리사이징을 일임합니다!
-                        int htCode = 0;
-                        if (isTop && isLeft) htCode = HTTOPLEFT;
-                        else if (isTop && isRight) htCode = HTTOPRIGHT;
-                        else if (isBottom && isLeft) htCode = HTBOTTOMLEFT;
-                        else if (isBottom && isRight) htCode = HTBOTTOMRIGHT;
-                        else if (isLeft) htCode = HTLEFT;
-                        else if (isRight) htCode = HTRIGHT;
-                        else if (isTop) htCode = HTTOP;
-                        else if (isBottom) htCode = HTBOTTOM;
+                        if (isTop && isLeft) m_ResizeMode = ResizeMode::TopLeft;
+                        else if (isTop && isRight) m_ResizeMode = ResizeMode::TopRight;
+                        else if (isBottom && isLeft) m_ResizeMode = ResizeMode::BottomLeft;
+                        else if (isBottom && isRight) m_ResizeMode = ResizeMode::BottomRight;
+                        else if (isLeft) m_ResizeMode = ResizeMode::Left;
+                        else if (isRight) m_ResizeMode = ResizeMode::Right;
+                        else if (isTop) m_ResizeMode = ResizeMode::Top;
+                        else if (isBottom) m_ResizeMode = ResizeMode::Bottom;
 
-                        HWND hwnd = static_cast<HWND>(m_OwnerWindow->GetNativeWindow());
-                        ReleaseCapture(); // 엔진 UI의 마우스 캡처 권한 해제
-                        SendMessage(hwnd, WM_NCLBUTTONDOWN, htCode, 0); // OS야, 이 창 좀 리사이즈 해줘!
+                        auto [screenX, screenY] = m_OwnerWindow->GetScreenMousePosition();
+                        m_ResizeLastMouseX = (float)screenX;
+                        m_ResizeLastMouseY = (float)screenY;
 
                         e.Handled = true;
                         return true;
@@ -159,25 +199,9 @@ namespace CCEngine
 
                     if (isTornOff)
                     {
-                        // ★ [핵심] 독립된 OS 윈도우일 경우: Win32 API를 호출해 OS 창 이동 권한을 넘깁니다!
-                        HWND hwnd = static_cast<HWND>(m_OwnerWindow->GetNativeWindow());
-                        ReleaseCapture();
-
-                        // SendMessage는 마우스를 뗄 때까지 프로그램의 흐름을 멈춥니다 (OS가 드래그를 끝낼 때까지 대기)
-                        SendMessage(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
-
-                        // --- 마우스를 떼고 창 이동이 끝난 직후 여기서부터 다시 실행됨 ---
-
-                        // 드래그가 끝났으니, 메인 창 영역 안으로 들어왔는지 (Redock 조건) 검사합니다.
-                        auto app = Application::Get();
-                        auto& mainWindow = app->GetWindow();
-                        auto [localX, localY] = mainWindow.GetMousePosition(); // 메인 창 기준 상대 좌표
-
-                        if (localX >= 0.0f && localX <= (float)mainWindow.GetWidth() &&
-                            localY >= 0.0f && localY <= (float)mainWindow.GetHeight())
-                        {
-                            Redock(mainWindow.GetRootUI()); // 메인 창에 다시 흡수!
-                        }
+                        m_IsDragging = true;
+                        m_DragOffsetX = e.GetX();
+                        m_DragOffsetY = e.GetY();
 
                         e.Handled = true;
                         return true;
@@ -212,9 +236,35 @@ namespace CCEngine
         {
             float edge = 8.0f;
 
-            // ==============================================================
-            // 1. 테두리 마우스 오버 시 윈도우 화살표 커서 변경
-            // ==============================================================
+            // OS 이벤트 유실에 대비해 실제 마우스 버튼 상태로 드래그 상태를 보정합니다.
+            if (m_ResizeMode != ResizeMode::None || m_IsDragging)
+            {
+                bool isLMBDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+                if (!isLMBDown)
+                {
+                    m_ResizeMode = ResizeMode::None;
+                    m_IsDragging = false;
+
+                    // 메인 창 안에서 버튼이 떼어진 경우 도킹 상태로 복귀합니다.
+                    if (m_IsFloating && m_Parent == nullptr)
+                    {
+                        auto& mainWindow = Application::Get()->GetWindow();
+                        auto [localX, localY] = mainWindow.GetMousePosition();
+                        if (localX >= 0.0f && localX <= (float)mainWindow.GetWidth() && localY >= 0.0f && localY <= (float)mainWindow.GetHeight()) {
+                            Redock(mainWindow.GetRootUI());
+                        }
+                    }
+                    return false;
+                }
+
+                if (m_OwnerWindow != nullptr)
+                {
+                    e.Handled = true;
+                    return true;
+                }
+            }
+
+            // 테두리 위에 마우스가 있을 때 리사이즈 커서를 표시합니다.
             if (m_ResizeMode == ResizeMode::None && !m_IsDragging)
             {
                 bool isLeft = e.GetX() >= m_CalculatedPos.x && e.GetX() <= m_CalculatedPos.x + edge;
@@ -232,34 +282,42 @@ namespace CCEngine
                 }
             }
 
-            // ==============================================================
-            // 2. 엔진 내부 도킹(Floating) 패널 리사이징 수학 계산
-            // ==============================================================
+            // 도킹된 패널의 리사이즈 오프셋을 갱신합니다.
             if (m_ResizeMode != ResizeMode::None)
             {
                 float deltaX = e.GetX() - m_ResizeLastMouseX;
                 float deltaY = e.GetY() - m_ResizeLastMouseY;
                 float minWidth = 150.0f; float minHeight = 100.0f;
 
-                if (m_ResizeMode == ResizeMode::Right || m_ResizeMode == ResizeMode::TopRight || m_ResizeMode == ResizeMode::BottomRight) {
-                    m_OffsetMax.x += deltaX;
-                    if (m_OffsetMax.x - m_OffsetMin.x < minWidth) m_OffsetMax.x = m_OffsetMin.x + minWidth;
+                float newMinX = m_OffsetMin.x;
+                float newMaxX = m_OffsetMax.x;
+                float newMinY = m_OffsetMin.y;
+                float newMaxY = m_OffsetMax.y;
+
+                if (m_ResizeMode == ResizeMode::Left || m_ResizeMode == ResizeMode::TopLeft || m_ResizeMode == ResizeMode::BottomLeft) newMinX += deltaX;
+                if (m_ResizeMode == ResizeMode::Right || m_ResizeMode == ResizeMode::TopRight || m_ResizeMode == ResizeMode::BottomRight) newMaxX += deltaX;
+                if (m_ResizeMode == ResizeMode::Top || m_ResizeMode == ResizeMode::TopLeft || m_ResizeMode == ResizeMode::TopRight) newMinY += deltaY;
+                if (m_ResizeMode == ResizeMode::Bottom || m_ResizeMode == ResizeMode::BottomLeft || m_ResizeMode == ResizeMode::BottomRight) newMaxY += deltaY;
+
+                // 최소 크기를 침범하지 못하도록 보정
+                if (newMaxX - newMinX < minWidth)
+                {
+                    if (m_ResizeMode == ResizeMode::Left || m_ResizeMode == ResizeMode::TopLeft || m_ResizeMode == ResizeMode::BottomLeft) newMinX = newMaxX - minWidth;
+                    if (m_ResizeMode == ResizeMode::Right || m_ResizeMode == ResizeMode::TopRight || m_ResizeMode == ResizeMode::BottomRight) newMaxX = newMinX + minWidth;
                 }
-                if (m_ResizeMode == ResizeMode::Left || m_ResizeMode == ResizeMode::TopLeft || m_ResizeMode == ResizeMode::BottomLeft) {
-                    m_OffsetMin.x += deltaX;
-                    if (m_OffsetMax.x - m_OffsetMin.x < minWidth) m_OffsetMin.x = m_OffsetMax.x - minWidth;
-                }
-                if (m_ResizeMode == ResizeMode::Bottom || m_ResizeMode == ResizeMode::BottomLeft || m_ResizeMode == ResizeMode::BottomRight) {
-                    m_OffsetMax.y += deltaY;
-                    if (m_OffsetMax.y - m_OffsetMin.y < minHeight) m_OffsetMax.y = m_OffsetMin.y + minHeight;
-                }
-                if (m_ResizeMode == ResizeMode::Top || m_ResizeMode == ResizeMode::TopLeft || m_ResizeMode == ResizeMode::TopRight) {
-                    m_OffsetMin.y += deltaY;
-                    if (m_OffsetMax.y - m_OffsetMin.y < minHeight) m_OffsetMin.y = m_OffsetMax.y - minHeight;
+                if (newMaxY - newMinY < minHeight)
+                {
+                    if (m_ResizeMode == ResizeMode::Top || m_ResizeMode == ResizeMode::TopLeft || m_ResizeMode == ResizeMode::TopRight) newMinY = newMaxY - minHeight;
+                    if (m_ResizeMode == ResizeMode::Bottom || m_ResizeMode == ResizeMode::BottomLeft || m_ResizeMode == ResizeMode::BottomRight) newMaxY = newMinY + minHeight;
                 }
 
-                m_CalculatedSize.x = m_OffsetMax.x - m_OffsetMin.x;
-                m_CalculatedSize.y = m_OffsetMax.y - m_OffsetMin.y;
+                // 확정된 오프셋 적용
+                m_OffsetMin.x = newMinX;
+                m_OffsetMax.x = newMaxX;
+                m_OffsetMin.y = newMinY;
+                m_OffsetMax.y = newMaxY;
+
+                // 다음 프레임의 델타 계산을 위해 현재 마우스 좌표를 저장합니다.
                 m_ResizeLastMouseX = e.GetX();
                 m_ResizeLastMouseY = e.GetY();
 
@@ -267,38 +325,31 @@ namespace CCEngine
                 return true;
             }
 
-            // ==============================================================
-            // 3. 엔진 내부 도킹(Floating) 패널 이동 & 분리(Tear-off) 판정
-            // ==============================================================
+            // 도킹된 패널의 이동과 분리 여부를 처리합니다.
             if (m_IsDragging)
             {
-                // [안전 장치] 만약 이미 분리된 창이라면 내부 드래그 오작동 방지
-                if (m_OwnerWindow != nullptr) {
-                    m_IsDragging = false;
-                    return false;
-                }
-
                 float deltaX = e.GetX() - m_LastMouseX;
                 float deltaY = e.GetY() - m_LastMouseY;
                 m_OffsetMin.x += deltaX; m_OffsetMin.y += deltaY;
                 m_OffsetMax.x += deltaX; m_OffsetMax.y += deltaY;
-                m_LastMouseX = e.GetX(); m_LastMouseY = e.GetY();
+
+                // 다음 이동 델타 계산을 위해 현재 마우스 좌표를 저장합니다.
+                m_LastMouseX = e.GetX();
+                m_LastMouseY = e.GetY();
 
                 auto& mainWindow = Application::Get()->GetWindow();
                 float displayWidth = (float)mainWindow.GetWidth();
                 float displayHeight = (float)mainWindow.GetHeight();
 
-                // 메인 창 밖으로 드래그 시 분리(Tear-off) 시작!
+                // 메인 창 밖으로 드래그하면 별도 창으로 분리합니다.
                 if (e.GetX() < 0 || e.GetX() > displayWidth || e.GetY() < 0 || e.GetY() > displayHeight)
                 {
-                    // ★ 핵심 1: UI가 우주로 날아가는 것을 방지하기 위해 내부 드래그 즉시 차단!
                     m_IsDragging = false;
 
                     if (m_Parent) m_Parent->RemoveChild(this);
 
                     auto newSecWindow = Application::Get()->CreateSecondaryWindow(m_Name, (uint32_t)m_CalculatedSize.x, (uint32_t)m_CalculatedSize.y);
 
-                    // 서브 윈도우 안에 꽉 차도록 앵커와 여백 초기화
                     SetAnchorMin(0.0f, 0.0f); SetAnchorMax(1.0f, 1.0f);
                     SetOffsetMin(0.0f, 0.0f); SetOffsetMax(0.0f, 0.0f);
                     m_CalculatedPos = { 0.0f, 0.0f };
@@ -306,30 +357,21 @@ namespace CCEngine
                     newSecWindow->SetRootUI(this);
                     SetOwnerWindow(newSecWindow);
 
-                    // ★ 핵심 2: OS 창이 생성되자마자 마우스 위치로 강제 이동 (부드러운 전환)
                     POINT pt;
                     GetCursorPos(&pt);
                     newSecWindow->SetPosition(pt.x - (int)m_DragOffsetX, pt.y - (int)m_DragOffsetY);
 
-                    ReleaseCapture(); // 엔진 UI 마우스 캡처 해제
-                    HWND subHwnd = static_cast<HWND>(newSecWindow->GetNativeWindow());
+                    ReleaseCapture();
+                    m_IsDragging = true;
 
-                    // ★ 핵심 3: 윈도우 OS에게 "이 창 제목표시줄 잡고 드래그 중인걸로 쳐줘!" 라고 명령
-                    // (이 함수는 사용자가 마우스를 뗄 때까지 프로그램 흐름을 멈춥니다)
-                    SendMessage(subHwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
-
-                    // --- 마우스를 떼고 창 이동이 끝난 직후 여기서부터 다시 실행됨 ---
-
-                    // 메인 창 영역 안으로 다시 돌아왔다면 Redock(도킹) 실행
-                    auto [localX, localY] = mainWindow.GetMousePosition();
-                    if (localX >= 0.0f && localX <= displayWidth && localY >= 0.0f && localY <= displayHeight)
-                    {
-                        Redock(mainWindow.GetRootUI());
-                    }
+                    auto [screenX, screenY] = newSecWindow->GetScreenMousePosition();
+                    m_LastMouseX = (float)screenX;
+                    m_LastMouseY = (float)screenY;
                 }
                 e.Handled = true;
                 return true;
             }
+
             return false;
         }
 
@@ -380,7 +422,7 @@ namespace CCEngine
             SetAnchorMin(0.0f, 0.0f);
             SetAnchorMax(0.0f, 0.0f);
 
-            // ★ 복귀 시 크기가 미친듯이 폭발하는 현상 방지! (안전 사이즈 보정)
+            // 비정상적인 창 크기로 복귀하지 않도록 기본 크기를 보정합니다.
             if (m_CalculatedSize.x > 1200.0f || m_CalculatedSize.y > 1000.0f || m_CalculatedSize.x <= 0.0f) {
                 m_CalculatedSize = { 400.0f, 600.0f }; // 상식적인 기본 도킹 사이즈로 덮어쓰기
             }
@@ -393,5 +435,6 @@ namespace CCEngine
 
             std::cout << "[Docking] " << m_Name << " 패널이 메인 창으로 복귀되었습니다." << std::endl;
         }
+        
     }
 }

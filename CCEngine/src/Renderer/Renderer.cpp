@@ -17,6 +17,7 @@ namespace CCEngine
     // ==========================================================
     void Renderer::Init()
     {
+        RenderCommand::Init();
         RenderState::Init(); //
         Renderer2D::Init();  //
         UIRenderer::Init();
@@ -30,6 +31,7 @@ namespace CCEngine
         UIRenderer::Shutdown();
         Renderer2D::Shutdown();  //
         RenderState::Shutdown(); // 
+        RenderCommand::Shutdown();
     }
     // ==========================================================
 

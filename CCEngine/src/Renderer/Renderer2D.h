@@ -3,6 +3,7 @@
 #include "Renderer/PerspectiveCamera.h"
 #include "Core.h"
 #include "Renderer/Texture.h"
+#include "Renderer/RendererHandle.h"
 #include <DirectXMath.h>
 
 namespace CCEngine
@@ -39,7 +40,7 @@ namespace CCEngine
         static void DrawQuad(const DirectX::XMFLOAT2& position, const DirectX::XMFLOAT2& size, Texture2D* texture, const DirectX::XMFLOAT2* texCoords, const DirectX::XMFLOAT4& tintColor, int entityID = -1);
         static void DrawQuad(const DirectX::XMFLOAT3& position, const DirectX::XMFLOAT2& size, Texture2D* texture, const DirectX::XMFLOAT2* texCoords, const DirectX::XMFLOAT4& tintColor, int entityID = -1);
 
-        static void DrawQuad(const DirectX::XMMATRIX& transform, void* textureID, const DirectX::XMFLOAT4& tintColor = { 1.0f, 1.0f, 1.0f, 1.0f }, int entityID = -1);
-        static void DrawQuad(const DirectX::XMMATRIX& transform, void* textureID, const DirectX::XMFLOAT2* texCoords, const DirectX::XMFLOAT4& tintColor = { 1.0f, 1.0f, 1.0f, 1.0f }, int entityID = -1);
+        static void DrawQuad(const DirectX::XMMATRIX& transform, RendererHandle textureID, const DirectX::XMFLOAT4& tintColor = { 1.0f, 1.0f, 1.0f, 1.0f }, int entityID = -1);
+        static void DrawQuad(const DirectX::XMMATRIX& transform, RendererHandle textureID, const DirectX::XMFLOAT2* texCoords, const DirectX::XMFLOAT4& tintColor = { 1.0f, 1.0f, 1.0f, 1.0f }, int entityID = -1);
     };
 }

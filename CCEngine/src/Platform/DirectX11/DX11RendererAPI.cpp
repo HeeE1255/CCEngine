@@ -4,6 +4,54 @@
 
 namespace CCEngine
 {
+    DX11RendererAPI::DX11RendererAPI()
+    {
+        auto device = DX11Context::Get()->GetDevice();
+
+        D3D11_BLEND_DESC blendDesc = {};
+
+        blendDesc.AlphaToCoverageEnable = FALSE;
+        blendDesc.IndependentBlendEnable = FALSE;
+        blendDesc.RenderTarget[0].BlendEnable = FALSE;
+        blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+        device->CreateBlendState(&blendDesc, &m_OpaqueBlendState);
+
+        blendDesc.RenderTarget[0].BlendEnable = TRUE;
+        blendDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+        blendDesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+        blendDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+        blendDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+        blendDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO;
+        blendDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        device->CreateBlendState(&blendDesc, &m_TransparentBlendState);
+
+        blendDesc.IndependentBlendEnable = TRUE;
+        blendDesc.RenderTarget[0].BlendEnable = TRUE;
+        blendDesc.RenderTarget[1].BlendEnable = FALSE;
+        blendDesc.RenderTarget[1].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+        device->CreateBlendState(&blendDesc, &m_MRTPickingBlendState);
+
+        D3D11_RASTERIZER_DESC rsDesc = {};
+        rsDesc.FillMode = D3D11_FILL_SOLID;
+        rsDesc.FrontCounterClockwise = FALSE;
+        rsDesc.DepthClipEnable = TRUE;
+
+        rsDesc.CullMode = D3D11_CULL_BACK;
+        device->CreateRasterizerState(&rsDesc, &m_CullBackState);
+
+        rsDesc.CullMode = D3D11_CULL_NONE;
+        device->CreateRasterizerState(&rsDesc, &m_CullNoneState);
+    }
+
+    DX11RendererAPI::~DX11RendererAPI()
+    {
+        if (m_OpaqueBlendState) { m_OpaqueBlendState->Release(); m_OpaqueBlendState = nullptr; }
+        if (m_TransparentBlendState) { m_TransparentBlendState->Release(); m_TransparentBlendState = nullptr; }
+        if (m_MRTPickingBlendState) { m_MRTPickingBlendState->Release(); m_MRTPickingBlendState = nullptr; }
+        if (m_CullBackState) { m_CullBackState->Release(); m_CullBackState = nullptr; }
+        if (m_CullNoneState) { m_CullNoneState->Release(); m_CullNoneState = nullptr; }
+    }
+
     void DX11RendererAPI::SetClearColor(float r, float g, float b, float a)
     {
         m_ClearColor[0] = r;
@@ -51,6 +99,14 @@ namespace CCEngine
 
         // 인덱스 버퍼의 개수만큼 그리라고 드로우 콜!
         context->DrawIndexed(indexBuffer->GetCount(), 0, 0);
+    }
+
+    void DX11RendererAPI::DrawIndexed(uint32_t indexCount)
+    {
+        auto context = DX11Context::Get()->GetDeviceContext();
+
+        context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        context->DrawIndexed(indexCount, 0, 0);
     }
 
     void DX11RendererAPI::SetViewport(uint32_t x, uint32_t y, uint32_t width, uint32_t height)
@@ -160,5 +216,47 @@ namespace CCEngine
         rect.bottom = (LONG)(y + height);
 
         context->RSSetScissorRects(1, &rect);
+    }
+
+    void DX11RendererAPI::SetBlendMode(BlendMode mode)
+    {
+        auto context = DX11Context::Get()->GetDeviceContext();
+        float blendFactor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+
+        switch (mode)
+        {
+        case BlendMode::Opaque:
+            context->OMSetBlendState(m_OpaqueBlendState, blendFactor, 0xffffffff);
+            break;
+        case BlendMode::Transparent:
+            context->OMSetBlendState(m_TransparentBlendState, blendFactor, 0xffffffff);
+            break;
+        case BlendMode::MRTPicking:
+            context->OMSetBlendState(m_MRTPickingBlendState, blendFactor, 0xffffffff);
+            break;
+        }
+    }
+
+    void DX11RendererAPI::SetCullMode(CullMode mode)
+    {
+        auto context = DX11Context::Get()->GetDeviceContext();
+
+        switch (mode)
+        {
+        case CullMode::Back:
+            context->RSSetState(m_CullBackState);
+            break;
+        case CullMode::None:
+            context->RSSetState(m_CullNoneState);
+            break;
+        }
+    }
+
+    void DX11RendererAPI::BindTexture(uint32_t slot, RendererHandle rendererID)
+    {
+        auto context = DX11Context::Get()->GetDeviceContext();
+        ID3D11ShaderResourceView* srv = static_cast<ID3D11ShaderResourceView*>(rendererID);
+
+        context->PSSetShaderResources(slot, 1, &srv);
     }
 }

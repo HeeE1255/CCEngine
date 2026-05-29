@@ -15,6 +15,7 @@
 #include "UI/Panel.h"
 #include "UI/ImageWidget.h"
 #include "UI/Button.h"
+#include "UI/AssetBrowserPanel.h"
 #include "UI/WindowPanel.h"
 #include "UI/VBoxContainer.h"
 #include "UI/HierarchyPanel.h"
@@ -39,6 +40,13 @@ namespace CCEngine {
         void SaveScene();
         void SaveSceneAs();
         void OpenScene();
+        void OpenScene(const std::string& filepath);
+        void LoadSceneAdditive(const std::string& filepath);
+        void SaveSelectedPrefab();
+        void InstantiatePrefab();
+        void InstantiatePrefab(const std::string& filepath);
+        void ImportModelAsset(const std::string& filepath);
+        void HandleAssetDropped(const std::string& filepath, const std::string& assetType);
         void HandleShortcuts();
 
     private:
@@ -78,11 +86,14 @@ namespace CCEngine {
         UI::Button* m_BtnOpen = nullptr;
         UI::Button* m_BtnSave = nullptr;
         UI::Button* m_BtnSaveAs = nullptr;
+        UI::Button* m_BtnSavePrefab = nullptr;
+        UI::Button* m_BtnInstantiatePrefab = nullptr;
         UI::Button* m_BtnExit = nullptr;
 
         // 3. 좌/우 패널
         UI::HierarchyPanel* m_HierarchyPanel = nullptr;
         UI::InspectorPanel* m_InspectorPanel = nullptr;
+        UI::AssetBrowserPanel* m_AssetBrowserPanel = nullptr;
         UI::VBoxContainer* m_HierarchyContainer = nullptr;
 
 

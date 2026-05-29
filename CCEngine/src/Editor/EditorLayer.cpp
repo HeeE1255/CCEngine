@@ -7,7 +7,9 @@
 #include "Renderer/MeshFactory.h"
 #include "Renderer/Texture.h"
 #include "Renderer/Font.h"
+#include "Renderer/RendererHandle.h"
 #include "Scene/Components.h"
+#include "Scene/PrefabSerializer.h"
 #include "Scene/SceneSerializer.h"
 #include "Utils/PlatformUtils.h"
 #include "Utils/MathUtils.h"
@@ -20,13 +22,9 @@
 #include "UI/InspectorUtils.h"
 #include <windows.h>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 
-// [ImGui 완전 제거됨]
-// #include "imgui.h" 
-// #include "ImGuizmo.h" // [TODO] 자체 기즈모(Gizmo) 렌더링 시스템 구현 필요
-
-// [추가] 이벤트 시스템 헤더 (경로는 프로젝트에 맞게 수정하세요)
 #include "Events/Event.h"
 #include "Events/MouseEvent.h"
 
@@ -35,12 +33,12 @@ namespace CCEngine {
     EditorLayer::EditorLayer()
         : Layer("EditorLayer"), m_Camera(45.0f, 1280.0f / 720.0f, 0.1f, 100.0f)
     {
-		m_GizmoSystem.Init(); // 기즈모 시스템 초기화
+        m_GizmoSystem.Init(); // 기즈모 시스템 초기화
     }
 
     void EditorLayer::OnAttach()
     {
- 
+
         FramebufferSpecification fbSpec;
         fbSpec.Width = 1280;
         fbSpec.Height = 720;
@@ -92,10 +90,10 @@ namespace CCEngine {
 
         Entity mayoModel = ModelImporter::ImportModel(m_ActiveScene, "assets/Chocolate rice/0.MAYO/FBX/FBX_MAYO.fbx");
 
-		// --- 에디터 기본 UI 세팅 ---
+        // --- 에디터 기본 UI 세팅 ---
         BuildEditorUI();
 
-		// --- 인스펙터 패널에 기본 컴포넌트 등록 ---
+        // --- 인스펙터 패널에 기본 컴포넌트 등록 ---
         UI::InspectorUtils::InitStandardComponents();
     }
 
@@ -113,14 +111,7 @@ namespace CCEngine {
     {
         auto& mainWindow = CCEngine::Application::Get()->GetWindow();
 
-        //// 1. 하이어라키 갱신 요청 처리
-        //if (m_NeedsHierarchyRefresh)
-        //{
-        //    RefreshHierarchy();
-        //    m_NeedsHierarchyRefresh = false;
-        //}
-
-        // 2. 뷰포트 크기 계산 및 프레임버퍼 리사이즈
+        // 1. 뷰포트 크기 계산 및 프레임버퍼 리사이즈
         if (m_ViewportWidget)
         {
             auto vpSize = m_ViewportWidget->GetCalculatedSize();
@@ -147,30 +138,33 @@ namespace CCEngine {
             m_GameFramebuffer->Resize((uint32_t)m_GameViewportSize.x, (uint32_t)m_GameViewportSize.y);
         }
 
-        // 3. 카메라 및 로직 업데이트
+        // 2. 카메라 및 로직 업데이트
         m_Camera.OnUpdate(deltaTime);
         HandleShortcuts();
 
-		// 선택된 엔티티가 있다면 인스펙터 패널에 전달하여 UI 갱신
+        // 선택된 엔티티가 있다면 인스펙터 패널에 전달하여 UI 갱신
         if (m_HierarchyPanel && m_InspectorPanel)
         {
             m_InspectorPanel->SetSelectedEntity(m_HierarchyPanel->GetSelectedEntity());
         }
 
-        // 렌더링 직전에 현재 창 크기를 기반으로 UI 크기를 재계산합니다.
         if (m_RootUI)
         {
-            auto& mainWindow = CCEngine::Application::Get()->GetWindow();
             float winWidth = (float)mainWindow.GetWidth();
             float winHeight = (float)mainWindow.GetHeight();
-            m_RootUI->UpdateLayout({ 0.0f, 0.0f }, { winWidth, winHeight });
+
+            if (winWidth >= 50.0f && winHeight >= 50.0f)
+            {
+                m_RootUI->UpdateLayout({ 0.0f, 0.0f }, { winWidth, winHeight });
+            }
         }
+        // =========================================================================
 
         // 최신 프레임버퍼 텍스처를 뷰포트 위젯에 연결
         if (m_ViewportWidget) m_ViewportWidget->SetTexture(m_Framebuffer->GetColorAttachmentRendererID(0));
         if (m_GameViewWidget) m_GameViewWidget->SetTexture(m_GameFramebuffer->GetColorAttachmentRendererID(0));
 
-        // 4. 에디터 프레임버퍼 렌더링
+        // 3. 에디터 프레임버퍼 렌더링
         Renderer::SetClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         Renderer::Clear();
 
@@ -180,19 +174,16 @@ namespace CCEngine {
         m_Framebuffer->ClearAttachment(1, -1);
 
         m_ActiveScene->OnUpdate(deltaTime);
-
-        Renderer2D::BeginScene(m_Camera);
-        Renderer2D::EndScene();
+        m_ActiveScene->OnRender2D(m_Camera);
         m_ActiveScene->OnRender3D(m_Camera);
 
-		// 자체 기즈모 시스템 구현
+        // 자체 기즈모 시스템 구현
         auto selectedEntity = m_HierarchyPanel->GetSelectedEntity();
         m_GizmoSystem.OnRender(selectedEntity, m_Camera.GetViewMatrix(), m_Camera.GetProjectionMatrix());
-        //
 
         m_Framebuffer->Unbind();
 
-        // 5. 게임 프레임버퍼 렌더링
+        // 4. 게임 프레임버퍼 렌더링
         m_GameFramebuffer->Bind();
         Renderer::SetClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         Renderer::Clear();
@@ -215,16 +206,13 @@ namespace CCEngine {
                 gameCamera.SetPosition(transformComp.Translation);
                 gameCamera.SetRotation(transformComp.QuaternionRotation);
 
-                Renderer2D::BeginScene(gameCamera);
-                Renderer2D::EndScene();
+                m_ActiveScene->OnRender2D(gameCamera);
                 m_ActiveScene->OnRender3D(gameCamera);
                 break;
             }
         }
         m_GameFramebuffer->Unbind();
-
     }
-
 
     void EditorLayer::OnEvent(Event& e)
     {
@@ -235,34 +223,11 @@ namespace CCEngine {
 
             if (m_FileDropdownPanel && m_FileDropdownPanel->IsVisible())
             {
-                // 마우스가 드롭다운 안에도 없고, 메뉴 버튼 위에도 없다면 닫기
                 if (!m_FileDropdownPanel->IsPointInside(mouseEvent.GetX(), mouseEvent.GetY()) &&
                     !m_BtnFileMenu->IsPointInside(mouseEvent.GetX(), mouseEvent.GetY()))
                 {
                     m_FileDropdownPanel->SetVisible(false);
                 }
-            }
-
-        }
-
-		// 2. 마우스 이벤트는 뷰포트 위젯이 우선적으로 처리 (뷰포트 안에서만 기즈모 조작 가능하도록)
-        if (!e.Handled && m_ViewportWidget)
-        {
-            float mouseX = 0.0f; float mouseY = 0.0f;
-            if (e.GetEventType() == EventType::MouseButtonPressed) { auto& me = static_cast<MouseButtonPressedEvent&>(e); mouseX = me.GetX(); mouseY = me.GetY(); }
-            else if (e.GetEventType() == EventType::MouseMoved) { auto& me = static_cast<MouseMovedEvent&>(e); mouseX = me.GetX(); mouseY = me.GetY(); }
-            else if (e.GetEventType() == EventType::MouseButtonReleased) { auto& me = static_cast<MouseButtonReleasedEvent&>(e); mouseX = me.GetX(); mouseY = me.GetY(); }
-
-            auto vpPos = m_ViewportWidget->GetCalculatedPosition();
-            auto vpSize = m_ViewportWidget->GetCalculatedSize();
-
-            // ★ 핵심: 마우스가 뷰포트 안에 있거나, "현재 기즈모를 잡고 끌고 있는 상태" 라면 무조건 이벤트 전달!
-            bool isInsideViewport = (mouseX >= vpPos.x && mouseX <= vpPos.x + vpSize.x && mouseY >= vpPos.y && mouseY <= vpPos.y + vpSize.y);
-
-            if (isInsideViewport || m_GizmoSystem.IsDragging())
-            {
-                auto selectedEntity = m_HierarchyPanel->GetSelectedEntity();
-                m_GizmoSystem.OnEvent(e, selectedEntity, m_Camera.GetViewMatrix(), m_Camera.GetProjectionMatrix(), vpSize.x, vpSize.y, vpPos.x, vpPos.y);
             }
         }
 
@@ -281,17 +246,75 @@ namespace CCEngine {
             }
             else
             {
-                // 아무것도 하지 않음 (선택 유지)
                 std::cout << "[Picking] Ignored Empty Space!" << std::endl;
             }
-
             });
 
+        std::function<UI::Widget*(UI::Widget*, float, float)> getTopmostWidgetAt =
+            [&](UI::Widget* widget, float mouseX, float mouseY) -> UI::Widget*
+            {
+                if (!widget || !widget->IsVisible() || !widget->IsPointInside(mouseX, mouseY))
+                    return nullptr;
 
-		// 3. UI 이벤트 처리 (뷰포트가 처리하지 않은 이벤트는 UI로 전달)
-        if (!e.Handled && m_RootUI)
+                const auto& children = widget->GetChildren();
+                for (auto it = children.rbegin(); it != children.rend(); ++it)
+                {
+                    if (UI::Widget* hit = getTopmostWidgetAt(*it, mouseX, mouseY))
+                        return hit;
+                }
+                return widget;
+            };
+
+        bool shouldRouteUIFirst = true;
+        if (m_RootUI && m_ViewportWidget)
         {
-            m_RootUI->OnEvent(e);
+            float mouseX = 0.0f;
+            float mouseY = 0.0f;
+            bool isMouseEvent = true;
+
+            if (e.GetEventType() == EventType::MouseButtonPressed) { auto& me = static_cast<MouseButtonPressedEvent&>(e); mouseX = me.GetX(); mouseY = me.GetY(); }
+            else if (e.GetEventType() == EventType::MouseMoved) { auto& me = static_cast<MouseMovedEvent&>(e); mouseX = me.GetX(); mouseY = me.GetY(); }
+            else if (e.GetEventType() == EventType::MouseButtonReleased) { auto& me = static_cast<MouseButtonReleasedEvent&>(e); mouseX = me.GetX(); mouseY = me.GetY(); }
+            else { isMouseEvent = false; }
+
+            if (isMouseEvent)
+            {
+                UI::Widget* topmost = getTopmostWidgetAt(m_RootUI, mouseX, mouseY);
+                shouldRouteUIFirst = (topmost != m_ViewportWidget);
+            }
+        }
+
+        auto routeViewportGizmo = [&]()
+        {
+            if (e.Handled || !m_ViewportWidget)
+                return;
+
+            float mouseX = 0.0f; float mouseY = 0.0f;
+            if (e.GetEventType() == EventType::MouseButtonPressed) { auto& me = static_cast<MouseButtonPressedEvent&>(e); mouseX = me.GetX(); mouseY = me.GetY(); }
+            else if (e.GetEventType() == EventType::MouseMoved) { auto& me = static_cast<MouseMovedEvent&>(e); mouseX = me.GetX(); mouseY = me.GetY(); }
+            else if (e.GetEventType() == EventType::MouseButtonReleased) { auto& me = static_cast<MouseButtonReleasedEvent&>(e); mouseX = me.GetX(); mouseY = me.GetY(); }
+
+            auto vpPos = m_ViewportWidget->GetCalculatedPosition();
+            auto vpSize = m_ViewportWidget->GetCalculatedSize();
+
+            bool isInsideViewport = (mouseX >= vpPos.x && mouseX <= vpPos.x + vpSize.x && mouseY >= vpPos.y && mouseY <= vpPos.y + vpSize.y);
+
+            if (isInsideViewport || m_GizmoSystem.IsDragging())
+            {
+                auto selectedEntity = m_HierarchyPanel->GetSelectedEntity();
+                m_GizmoSystem.OnEvent(e, selectedEntity, m_Camera.GetViewMatrix(), m_Camera.GetProjectionMatrix(), vpSize.x, vpSize.y, vpPos.x, vpPos.y);
+            }
+        };
+
+        if (shouldRouteUIFirst)
+        {
+            if (!e.Handled && m_RootUI) m_RootUI->OnEvent(e);
+            routeViewportGizmo();
+        }
+        else
+        {
+            routeViewportGizmo();
+            if (!e.Handled && m_RootUI) m_RootUI->OnEvent(e);
         }
 
         // 4. UI가 이벤트를 먹지 않았다면, 3D 카메라나 씬에 넘겨줌
@@ -303,12 +326,7 @@ namespace CCEngine {
     }
 
     void EditorLayer::OnImGuiRender()
-    {
-        // [완전 제거됨] 
-        // 1. Layout Update 로직은 OnUpdate로 이동
-        // 2. UI Rendering 로직은 Application::Run() 루프에서 UIRenderer를 통해 직접 수행됨
-        // 3. ImGui 이벤트 로직은 OnEvent로 분리
-    }
+    {}
 
     // =========================================================================
     // 파일 세이브/로드 및 단축키 로직
@@ -339,19 +357,151 @@ namespace CCEngine {
         std::filesystem::path initialDirPath = std::filesystem::current_path() / "assets" / "scenes";
         std::string initialDirStr = initialDirPath.string();
         std::string filepath = CCEngine::PlatformUtils::OpenFile("CCEngine Scene (*.ccscene)\0*.ccscene\0", initialDirStr.c_str());
-        if (!filepath.empty()) {
-            CCEngine::SceneSerializer serializer(m_ActiveScene);
-            if (serializer.Deserialize(filepath)) {
-                m_CurrentScenePath = filepath;
-                printf("Scene Loaded from: %s\n", m_CurrentScenePath.c_str());
+        if (!filepath.empty()) OpenScene(filepath);
+    }
+
+    void EditorLayer::OpenScene(const std::string& filepath)
+    {
+        if (filepath.empty())
+            return;
+
+        CCEngine::SceneSerializer serializer(m_ActiveScene);
+        if (serializer.Deserialize(filepath)) {
+            m_CurrentScenePath = filepath;
+            if (m_HierarchyPanel)
+            {
+                m_HierarchyPanel->SetSelectedEntity(CCEngine::Entity{});
+                m_HierarchyPanel->Refresh();
             }
-            else { printf("Failed to load scene!\n"); }
+            printf("Scene Loaded from: %s\n", m_CurrentScenePath.c_str());
+        }
+        else { printf("Failed to load scene: %s\n", filepath.c_str()); }
+    }
+
+    void EditorLayer::LoadSceneAdditive(const std::string& filepath)
+    {
+        if (filepath.empty())
+            return;
+
+        CCEngine::SceneSerializer serializer(m_ActiveScene);
+        Entity sceneRoot = serializer.DeserializeAppend(filepath);
+        if (sceneRoot)
+        {
+            if (m_HierarchyPanel)
+            {
+                m_HierarchyPanel->SetSelectedEntity(sceneRoot);
+                m_HierarchyPanel->Refresh();
+            }
+            printf("Scene Added from: %s\n", filepath.c_str());
+        }
+        else
+        {
+            printf("Failed to add scene: %s\n", filepath.c_str());
+        }
+    }
+
+    void EditorLayer::SaveSelectedPrefab()
+    {
+        if (!m_HierarchyPanel)
+            return;
+
+        Entity selected = m_HierarchyPanel->GetSelectedEntity();
+        if (!selected)
+        {
+            printf("No entity selected. Select an entity before saving a prefab.\n");
+            return;
+        }
+
+        std::filesystem::path initialDirPath = std::filesystem::current_path() / "assets" / "prefabs";
+        std::filesystem::create_directories(initialDirPath);
+        std::string initialDirStr = initialDirPath.string();
+        std::string filepath = CCEngine::PlatformUtils::SaveFile("CCEngine Prefab (*.ccprefab)\0*.ccprefab\0", initialDirStr.c_str());
+
+        if (!filepath.empty())
+        {
+            if (PrefabSerializer::Serialize(m_ActiveScene, selected, filepath))
+            {
+                if (m_AssetBrowserPanel) m_AssetBrowserPanel->Refresh();
+                printf("Prefab Saved to: %s\n", filepath.c_str());
+            }
+            else
+                printf("Failed to save prefab: %s\n", filepath.c_str());
+        }
+    }
+
+    void EditorLayer::InstantiatePrefab()
+    {
+        std::filesystem::path initialDirPath = std::filesystem::current_path() / "assets" / "prefabs";
+        std::filesystem::create_directories(initialDirPath);
+        std::string initialDirStr = initialDirPath.string();
+        std::string filepath = CCEngine::PlatformUtils::OpenFile("CCEngine Prefab (*.ccprefab)\0*.ccprefab\0", initialDirStr.c_str());
+
+        if (!filepath.empty()) InstantiatePrefab(filepath);
+    }
+
+    void EditorLayer::InstantiatePrefab(const std::string& filepath)
+    {
+        if (!filepath.empty())
+        {
+            Entity instance = PrefabSerializer::Deserialize(m_ActiveScene, filepath);
+            if (instance)
+            {
+                if (instance.HasComponent<TransformComponent>())
+                    instance.GetComponent<TransformComponent>().Translation = { 0.0f, 0.0f, 0.0f };
+
+                m_HierarchyPanel->SetSelectedEntity(instance);
+                m_HierarchyPanel->Refresh();
+                printf("Prefab Instantiated from: %s\n", filepath.c_str());
+            }
+            else
+            {
+                printf("Failed to instantiate prefab: %s\n", filepath.c_str());
+            }
+        }
+    }
+
+    void EditorLayer::ImportModelAsset(const std::string& filepath)
+    {
+        if (filepath.empty())
+            return;
+
+        Entity modelEntity = ModelImporter::ImportModel(m_ActiveScene, filepath);
+        if (modelEntity)
+        {
+            if (m_HierarchyPanel)
+            {
+                m_HierarchyPanel->SetSelectedEntity(modelEntity);
+                m_HierarchyPanel->Refresh();
+            }
+            printf("Model Imported from: %s\n", filepath.c_str());
+        }
+    }
+
+    void EditorLayer::HandleAssetDropped(const std::string& filepath, const std::string& assetType)
+    {
+        if (!m_HierarchyPanel)
+            return;
+
+        auto [mouseX, mouseY] = CCEngine::Application::Get()->GetWindow().GetMousePosition();
+        if (!m_HierarchyPanel->IsPointInside(mouseX, mouseY))
+            return;
+
+        if (assetType == "scene")
+        {
+            LoadSceneAdditive(filepath);
+        }
+        else if (assetType == "prefab")
+        {
+            InstantiatePrefab(filepath);
+        }
+        else if (assetType == "model")
+        {
+            ImportModelAsset(filepath);
         }
     }
 
     void EditorLayer::HandleShortcuts()
     {
-        // [수정] ImGui::IsMouseDown 대신 Win32 네이티브 입력 감지
         bool isRightMouseDown = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
 
         if (!isRightMouseDown)
@@ -382,28 +532,8 @@ namespace CCEngine {
         m_IsSPressedLastFrame = isSPressedNow;
     }
 
-    void EditorLayer::RefreshHierarchy() 
-    { 
-        //if(!m_ActiveScene) return;
-
-        //m_HierarchyContainer->ClearChildren(); 
-
-        //auto view = m_ActiveScene->GetRegistry().view<CCEngine::TagComponent>();
-        //for (auto entityID : view)
-        //{
-        //    CCEngine::Entity entity{ entityID, m_ActiveScene };
-        //    bool isRoot = true;
-
-        //    if (entity.HasComponent<CCEngine::RelationshipComponent>())
-        //    {
-        //        if (entity.GetComponent<CCEngine::RelationshipComponent>().Parent != entt::null)
-        //            isRoot = false;
-        //    }
-
-        //    if (isRoot)
-        //        DrawEntityNode(entity, 0.0f);
-        //}
-    }
+    void EditorLayer::RefreshHierarchy()
+    {}
 
     void EditorLayer::BuildEditorUI()
     {
@@ -472,32 +602,43 @@ namespace CCEngine {
 
         m_ViewportWindow = new UI::WindowPanel("ViewportWindowUI", "Scene View");
         m_ViewportWindow->SetAnchorMin(0.2f, 0.0f);
-        m_ViewportWindow->SetAnchorMax(0.8f, 0.7f);
+        m_ViewportWindow->SetAnchorMax(0.8f, 0.55f);
         m_ViewportWindow->SetOffsetMin(0.0f, 48.0f);
         m_ViewportWindow->SetOffsetMax(0.0f, 0.0f);
         m_RootUI->AddChild(m_ViewportWindow);
 
-        void* editorTex = m_Framebuffer->GetColorAttachmentRendererID(0);
+        RendererHandle editorTex = m_Framebuffer->GetColorAttachmentRendererID(0);
         m_ViewportWidget = new UI::ImageWidget("ViewportWidget", editorTex);
         m_ViewportWidget->SetAnchorMin(0.0f, 0.0f); m_ViewportWidget->SetAnchorMax(1.0f, 1.0f);
         m_ViewportWidget->SetOffsetMin(0.0f, 24.0f); m_ViewportWidget->SetOffsetMax(0.0f, 0.0f);
         m_ViewportWindow->AddChild(m_ViewportWidget);
 
         m_GameWindow = new UI::WindowPanel("GameWindowUI", "Game View");
-        m_GameWindow->SetAnchorMin(0.2f, 0.6f); m_GameWindow->SetAnchorMax(0.8f, 1.0f);
+        m_GameWindow->SetAnchorMin(0.2f, 0.55f); m_GameWindow->SetAnchorMax(0.8f, 0.75f);
         m_GameWindow->SetOffsetMin(0.0f, 0.0f); m_GameWindow->SetOffsetMax(0.0f, 0.0f);
         m_RootUI->AddChild(m_GameWindow);
 
-        void* gameTex = m_GameFramebuffer->GetColorAttachmentRendererID(0);
+        RendererHandle gameTex = m_GameFramebuffer->GetColorAttachmentRendererID(0);
         m_GameViewWidget = new UI::ImageWidget("GameViewWidget", gameTex);
         m_GameViewWidget->SetAnchorMin(0.0f, 0.0f); m_GameViewWidget->SetAnchorMax(1.0f, 1.0f);
         m_GameViewWidget->SetOffsetMin(0.0f, 24.0f); m_GameViewWidget->SetOffsetMax(0.0f, 0.0f);
         m_GameWindow->AddChild(m_GameViewWidget);
 
+        m_AssetBrowserPanel = new UI::AssetBrowserPanel("AssetBrowserUI");
+        m_AssetBrowserPanel->SetAnchorMin(0.2f, 0.75f);
+        m_AssetBrowserPanel->SetAnchorMax(0.8f, 1.0f);
+        m_AssetBrowserPanel->SetOffsetMin(0.0f, 0.0f);
+        m_AssetBrowserPanel->SetOffsetMax(0.0f, 0.0f);
+        m_AssetBrowserPanel->SetOnPrefabSelected([this](const std::string& path) { InstantiatePrefab(path); });
+        m_AssetBrowserPanel->SetOnModelSelected([this](const std::string& path) { ImportModelAsset(path); });
+        m_AssetBrowserPanel->SetOnSceneSelected([this](const std::string& path) { OpenScene(path); });
+        m_AssetBrowserPanel->SetOnAssetDropped([this](const std::string& path, const std::string& type, float, float) { HandleAssetDropped(path, type); });
+        m_RootUI->AddChild(m_AssetBrowserPanel);
+
         m_FileDropdownPanel = new UI::Panel("FileDropdownUI", { 0.18f, 0.18f, 0.18f, 1.0f });
         m_FileDropdownPanel->SetVisible(false);
         m_FileDropdownPanel->SetAnchorMin(0.0f, 0.0f); m_FileDropdownPanel->SetAnchorMax(0.0f, 0.0f);
-        m_FileDropdownPanel->SetOffsetMin(0.0f, 48.0f); m_FileDropdownPanel->SetOffsetMax(120.0f, 48.0f + 100.0f);
+        m_FileDropdownPanel->SetOffsetMin(0.0f, 48.0f); m_FileDropdownPanel->SetOffsetMax(150.0f, 48.0f + 150.0f);
         m_RootUI->AddChild(m_FileDropdownPanel);
 
         m_BtnOpen = new UI::Button("BtnOpen", "Open Scene");
@@ -515,9 +656,19 @@ namespace CCEngine {
         m_BtnSaveAs->SetOffsetMin(0.0f, 50.0f); m_BtnSaveAs->SetOffsetMax(0.0f, 75.0f);
         m_FileDropdownPanel->AddChild(m_BtnSaveAs);
 
+        m_BtnSavePrefab = new UI::Button("BtnSavePrefab", "Save Prefab");
+        m_BtnSavePrefab->SetAnchorMin(0.0f, 0.0f); m_BtnSavePrefab->SetAnchorMax(1.0f, 0.0f);
+        m_BtnSavePrefab->SetOffsetMin(0.0f, 75.0f); m_BtnSavePrefab->SetOffsetMax(0.0f, 100.0f);
+        m_FileDropdownPanel->AddChild(m_BtnSavePrefab);
+
+        m_BtnInstantiatePrefab = new UI::Button("BtnInstantiatePrefab", "Load Prefab");
+        m_BtnInstantiatePrefab->SetAnchorMin(0.0f, 0.0f); m_BtnInstantiatePrefab->SetAnchorMax(1.0f, 0.0f);
+        m_BtnInstantiatePrefab->SetOffsetMin(0.0f, 100.0f); m_BtnInstantiatePrefab->SetOffsetMax(0.0f, 125.0f);
+        m_FileDropdownPanel->AddChild(m_BtnInstantiatePrefab);
+
         m_BtnExit = new UI::Button("BtnExit", "Exit");
         m_BtnExit->SetAnchorMin(0.0f, 0.0f); m_BtnExit->SetAnchorMax(1.0f, 0.0f);
-        m_BtnExit->SetOffsetMin(0.0f, 75.0f); m_BtnExit->SetOffsetMax(0.0f, 100.0f);
+        m_BtnExit->SetOffsetMin(0.0f, 125.0f); m_BtnExit->SetOffsetMax(0.0f, 150.0f);
         m_FileDropdownPanel->AddChild(m_BtnExit);
 
         // --- 버튼 & 툴바 콜백 등록 ---
@@ -525,6 +676,8 @@ namespace CCEngine {
         m_BtnOpen->SetOnClick([this]() { m_FileDropdownPanel->SetVisible(false); OpenScene(); });
         m_BtnSave->SetOnClick([this]() { m_FileDropdownPanel->SetVisible(false); SaveScene(); });
         m_BtnSaveAs->SetOnClick([this]() { m_FileDropdownPanel->SetVisible(false); SaveSceneAs(); });
+        m_BtnSavePrefab->SetOnClick([this]() { m_FileDropdownPanel->SetVisible(false); SaveSelectedPrefab(); });
+        m_BtnInstantiatePrefab->SetOnClick([this]() { m_FileDropdownPanel->SetVisible(false); InstantiatePrefab(); });
         m_BtnExit->SetOnClick([this]() { CCEngine::Application::Get()->GetWindow().SetShouldClose(true); });
 
         m_BtnPlay->SetOnClick([this]() {
@@ -583,6 +736,4 @@ namespace CCEngine {
 
         CCEngine::Application::Get()->GetWindow().SetRootUI(m_RootUI);
     }
-
-   
 }

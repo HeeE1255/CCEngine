@@ -180,6 +180,9 @@
     <ClInclude Include="src\Scene\Entity.h">
       <Filter>src\Scene</Filter>
     </ClInclude>
+    <ClInclude Include="src\Scene\PrefabSerializer.h">
+      <Filter>src\Scene</Filter>
+    </ClInclude>
     <ClInclude Include="src\Scene\Scene.h">
       <Filter>src\Scene</Filter>
     </ClInclude>
@@ -190,6 +193,9 @@
       <Filter>src\Scene</Filter>
     </ClInclude>
     <ClInclude Include="src\UI\Button.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
+    <ClInclude Include="src\UI\AssetBrowserPanel.h">
       <Filter>src\UI</Filter>
     </ClInclude>
     <ClInclude Include="src\UI\DragFloat.h">
@@ -365,11 +371,17 @@
     <ClCompile Include="src\Scene\Entity.cpp">
       <Filter>src\Scene</Filter>
     </ClCompile>
+    <ClCompile Include="src\Scene\PrefabSerializer.cpp">
+      <Filter>src\Scene</Filter>
+    </ClCompile>
     <ClCompile Include="src\Scene\Scene.cpp">
       <Filter>src\Scene</Filter>
     </ClCompile>
     <ClCompile Include="src\Scene\SceneSerializer.cpp">
       <Filter>src\Scene</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UI\AssetBrowserPanel.cpp">
+      <Filter>src\UI</Filter>
     </ClCompile>
     <ClCompile Include="src\UI\Button.cpp">
       <Filter>src\UI</Filter>

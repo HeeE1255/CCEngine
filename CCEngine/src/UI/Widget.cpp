@@ -1,4 +1,6 @@
 #include "Widget.h"
+#include "Renderer/Renderer2D.h"    
+#include "Renderer/RenderCommand.h" 
 
 namespace CCEngine {
     namespace UI {
@@ -7,7 +9,6 @@ namespace CCEngine {
 
         Widget::~Widget()
         {
-            // 부모가 소멸될 때 자식들도 함께 메모리에서 해제합니다 (메모리 누수 방지)
             for (auto child : m_Children)
             {
                 delete child;
@@ -36,25 +37,21 @@ namespace CCEngine {
 
         void Widget::UpdateLayout(const DirectX::XMFLOAT2& parentPos, const DirectX::XMFLOAT2& parentSize)
         {
-            if(!m_IsVisible) return;
+            if (!m_IsVisible) return;
 
-            // 1. 앵커(비율)를 기반으로 내 사각형의 가이드라인(기준점)을 잡습니다.
             float anchorLeft = parentPos.x + (parentSize.x * m_AnchorMin.x);
             float anchorTop = parentPos.y + (parentSize.y * m_AnchorMin.y);
             float anchorRight = parentPos.x + (parentSize.x * m_AnchorMax.x);
             float anchorBottom = parentPos.y + (parentSize.y * m_AnchorMax.y);
 
-            // 2. 오프셋(절대 픽셀)을 가이드라인에 더해 최종 Rect를 계산합니다.
             float finalLeft = anchorLeft + m_OffsetMin.x;
             float finalTop = anchorTop + m_OffsetMin.y;
             float finalRight = anchorRight + m_OffsetMax.x;
             float finalBottom = anchorBottom + m_OffsetMax.y;
 
-            // 3. 렌더러가 그릴 수 있도록 최종 위치와 크기를 업데이트 합니다.
             m_CalculatedPos = { finalLeft, finalTop };
             m_CalculatedSize = { finalRight - finalLeft, finalBottom - finalTop };
 
-            // 4. 내 크기가 정해졌으니, 자식들에게 내 위치와 크기를 넘겨주며 연쇄 업데이트를 지시합니다.
             for (auto child : m_Children)
             {
                 child->UpdateLayout(m_CalculatedPos, m_CalculatedSize);
@@ -63,10 +60,9 @@ namespace CCEngine {
 
         bool Widget::OnEvent(Event& e)
         {
-            // Determine if this is a mouse-related event and extract mouse coords early.
             bool isMouseEvent = (e.GetEventType() == EventType::MouseMoved ||
-                                 e.GetEventType() == EventType::MouseButtonPressed ||
-                                 e.GetEventType() == EventType::MouseButtonReleased);
+                e.GetEventType() == EventType::MouseButtonPressed ||
+                e.GetEventType() == EventType::MouseButtonReleased);
             float mouseX = 0.0f, mouseY = 0.0f;
             if (isMouseEvent)
             {
@@ -87,82 +83,55 @@ namespace CCEngine {
                 }
             }
 
+            if (!m_IsVisible) return false;
 
-            if (!m_IsVisible) return false; // 숨겨진 UI는 클릭 불가
+            if (e.Handled) return true;
 
-            if (e.Handled)
-            {
-                return true;
-            }
-
-            // 1. 역순회 (Reverse Traversal): 나보다 늦게 그려진(맨 위에 있는) 자식부터 검사!
             for (auto it = m_Children.rbegin(); it != m_Children.rend(); ++it)
             {
-                // If this is a mouse event and the mouse isn't inside the child's rect,
-                // skip calling OnEvent on that child (prune traversal).
-                if (isMouseEvent && !(*it)->IsPointInside(mouseX, mouseY))
+                if (isMouseEvent && !(*it)->IsPointInside(mouseX, mouseY) && !(*it)->WantsMouseCapture())
                     continue;
 
-                if ((*it)->OnEvent(e))
-                {
-                    // 자식 중 누군가가 이벤트를 먹었다면(true 반환),
-                    // 여기서 탐색을 즉시 종료하고 나도 true를 반환해서 상위로 전달!
-                    return true;
-                }
+                if ((*it)->OnEvent(e)) return true;
             }
 
-            // 2. 자식들이 아무도 안 먹었다면, 이제 내가 먹을 차례인지 확인
             if (e.GetEventType() == EventType::MouseMoved)
             {
-                MouseMovedEvent& mouseEvent = static_cast<MouseMovedEvent&>(e);
-                return OnMouseMoved(mouseEvent);
+                return OnMouseMoved(static_cast<MouseMovedEvent&>(e));
             }
             else if (e.GetEventType() == EventType::MouseButtonPressed)
             {
-                MouseButtonPressedEvent& mouseEvent = static_cast<MouseButtonPressedEvent&>(e);
-                return OnMouseButtonPressed(mouseEvent);
+                return OnMouseButtonPressed(static_cast<MouseButtonPressedEvent&>(e));
             }
             else if (e.GetEventType() == EventType::MouseButtonReleased)
             {
-                // 1. 나 자신의 로직 실행 (여기서 WindowPanel의 Redock이 실행됨!)
-                if (OnMouseButtonReleased(static_cast<MouseButtonReleasedEvent&>(e)))
-                {
-                    return true; // 내가 이벤트를 먹었다면(Handled) 종료
-                }
-
-                // Note: children were already checked in the reverse traversal above,
-                // avoid re-dispatching to children here to prevent duplicate handling
-                // or reentrancy issues.
+                if (OnMouseButtonReleased(static_cast<MouseButtonReleasedEvent&>(e))) return true;
             }
 
-            return false; // 나도 관심 없는 이벤트다
+            return false;
         }
 
         void Widget::SetSize(float width, float height)
         {
-            // 기존의 OffsetMin(Left, Top) 시작점은 유지하고 크기만 변경합니다.
             m_OffsetMax.x = m_OffsetMin.x + width;
             m_OffsetMax.y = m_OffsetMin.y + height;
         }
 
         void Widget::SetPosition(float x, float y)
         {
-            // 1. 위치를 명시적으로 잡으려면 앵커를 부모의 좌상단(0,0)으로 묶는 것이 안전합니다.
             SetAnchorMin(0.0f, 0.0f);
             SetAnchorMax(0.0f, 0.0f);
 
-            // 2. 현재 설정된 Width, Height를 계산해 둡니다.
             float width = m_OffsetMax.x - m_OffsetMin.x;
             float height = m_OffsetMax.y - m_OffsetMin.y;
 
-            // 3. 새로운 위치로 Offset을 통째로 옮깁니다.
             m_OffsetMin = { x, y };
             m_OffsetMax = { x + width, y + height };
         }
 
         void Widget::OnUpdate(float deltaTime)
         {
-            for (auto child : m_Children) 
+            for (auto child : m_Children)
             {
                 child->OnUpdate(deltaTime);
             }
@@ -172,11 +141,39 @@ namespace CCEngine {
         {
             if (!m_IsVisible) return;
 
-            for (auto child : m_Children) 
+            bool applyScissor = m_ClipToBounds && m_CalculatedSize.x > 0.0f && m_CalculatedSize.y > 0.0f;
+
+            if (applyScissor)
+            {
+                Renderer2D::Flush();
+                Renderer2D::StartBatch();
+
+                // 패딩을 적용한 실제 가위질 영역 계산
+                float sX = m_CalculatedPos.x + m_ClipPadding.x;
+                float sY = m_CalculatedPos.y + m_ClipPadding.y;
+                float sW = m_CalculatedSize.x - m_ClipPadding.x - m_ClipPadding.z;
+                float sH = m_CalculatedSize.y - m_ClipPadding.y - m_ClipPadding.w;
+
+                if (sW < 0.0f) sW = 0.0f;
+                if (sH < 0.0f) sH = 0.0f;
+
+                RenderCommand::SetScissorEnable(true);
+                RenderCommand::SetScissor((uint32_t)sX, (uint32_t)sY, (uint32_t)sW, (uint32_t)sH);
+            }
+
+            // 자식들 순회하며 그리기 (가위질 영역 밖은 GPU가 자동으로 잘라버림)
+            for (auto child : m_Children)
             {
                 child->OnRender();
             }
+
+            if (applyScissor)
+            {
+                Renderer2D::Flush();
+                Renderer2D::StartBatch();
+                RenderCommand::SetScissorEnable(false);
+            }
         }
 
-    } // namespace UI
-} // namespace CCEngine
+    }
+}
