@@ -51,6 +51,7 @@ namespace CCEngine
 
             void AddChild(Widget* child);
             void RemoveChild(Widget* child);
+            bool RemoveDescendant(Widget* descendant);
             Widget* GetParent() const { return m_Parent; }
             const std::vector<Widget*>& GetChildren() const { return m_Children; }
 

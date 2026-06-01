@@ -4,6 +4,8 @@
 #include "Renderer/RenderCommand.h"
 #include "Renderer/MeshFactory.h"
 #include "Utils/MathUtils.h"
+#include <algorithm>
+#include <functional>
 
 namespace CCEngine {
     namespace
@@ -53,11 +55,184 @@ namespace CCEngine {
 
             return DirectX::XMMatrixIdentity();
         }
+
+        DirectX::XMMATRIX BuildBoneLineTransform(const DirectX::XMFLOAT3& start, const DirectX::XMFLOAT3& end, float thickness)
+        {
+            DirectX::XMVECTOR p0 = DirectX::XMLoadFloat3(&start);
+            DirectX::XMVECTOR p1 = DirectX::XMLoadFloat3(&end);
+            DirectX::XMVECTOR delta = DirectX::XMVectorSubtract(p1, p0);
+            float length = DirectX::XMVectorGetX(DirectX::XMVector3Length(delta));
+            if (length <= 0.0001f)
+            {
+                return DirectX::XMMatrixIdentity();
+            }
+
+            DirectX::XMVECTOR dir = DirectX::XMVector3Normalize(delta);
+            DirectX::XMVECTOR from = DirectX::XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f);
+            DirectX::XMVECTOR axis = DirectX::XMVector3Cross(from, dir);
+            float axisLength = DirectX::XMVectorGetX(DirectX::XMVector3Length(axis));
+            float dot = std::clamp(DirectX::XMVectorGetX(DirectX::XMVector3Dot(from, dir)), -1.0f, 1.0f);
+
+            DirectX::XMMATRIX rotation = DirectX::XMMatrixIdentity();
+            if (axisLength > 0.0001f)
+            {
+                axis = DirectX::XMVector3Normalize(axis);
+                rotation = DirectX::XMMatrixRotationAxis(axis, std::acos(dot));
+            }
+            else if (dot < 0.0f)
+            {
+                rotation = DirectX::XMMatrixRotationZ(DirectX::XM_PI);
+            }
+
+            DirectX::XMVECTOR mid = DirectX::XMVectorScale(DirectX::XMVectorAdd(p0, p1), 0.5f);
+            DirectX::XMFLOAT3 midpoint;
+            DirectX::XMStoreFloat3(&midpoint, mid);
+
+            return DirectX::XMMatrixScaling(length, thickness, thickness) *
+                rotation *
+                DirectX::XMMatrixTranslation(midpoint.x, midpoint.y, midpoint.z);
+        }
+
+        Entity FindModelRoot(Entity entity)
+        {
+            Entity current = entity;
+            while (current)
+            {
+                if (current.HasComponent<ModelComponent>())
+                {
+                    return current;
+                }
+
+                if (!current.HasComponent<RelationshipComponent>())
+                {
+                    break;
+                }
+
+                entt::entity parentID = current.GetComponent<RelationshipComponent>().Parent;
+                if (parentID == entt::null)
+                {
+                    break;
+                }
+
+                current = { parentID, current.GetScene() };
+            }
+
+            return {};
+        }
     }
 
     void GizmoSystem::Init()
     {
         m_GizmoShader.reset(Shader::Create("assets/shaders/GizmoShader.hlsl"));
+    }
+
+    void GizmoSystem::OnRenderSkeleton(Entity selectedEntity)
+    {
+        if (!selectedEntity)
+        {
+            return;
+        }
+
+        Entity modelRoot = FindModelRoot(selectedEntity);
+        if (!modelRoot || !modelRoot.HasComponent<ModelComponent>())
+        {
+            return;
+        }
+
+        auto& modelComponent = modelRoot.GetComponent<ModelComponent>();
+        if (!modelComponent.TargetModel || modelComponent.NodePathEntityMap.empty())
+        {
+            return;
+        }
+
+        static auto jointMesh = MeshFactory::CreateCube();
+        static auto lineMesh = MeshFactory::CreateCube();
+
+        RenderCommand::SetDepthTest(false);
+
+        auto isSkeletonNode = [&modelComponent](Entity entity)
+            {
+                if (!entity || entity.HasComponent<MeshComponent>())
+                {
+                    return false;
+                }
+
+                for (const auto& [path, handle] : modelComponent.NodePathEntityMap)
+                {
+                    if (handle == (entt::entity)entity)
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            };
+
+        std::function<void(const ModelNode&)> drawNode = [&](const ModelNode& node)
+            {
+                Entity nodeEntity;
+                auto it = modelComponent.NodePathEntityMap.find(node.Path);
+                if (it != modelComponent.NodePathEntityMap.end())
+                {
+                    nodeEntity = { it->second, selectedEntity.GetScene() };
+                }
+
+                bool isSelectedNode = nodeEntity && nodeEntity == selectedEntity;
+
+                if (isSelectedNode)
+                {
+                    if (!isSkeletonNode(nodeEntity))
+                    {
+                        return;
+                    }
+
+                    DirectX::XMFLOAT3 nodePos = GetWorldPosition(nodeEntity);
+                    DirectX::XMMATRIX jointTransform = DirectX::XMMatrixScaling(0.065f, 0.065f, 0.065f) *
+                        DirectX::XMMatrixTranslation(nodePos.x, nodePos.y, nodePos.z);
+                    Renderer3D::DrawMesh(jointTransform, jointMesh, m_GizmoShader, { 1.0f, 0.82f, 0.22f, 1.0f });
+
+                    if (modelComponent.ShowBoneLinks && nodeEntity.HasComponent<RelationshipComponent>())
+                    {
+                        auto& rel = nodeEntity.GetComponent<RelationshipComponent>();
+
+                        if (rel.Parent != entt::null)
+                        {
+                            Entity parentEntity{ rel.Parent, selectedEntity.GetScene() };
+                            if (isSkeletonNode(parentEntity))
+                            {
+                                DirectX::XMFLOAT3 parentPos = GetWorldPosition(parentEntity);
+                                DirectX::XMMATRIX lineTransform = BuildBoneLineTransform(parentPos, nodePos, 0.014f);
+                                Renderer3D::DrawMesh(lineTransform, lineMesh, m_GizmoShader, { 0.15f, 0.52f, 0.74f, 1.0f });
+                            }
+                        }
+
+                        for (entt::entity childID : rel.Children)
+                        {
+                            Entity childEntity{ childID, selectedEntity.GetScene() };
+                            if (!isSkeletonNode(childEntity))
+                            {
+                                continue;
+                            }
+
+                            DirectX::XMFLOAT3 childPos = GetWorldPosition(childEntity);
+                            DirectX::XMMATRIX lineTransform = BuildBoneLineTransform(nodePos, childPos, 0.014f);
+                            Renderer3D::DrawMesh(lineTransform, lineMesh, m_GizmoShader, { 0.15f, 0.52f, 0.74f, 1.0f });
+                        }
+                    }
+                    return;
+                }
+
+                for (const auto& child : node.Children)
+                {
+                    drawNode(child);
+                }
+            };
+
+        for (const auto& child : modelComponent.TargetModel->GetRootNode().Children)
+        {
+            drawNode(child);
+        }
+
+        RenderCommand::SetDepthTest(true);
     }
 
     void GizmoSystem::OnRender(Entity selectedEntity, DirectX::XMMATRIX viewMatrix, DirectX::XMMATRIX projMatrix)

@@ -2,13 +2,37 @@
 #include "Scene/Components.h"
 #include "Renderer/Texture.h"
 #include <filesystem>
+#include <unordered_map>
 
 namespace CCEngine {
+    namespace
+    {
+        std::shared_ptr<Model> GetOrLoadModel(const std::string& filepath)
+        {
+            static std::unordered_map<std::string, std::weak_ptr<Model>> s_ModelCache;
+
+            std::filesystem::path canonicalPath = std::filesystem::weakly_canonical(std::filesystem::path(filepath));
+            std::string cacheKey = canonicalPath.string();
+
+            auto it = s_ModelCache.find(cacheKey);
+            if (it != s_ModelCache.end())
+            {
+                if (auto cachedModel = it->second.lock())
+                {
+                    return cachedModel;
+                }
+            }
+
+            auto model = std::make_shared<Model>(filepath);
+            s_ModelCache[cacheKey] = model;
+            return model;
+        }
+    }
 
     Entity ModelImporter::ImportModel(Scene* scene, const std::string& filepath)
     {
         // 1. 모델 로드
-        std::shared_ptr<Model> myModel = std::make_shared<Model>(filepath);
+        std::shared_ptr<Model> myModel = GetOrLoadModel(filepath);
 
         // 2. 파일명에서 확장자를 제외한 이름을 추출해서 최상위 엔티티 이름으로 사용 (예: "FBX_MAYO")
         std::filesystem::path path(filepath);
@@ -24,7 +48,7 @@ namespace CCEngine {
         rootTc.Scale = { 1.0f, 1.0f, 1.0f };
 
         modelRootEntity.AddComponent<RelationshipComponent>();
-        modelRootEntity.AddComponent<ModelComponent>(myModel);
+        auto& modelComponent = modelRootEntity.AddComponent<ModelComponent>(myModel);
 
         if (!myModel->GetBoneInfoMap().empty()) 
         {
@@ -32,12 +56,12 @@ namespace CCEngine {
         }
 
         // 4. 트리 빌드 시작
-        BuildTree(scene, myModel->GetRootNode(), (entt::entity)modelRootEntity, true);
+        BuildTree(scene, myModel->GetRootNode(), (entt::entity)modelRootEntity, true, modelComponent);
 
         return modelRootEntity;
     }
 
-    void ModelImporter::BuildTree(Scene* scene, const ModelNode& node, entt::entity parentHandle, bool isRootNode) 
+    void ModelImporter::BuildTree(Scene* scene, const ModelNode& node, entt::entity parentHandle, bool isRootNode, ModelComponent& modelComponent) 
     {
         entt::entity currentHandle = parentHandle;
 
@@ -47,7 +71,7 @@ namespace CCEngine {
         {
             for (const auto& childNode : node.Children)
             {
-                BuildTree(scene, childNode, parentHandle, false);
+                BuildTree(scene, childNode, parentHandle, false, modelComponent);
             }
             return;
         }
@@ -56,6 +80,8 @@ namespace CCEngine {
         std::string entityName = node.Name.empty() ? "UnnamedNode" : node.Name;
         Entity currentEntity = scene->CreateEntity(entityName);
         currentHandle = (entt::entity)currentEntity;
+        modelComponent.NodeEntityMap[entityName] = currentHandle;
+        modelComponent.NodePathEntityMap[node.Path] = currentHandle;
 
         auto& tc = currentEntity.GetComponent<TransformComponent>();
 
@@ -101,7 +127,7 @@ namespace CCEngine {
         // 4. 자식 노드 재귀 호출 (상속 끝났으니 다음 레벨은 Identity를 넘김)
         for (const auto& childNode : node.Children)
         {
-            BuildTree(scene, childNode, currentHandle, false);
+            BuildTree(scene, childNode, currentHandle, false, modelComponent);
         }
     }
 

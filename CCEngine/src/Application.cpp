@@ -5,7 +5,13 @@
 #include "Renderer/Renderer.h"
 #include "Renderer/UIRenderer.h"
 #include "UI/Widget.h"
+#include "UI/DockManager.h"
 #include <iostream>
+
+#ifdef CC_PLATFORM_WINDOWS
+#define NOMINMAX
+#include <windows.h>
+#endif
 
 // RHI별 ImGui 백엔드 헤더
 // #include "backends/imgui_impl_opengl3.h"
@@ -18,6 +24,19 @@
 namespace CCEngine
 {
     Application* Application::s_Instance = nullptr;
+
+    namespace
+    {
+        void HideNativeWindow(Window* window)
+        {
+#ifdef CC_PLATFORM_WINDOWS
+            if (window && window->GetNativeWindow())
+                ShowWindow(static_cast<HWND>(window->GetNativeWindow()), SW_HIDE);
+#else
+            (void)window;
+#endif
+        }
+    }
 
     Application::Application(const std::string& commandLineArg)
     {
@@ -79,8 +98,26 @@ namespace CCEngine
             if ((*it)->GetRootUI() == rootUI)
             {
                 (*it)->SetShouldClose(true);
+                HideNativeWindow(*it);
 
                 (*it)->SetRootUI(nullptr);
+                return;
+            }
+        }
+    }
+
+    inline void Application::RequestCloseSecondaryWindow(Window* window)
+    {
+        if (!window || window == m_Window.get())
+            return;
+
+        for (Window* secondaryWindow : m_SecondaryWindows)
+        {
+            if (secondaryWindow == window)
+            {
+                secondaryWindow->SetShouldClose(true);
+                HideNativeWindow(secondaryWindow);
+                secondaryWindow->SetRootUI(nullptr);
                 return;
             }
         }
@@ -151,8 +188,9 @@ namespace CCEngine
                 context->MakeCurrent();
                 context->BindBackBuffer();
 
-                // 필요하면 창별 백버퍼를 여기서 지웁니다.
-                // context->Clear(0.15f, 0.15f, 0.15f, 1.0f);
+                // 패널 도킹/분리로 창의 UI 트리가 바뀌면 이전 프레임의 패널 그림이
+                // 백버퍼에 남을 수 있으므로, 창마다 매 프레임 먼저 지웁니다.
+                context->Clear(0.08f, 0.08f, 0.09f, 1.0f);
 
                 // 이 창이 소유한 UI 트리를 업데이트하고 렌더링합니다.
                 UI::Widget* rootUI = win->GetRootUI();
@@ -178,6 +216,7 @@ namespace CCEngine
 
                     // 현재 창에 속한 UI만 렌더링합니다.
                     rootUI->OnRender();
+                    UI::DockManager::DrawPreview(win);
 
                     // 누적된 UI 드로우 콜을 제출합니다.
                     UIRenderer::EndUI();

@@ -7,6 +7,7 @@
 #include <memory>
 
 namespace CCEngine {
+    struct ModelComponent;
 
     class CC_API ModelImporter
     {
@@ -16,7 +17,7 @@ namespace CCEngine {
 
     private:
         // 내부에서 재귀적으로 트리를 구성하는 헬퍼 함수
-        static void BuildTree(Scene* scene, const ModelNode& node, entt::entity parentHandle, bool isRootNode);
+        static void BuildTree(Scene* scene, const ModelNode& node, entt::entity parentHandle, bool isRootNode, ModelComponent& modelComponent);
     };
 
 }

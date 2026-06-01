@@ -215,6 +215,7 @@
     <ClInclude Include="src\UI\DragFloat.h" />
     <ClInclude Include="src\UI\DragFloat3.h" />
     <ClInclude Include="src\UI\DragFloat4.h" />
+    <ClInclude Include="src\UI\DockManager.h" />
     <ClInclude Include="src\UI\EditorRootUI.h" />
     <ClInclude Include="src\UI\HierarchyItem.h" />
     <ClInclude Include="src\UI\HierarchyPanel.h" />

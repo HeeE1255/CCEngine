@@ -39,6 +39,7 @@ namespace CCEngine {
         // 에디터 뷰포트 렌더링 전용
         //void OnRender(Entity selectedEntity);
         void OnRender(Entity selectedEntity, DirectX::XMMATRIX viewMatrix, DirectX::XMMATRIX projMatrix);
+        void OnRenderSkeleton(Entity selectedEntity);
 
         // 마우스 레이캐스팅 및 드래그 조작을 위한 이벤트 처리
         bool OnEvent(Event& e, Entity selectedEntity,

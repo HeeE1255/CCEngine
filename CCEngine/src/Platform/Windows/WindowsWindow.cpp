@@ -192,6 +192,23 @@ namespace CCEngine
 				bool isTop = pt.y < borderWidth;
 				bool isBottom = pt.y >= rc.bottom - borderWidth;
 
+				bool isMainWindow = (CCEngine::Application::Get() &&
+					window == &(CCEngine::Application::Get()->GetWindow()));
+				bool isDockRootWindow = !isMainWindow && window->GetRootUI() && window->GetRootUI()->GetName() == "DockRoot";
+				if (isDockRootWindow)
+				{
+					if (isBottom && isLeft) return HTBOTTOMLEFT;
+					if (isBottom && isRight) return HTBOTTOMRIGHT;
+					if (isLeft) return HTLEFT;
+					if (isRight) return HTRIGHT;
+					if (isBottom) return HTBOTTOM;
+					if (pt.y >= 0 && pt.y <= 24 && pt.x < (rc.right - 30))
+					{
+						return HTCAPTION;
+					}
+					if (isTop) return HTTOP;
+				}
+
 				if (isTop && isLeft) return HTTOPLEFT;
 				if (isTop && isRight) return HTTOPRIGHT;
 				if (isBottom && isLeft) return HTBOTTOMLEFT;
@@ -204,9 +221,6 @@ namespace CCEngine
 				// ==========================================================
 				// ★ 2. 테두리가 아니라면 커스텀 타이틀 바 판정 (드래그용)
 				// ==========================================================
-				bool isMainWindow = (CCEngine::Application::Get() &&
-					window == &(CCEngine::Application::Get()->GetWindow()));
-
 				if (isMainWindow)
 				{
 					// 상단 24px 영역 (우측 100px의 닫기 버튼 영역 제외)

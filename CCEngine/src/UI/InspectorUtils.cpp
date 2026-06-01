@@ -8,6 +8,59 @@
 
 namespace CCEngine {
     namespace UI {
+        namespace
+        {
+            Entity FindModelRoot(Entity entity)
+            {
+                Entity current = entity;
+                while (current)
+                {
+                    if (current.HasComponent<ModelComponent>())
+                    {
+                        return current;
+                    }
+
+                    if (!current.HasComponent<RelationshipComponent>())
+                    {
+                        break;
+                    }
+
+                    entt::entity parentID = current.GetComponent<RelationshipComponent>().Parent;
+                    if (parentID == entt::null)
+                    {
+                        break;
+                    }
+
+                    current = { parentID, current.GetScene() };
+                }
+
+                return {};
+            }
+
+            bool IsSkeletonNode(Entity entity, Entity modelRoot)
+            {
+                if (!entity || !modelRoot || !modelRoot.HasComponent<ModelComponent>())
+                {
+                    return false;
+                }
+
+                if (entity.HasComponent<MeshComponent>())
+                {
+                    return false;
+                }
+
+                auto& model = modelRoot.GetComponent<ModelComponent>();
+                for (const auto& [path, handle] : model.NodePathEntityMap)
+                {
+                    if (handle == (entt::entity)entity)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+        }
 
         void InspectorUtils::AddDragFloat(InspectorItem* item, const std::string& name, const std::string& label, std::function<float()> getter, std::function<void(float)> setter)
         {
@@ -77,6 +130,36 @@ namespace CCEngine {
                     UI::InspectorUtils::AddDragFloat3(item, "Scale", "Scale",
                         [entity]() mutable { return entity.GetComponent<TransformComponent>().Scale; },
                         [entity](DirectX::XMFLOAT3 v) mutable { entity.GetComponent<TransformComponent>().Scale = v; });
+
+                    Entity modelRoot = FindModelRoot(entity);
+                    if (IsSkeletonNode(entity, modelRoot))
+                    {
+                        auto boneItem = new UI::InspectorItem("SkinnedBoneItem", "Skinned Mesh Bone");
+                        boneItem->SetAnchorMin(0.0f, 0.0f); boneItem->SetAnchorMax(1.0f, 0.0f);
+                        parent->AddChild(boneItem);
+
+                        auto btnBoneLines = new UI::Button("BtnToggleBoneLines", "Bone Lines: Off");
+                        btnBoneLines->SetAnchorMin(0.0f, 0.0f); btnBoneLines->SetAnchorMax(1.0f, 0.0f);
+                        btnBoneLines->SetOffsetMin(15.0f, 0.0f); btnBoneLines->SetOffsetMax(-10.0f, 28.0f);
+                        btnBoneLines->SetOnClick([modelRoot, btnBoneLines]() mutable
+                            {
+                                if (!modelRoot || !modelRoot.HasComponent<ModelComponent>())
+                                {
+                                    return;
+                                }
+
+                                auto& model = modelRoot.GetComponent<ModelComponent>();
+                                model.ShowBoneLinks = !model.ShowBoneLinks;
+                                btnBoneLines->SetText(model.ShowBoneLinks ? "Bone Lines: On" : "Bone Lines: Off");
+                            });
+
+                        if (modelRoot && modelRoot.HasComponent<ModelComponent>() && modelRoot.GetComponent<ModelComponent>().ShowBoneLinks)
+                        {
+                            btnBoneLines->SetText("Bone Lines: On");
+                        }
+
+                        boneItem->AddChild(btnBoneLines);
+                    }
                 });
 
             // ==========================================================

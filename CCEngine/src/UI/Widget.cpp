@@ -18,9 +18,15 @@ namespace CCEngine {
 
         void Widget::AddChild(Widget* child)
         {
+            if (!child || child == this)
+                return;
+
             if (child->m_Parent) {
                 child->m_Parent->RemoveChild(child);
             }
+
+            RemoveDescendant(child);
+
             child->m_Parent = this;
             m_Children.push_back(child);
         }
@@ -33,6 +39,32 @@ namespace CCEngine {
                 (*it)->m_Parent = nullptr;
                 m_Children.erase(it);
             }
+        }
+
+        bool Widget::RemoveDescendant(Widget* descendant)
+        {
+            if (!descendant)
+                return false;
+
+            bool removed = false;
+            for (auto it = m_Children.begin(); it != m_Children.end(); )
+            {
+                Widget* child = *it;
+                if (child == descendant)
+                {
+                    child->m_Parent = nullptr;
+                    it = m_Children.erase(it);
+                    removed = true;
+                    continue;
+                }
+
+                if (child && child->RemoveDescendant(descendant))
+                    removed = true;
+
+                ++it;
+            }
+
+            return removed;
         }
 
         void Widget::UpdateLayout(const DirectX::XMFLOAT2& parentPos, const DirectX::XMFLOAT2& parentSize)

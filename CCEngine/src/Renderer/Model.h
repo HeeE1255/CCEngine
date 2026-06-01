@@ -19,6 +19,7 @@ namespace CCEngine
     struct ModelNode
     {
         std::string Name;
+        std::string Path;
         DirectX::XMFLOAT3 Translation = { 0.0f, 0.0f, 0.0f };
         DirectX::XMFLOAT4 Rotation = { 0.0f, 0.0f, 0.0f, 1.0f }; // Quaternion
         DirectX::XMFLOAT3 Scale = { 1.0f, 1.0f, 1.0f };
@@ -59,7 +60,7 @@ namespace CCEngine
 
         // Assimp 파싱을 위한 재귀 함수들
         void LoadModel(const std::string& path);
-        ModelNode ProcessNode(aiNode* node, const aiScene* scene);
+        ModelNode ProcessNode(aiNode* node, const aiScene* scene, const std::string& parentPath = "");
         std::shared_ptr<Mesh> ProcessMesh(aiMesh* mesh, const aiScene* scene, const std::string& nodeName);
     };
 }

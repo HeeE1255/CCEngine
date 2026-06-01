@@ -146,6 +146,21 @@ namespace CCEngine
                 }
             });
 
+        newScene->GetRegistry().view<ModelComponent>().each([&](auto dstHandle, auto& modelComp)
+            {
+                for (auto& [name, mappedEntity] : modelComp.NodeEntityMap)
+                {
+                    auto it = enttMap.find(mappedEntity);
+                    mappedEntity = it != enttMap.end() ? it->second : entt::null;
+                }
+
+                for (auto& [path, mappedEntity] : modelComp.NodePathEntityMap)
+                {
+                    auto it = enttMap.find(mappedEntity);
+                    mappedEntity = it != enttMap.end() ? it->second : entt::null;
+                }
+            });
+
         return newScene;
     }
 
@@ -288,10 +303,11 @@ namespace CCEngine
 
                 if (current.HasComponent<ModelComponent>())
                 {
-                    auto& model = current.GetComponent<ModelComponent>().TargetModel;
+                    auto& modelComponent = current.GetComponent<ModelComponent>();
+                    auto& model = modelComponent.TargetModel;
 
-                    // [핵심] 어제 만들었던 '씬 전체를 뒤지는 로직'을 위해 this를 꼭 넘겨준다!
-                    animComp.AnimPlayer.Update(deltaTime, model.get(), this);
+                    const auto& nodeMap = modelComponent.NodePathEntityMap.empty() ? modelComponent.NodeEntityMap : modelComponent.NodePathEntityMap;
+                    animComp.AnimPlayer.Update(deltaTime, model.get(), this, &nodeMap);
                 }
             });
     }

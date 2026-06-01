@@ -2,6 +2,7 @@
 #include "Core.h"
 #include "UI/Panel.h"
 #include "Core/Window.h"
+#include "UI/DockManager.h"
 #include <DirectXMath.h>
 
 namespace CCEngine
@@ -15,6 +16,8 @@ namespace CCEngine
 
         class CC_API WindowPanel : public Panel
         {
+            friend class DockManager;
+
         public:
             WindowPanel(const std::string& name = "WindowPanel", const std::string& title = "Window");
 
@@ -44,16 +47,21 @@ namespace CCEngine
 
 
         private:
+            bool DetachFromFloatingGroup();
+
             std::string m_Title;
             float m_TitleBarHeight = 24.0f; // 타이틀 바 높이를 멤버 변수로 관리
+            DirectX::XMFLOAT2 m_PreferredFloatingSize = { 400.0f, 300.0f };
 
             bool m_IsDragging = false;
             bool m_IsFloating = false; // 도킹 해제(플로팅) 여부
+            bool m_IsMovingOwnerWindow = false;
 
             float m_LastMouseX = 0.0f;
 			float m_LastMouseY = 0.0f;
 
             Window* m_OwnerWindow = nullptr;
+            Window* m_DockIgnoreWindow = nullptr;
 
             // 드래그할 때 마우스 포인터와 창 기준점(0,0) 사이의 거리
             float m_DragOffsetX = 0.0f;

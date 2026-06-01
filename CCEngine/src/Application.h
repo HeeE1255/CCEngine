@@ -29,10 +29,12 @@ namespace CCEngine
 
         // 엔진 어디서든 현재 윈도우 창 객체에 접근할 수 있도록 해주는 유틸리티 함수
         inline Window& GetWindow() { return *m_Window; }
+        inline const std::vector<Window*>& GetSecondaryWindows() const { return m_SecondaryWindows; }
 
         inline static Application* Get() { return s_Instance; }
 
         inline void RequestCloseSecondaryWindowByUI(UI::Widget* rootUI);
+        inline void RequestCloseSecondaryWindow(Window* window);
 
     private:
         bool m_Running = true;

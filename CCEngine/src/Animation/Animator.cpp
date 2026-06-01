@@ -126,9 +126,15 @@ namespace CCEngine
     {
         m_CurrentClip = clip;
         m_CurrentTime = 0.0f;
+        m_StaticPoseInitialized = false;
     }
 
     void Animator::Update(float deltaTime, Model* model, Scene* scene)
+    {
+        Update(deltaTime, model, scene, nullptr);
+    }
+
+    void Animator::Update(float deltaTime, Model* model, Scene* scene, const std::unordered_map<std::string, entt::entity>* nodeEntityMap)
     {
         if (m_CurrentClip)
         {
@@ -136,8 +142,12 @@ namespace CCEngine
             m_CurrentTime += m_CurrentClip->GetTicksPerSecond() * deltaTime;
             m_CurrentTime = fmod(m_CurrentTime, m_CurrentClip->GetDuration()); // 무한 반복
         }
+        else if (!StaticPoseChanged(scene, nodeEntityMap))
+        {
+            return;
+        }
 
-        CalculateBoneTransform(model->GetRootNode(), DirectX::XMMatrixIdentity(), model, scene);
+        CalculateBoneTransform(model->GetRootNode(), DirectX::XMMatrixIdentity(), model, scene, nodeEntityMap);
 
     }
 
@@ -177,7 +187,7 @@ namespace CCEngine
         return DirectX::XMMatrixIdentity();
     }
 
-    void Animator::CalculateBoneTransform(const ModelNode& node, DirectX::XMMATRIX parentTransform, Model* model, Scene* scene)
+    void Animator::CalculateBoneTransform(const ModelNode& node, DirectX::XMMATRIX parentTransform, Model* model, Scene* scene, const std::unordered_map<std::string, entt::entity>* nodeEntityMap)
     {
         std::string nodeName = node.Name;
         DirectX::XMMATRIX nodeTransform;
@@ -197,7 +207,24 @@ namespace CCEngine
         else
         {
             // 애니메이션 채널이 없으면 씬 엔티티 트랜스폼을 우선 사용합니다.
-            Entity entity = scene ? scene->FindEntityByName(nodeName) : Entity{};
+            Entity entity{};
+            if (scene && nodeEntityMap)
+            {
+                auto it = !node.Path.empty() ? nodeEntityMap->find(node.Path) : nodeEntityMap->end();
+                if (it == nodeEntityMap->end())
+                {
+                    it = nodeEntityMap->find(nodeName);
+                }
+
+                if (it != nodeEntityMap->end())
+                {
+                    entity = { it->second, scene };
+                }
+            }
+            else
+            {
+                entity = scene ? scene->FindEntityByName(nodeName) : Entity{};
+            }
 
             if (entity)
             {
@@ -230,7 +257,77 @@ namespace CCEngine
         // 자식 노드도 같은 규칙으로 재귀 계산합니다.
         for (const auto& child : node.Children)
         {
-            CalculateBoneTransform(child, globalTransform, model, scene);
+            CalculateBoneTransform(child, globalTransform, model, scene, nodeEntityMap);
         }
+    }
+
+    bool Animator::StaticPoseChanged(Scene* scene, const std::unordered_map<std::string, entt::entity>* nodeEntityMap)
+    {
+        if (!scene || !nodeEntityMap)
+        {
+            m_StaticPoseInitialized = false;
+            return true;
+        }
+
+        if (!m_StaticPoseInitialized || m_LastStaticPose.size() != nodeEntityMap->size())
+        {
+            m_LastStaticPose.clear();
+            for (const auto& [name, handle] : *nodeEntityMap)
+            {
+                Entity entity{ handle, scene };
+                if (!entity || !entity.HasComponent<TransformComponent>())
+                {
+                    continue;
+                }
+
+                auto& tc = entity.GetComponent<TransformComponent>();
+                m_LastStaticPose[handle] = { tc.Translation, tc.QuaternionRotation, tc.Scale };
+            }
+
+            m_StaticPoseInitialized = true;
+            return true;
+        }
+
+        bool changed = false;
+        for (const auto& [name, handle] : *nodeEntityMap)
+        {
+            Entity entity{ handle, scene };
+            if (!entity || !entity.HasComponent<TransformComponent>())
+            {
+                continue;
+            }
+
+            auto& tc = entity.GetComponent<TransformComponent>();
+            TransformSnapshot snapshot{ tc.Translation, tc.QuaternionRotation, tc.Scale };
+            auto it = m_LastStaticPose.find(handle);
+
+            if (it == m_LastStaticPose.end() || !SameSnapshot(it->second, snapshot))
+            {
+                m_LastStaticPose[handle] = snapshot;
+                changed = true;
+            }
+        }
+
+        return changed;
+    }
+
+    bool Animator::SameSnapshot(const TransformSnapshot& left, const TransformSnapshot& right) const
+    {
+        constexpr float epsilon = 0.00001f;
+        auto same = [epsilon](float a, float b)
+            {
+                return std::abs(a - b) <= epsilon;
+            };
+
+        return same(left.Translation.x, right.Translation.x) &&
+            same(left.Translation.y, right.Translation.y) &&
+            same(left.Translation.z, right.Translation.z) &&
+            same(left.Rotation.x, right.Rotation.x) &&
+            same(left.Rotation.y, right.Rotation.y) &&
+            same(left.Rotation.z, right.Rotation.z) &&
+            same(left.Rotation.w, right.Rotation.w) &&
+            same(left.Scale.x, right.Scale.x) &&
+            same(left.Scale.y, right.Scale.y) &&
+            same(left.Scale.z, right.Scale.z);
     }
 }

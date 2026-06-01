@@ -35,7 +35,7 @@ namespace CCEngine
         m_RootNode = ProcessNode(scene->mRootNode, scene);
     }
 
-    ModelNode Model::ProcessNode(aiNode* node, const aiScene* scene)
+    ModelNode Model::ProcessNode(aiNode* node, const aiScene* scene, const std::string& parentPath)
     {
         ModelNode resultNode;
         resultNode.Name = node->mName.C_Str();
@@ -43,6 +43,7 @@ namespace CCEngine
         {
             resultNode.Name = "UnnamedNode";
         }
+        resultNode.Path = parentPath.empty() ? resultNode.Name : parentPath + "/" + resultNode.Name;
 
         // 트랜스폼 데이터 추출
         aiVector3D position, scaling;
@@ -64,7 +65,7 @@ namespace CCEngine
 
         for (unsigned int i = 0; i < node->mNumChildren; i++)
         {
-            resultNode.Children.push_back(ProcessNode(node->mChildren[i], scene));
+            resultNode.Children.push_back(ProcessNode(node->mChildren[i], scene, resultNode.Path));
         }
 
         return resultNode;

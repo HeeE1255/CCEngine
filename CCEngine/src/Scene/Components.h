@@ -1,7 +1,9 @@
 #pragma once
 #include <DirectXMath.h>
 #include <string>
+#include <unordered_map>
 #include <box2d/id.h>
+#include "entt.hpp"
 #include "Renderer/Mesh.h"
 #include "Scene/ScriptableEntity.h"
 #include "Renderer/Texture.h"
@@ -162,6 +164,9 @@ namespace CCEngine
     struct ModelComponent
     {
         std::shared_ptr<Model> TargetModel;
+        std::unordered_map<std::string, entt::entity> NodeEntityMap;
+        std::unordered_map<std::string, entt::entity> NodePathEntityMap;
+        bool ShowBoneLinks = false;
 
         ModelComponent() = default;
         ModelComponent(const std::shared_ptr<Model>& model) : TargetModel(model) {}

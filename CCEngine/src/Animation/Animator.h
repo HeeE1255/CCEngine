@@ -2,6 +2,7 @@
 #include "Renderer/Model.h"
 #include "Core.h"
 #include <DirectXMath.h>
+#include "entt.hpp"
 #include <map>
 #include <vector>
 #include <unordered_map>
@@ -46,6 +47,7 @@ namespace CCEngine
         Animator();
         void PlayAnimation(AnimationClip* clip);
         void Update(float deltaTime, Model* model, Scene* scene);
+        void Update(float deltaTime, Model* model, Scene* scene, const std::unordered_map<std::string, entt::entity>* nodeEntityMap);
 
         const std::vector<DirectX::XMMATRIX>& GetFinalBoneMatrices() const { return m_FinalBoneMatrices; }
         DirectX::XMMATRIX GetGlobalBoneMatrix(const std::string& boneName);
@@ -55,11 +57,22 @@ namespace CCEngine
         DirectX::XMMATRIX GetFinalMatrix(int index);
 
     private:
-        void CalculateBoneTransform(const ModelNode& node, DirectX::XMMATRIX parentTransform, Model* model, Scene* scene);
+        struct TransformSnapshot
+        {
+            DirectX::XMFLOAT3 Translation = { 0.0f, 0.0f, 0.0f };
+            DirectX::XMFLOAT4 Rotation = { 0.0f, 0.0f, 0.0f, 1.0f };
+            DirectX::XMFLOAT3 Scale = { 1.0f, 1.0f, 1.0f };
+        };
+
+        void CalculateBoneTransform(const ModelNode& node, DirectX::XMMATRIX parentTransform, Model* model, Scene* scene, const std::unordered_map<std::string, entt::entity>* nodeEntityMap);
+        bool StaticPoseChanged(Scene* scene, const std::unordered_map<std::string, entt::entity>* nodeEntityMap);
+        bool SameSnapshot(const TransformSnapshot& left, const TransformSnapshot& right) const;
 
         std::unordered_map<std::string, DirectX::XMMATRIX> m_GlobalBoneMatrices;
+        std::unordered_map<entt::entity, TransformSnapshot> m_LastStaticPose;
         std::vector<DirectX::XMMATRIX> m_FinalBoneMatrices;
         AnimationClip* m_CurrentClip = nullptr;
         float m_CurrentTime = 0.0f;
+        bool m_StaticPoseInitialized = false;
     };
 }

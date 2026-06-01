@@ -21,9 +21,11 @@
 #include "UI/InspectorItem.h"
 #include "UI/InspectorUtils.h"
 #include <windows.h>
+#include <cmath>
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <algorithm>
 
 #include "Events/Event.h"
 #include "Events/MouseEvent.h"
@@ -158,6 +160,9 @@ namespace CCEngine {
                 m_RootUI->UpdateLayout({ 0.0f, 0.0f }, { winWidth, winHeight });
             }
         }
+
+        if (m_HistoryPanelDirty)
+            RebuildHistoryPanel();
         // =========================================================================
 
         // 최신 프레임버퍼 텍스처를 뷰포트 위젯에 연결
@@ -179,6 +184,7 @@ namespace CCEngine {
 
         // 자체 기즈모 시스템 구현
         auto selectedEntity = m_HierarchyPanel->GetSelectedEntity();
+        m_GizmoSystem.OnRenderSkeleton(selectedEntity);
         m_GizmoSystem.OnRender(selectedEntity, m_Camera.GetViewMatrix(), m_Camera.GetProjectionMatrix());
 
         m_Framebuffer->Unbind();
@@ -212,6 +218,8 @@ namespace CCEngine {
             }
         }
         m_GameFramebuffer->Unbind();
+
+        TrackTransformUndo();
     }
 
     void EditorLayer::OnEvent(Event& e)
@@ -368,6 +376,7 @@ namespace CCEngine {
         CCEngine::SceneSerializer serializer(m_ActiveScene);
         if (serializer.Deserialize(filepath)) {
             m_CurrentScenePath = filepath;
+            ClearTransformUndoHistory();
             if (m_HierarchyPanel)
             {
                 m_HierarchyPanel->SetSelectedEntity(CCEngine::Entity{});
@@ -520,16 +529,343 @@ namespace CCEngine {
         bool isShiftPressed = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
         bool isSPressedNow = (GetAsyncKeyState('S') & 0x8000) != 0;
         static bool s_IsOPressedLastFrame = false;
+        static bool s_IsZPressedLastFrame = false;
+        static bool s_IsYPressedLastFrame = false;
         bool isOPressedNow = (GetAsyncKeyState('O') & 0x8000) != 0;
+        bool isZPressedNow = (GetAsyncKeyState('Z') & 0x8000) != 0;
+        bool isYPressedNow = (GetAsyncKeyState('Y') & 0x8000) != 0;
 
         if (isSPressedNow && !m_IsSPressedLastFrame)
         {
             if (isCtrlPressed && isShiftPressed) SaveSceneAs();
             else if (isCtrlPressed && !isShiftPressed) SaveScene();
         }
+        if (isCtrlPressed && isZPressedNow && !s_IsZPressedLastFrame)
+        {
+            if (isShiftPressed) RedoTransform();
+            else UndoTransform();
+        }
+        if (isCtrlPressed && isYPressedNow && !s_IsYPressedLastFrame)
+        {
+            RedoTransform();
+        }
         if (isCtrlPressed && isOPressedNow && !s_IsOPressedLastFrame) OpenScene();
         s_IsOPressedLastFrame = isOPressedNow;
+        s_IsZPressedLastFrame = isZPressedNow;
+        s_IsYPressedLastFrame = isYPressedNow;
         m_IsSPressedLastFrame = isSPressedNow;
+    }
+
+    EditorLayer::TransformSnapshot EditorLayer::CaptureTransform(Entity entity) const
+    {
+        // 현재 엔티티의 TransformComponent 값을 Undo/Redo용 스냅샷으로 복사한다.
+        // 컴포넌트를 직접 들고 있지 않고 값만 저장해야 이후 변경과 독립적인 기록이 된다.
+        TransformSnapshot snapshot;
+        if (!entity || !entity.HasComponent<TransformComponent>())
+            return snapshot;
+
+        const auto& transform = entity.GetComponent<TransformComponent>();
+        snapshot.Translation = transform.Translation;
+        snapshot.Rotation = transform.Rotation;
+        snapshot.Scale = transform.Scale;
+        snapshot.EulerRotation = transform.EulerRotation;
+        snapshot.QuaternionRotation = transform.QuaternionRotation;
+        return snapshot;
+    }
+
+    void EditorLayer::ApplyTransform(entt::entity entityHandle, const TransformSnapshot& snapshot)
+    {
+        // Undo/Redo 또는 History 점프 시 저장된 스냅샷을 실제 TransformComponent에 다시 적용한다.
+        // 적용 직후 TrackTransformUndo가 이것을 새 작업으로 오해하지 않도록 관찰 상태도 같이 갱신한다.
+        if (!IsValidTransformEntity(entityHandle))
+            return;
+
+        Entity entity(entityHandle, m_ActiveScene);
+        auto& transform = entity.GetComponent<TransformComponent>();
+        transform.Translation = snapshot.Translation;
+        transform.Rotation = snapshot.Rotation;
+        transform.Scale = snapshot.Scale;
+        transform.EulerRotation = snapshot.EulerRotation;
+        transform.QuaternionRotation = snapshot.QuaternionRotation;
+
+        m_ObservedTransformEntity = entityHandle;
+        m_LastObservedTransform = snapshot;
+        m_HasLastObservedTransform = true;
+        m_HasPendingTransformUndo = false;
+        m_IsApplyingTransformUndoRedo = true;
+    }
+
+    bool EditorLayer::IsValidTransformEntity(entt::entity entityHandle) const
+    {
+        return m_ActiveScene &&
+            entityHandle != entt::null &&
+            m_ActiveScene->GetRegistry().valid(entityHandle) &&
+            m_ActiveScene->GetRegistry().all_of<TransformComponent>(entityHandle);
+    }
+
+    bool EditorLayer::SameTransformSnapshot(const TransformSnapshot& a, const TransformSnapshot& b)
+    {
+        // float 값은 아주 작은 오차가 생길 수 있으므로 완전 일치 대신 epsilon 비교를 사용한다.
+        auto sameFloat = [](float left, float right)
+        {
+            return std::fabs(left - right) <= 0.00001f;
+        };
+
+        return sameFloat(a.Translation.x, b.Translation.x) &&
+            sameFloat(a.Translation.y, b.Translation.y) &&
+            sameFloat(a.Translation.z, b.Translation.z) &&
+            sameFloat(a.Rotation.x, b.Rotation.x) &&
+            sameFloat(a.Rotation.y, b.Rotation.y) &&
+            sameFloat(a.Rotation.z, b.Rotation.z) &&
+            sameFloat(a.Scale.x, b.Scale.x) &&
+            sameFloat(a.Scale.y, b.Scale.y) &&
+            sameFloat(a.Scale.z, b.Scale.z) &&
+            sameFloat(a.EulerRotation.x, b.EulerRotation.x) &&
+            sameFloat(a.EulerRotation.y, b.EulerRotation.y) &&
+            sameFloat(a.EulerRotation.z, b.EulerRotation.z) &&
+            sameFloat(a.QuaternionRotation.x, b.QuaternionRotation.x) &&
+            sameFloat(a.QuaternionRotation.y, b.QuaternionRotation.y) &&
+            sameFloat(a.QuaternionRotation.z, b.QuaternionRotation.z) &&
+            sameFloat(a.QuaternionRotation.w, b.QuaternionRotation.w);
+    }
+
+    void EditorLayer::TrackTransformUndo()
+    {
+        // 매 프레임 선택된 엔티티의 Transform을 감시한다.
+        // 값이 바뀌면 Pending 기록을 만들고, 드래그가 끝났을 때 하나의 Undo 작업으로 확정한다.
+        if (m_IsApplyingTransformUndoRedo)
+        {
+            m_IsApplyingTransformUndoRedo = false;
+            return;
+        }
+
+        Entity selectedEntity = m_HierarchyPanel ? m_HierarchyPanel->GetSelectedEntity() : Entity{};
+        if (!selectedEntity || !selectedEntity.HasComponent<TransformComponent>())
+        {
+            // 선택이 풀리거나 Transform 없는 엔티티로 바뀌면 이전 pending 작업을 먼저 확정한다.
+            CommitPendingTransformUndo();
+            m_ObservedTransformEntity = entt::null;
+            m_HasLastObservedTransform = false;
+            return;
+        }
+
+        entt::entity selectedHandle = (entt::entity)selectedEntity;
+        TransformSnapshot current = CaptureTransform(selectedEntity);
+
+        if (!m_HasLastObservedTransform || m_ObservedTransformEntity != selectedHandle)
+        {
+            // 새 엔티티를 선택한 첫 프레임은 기준점만 저장한다.
+            // 이 순간 자체를 변경 작업으로 기록하면 선택만 했는데 Undo가 생기는 문제가 된다.
+            CommitPendingTransformUndo();
+            m_ObservedTransformEntity = selectedHandle;
+            m_LastObservedTransform = current;
+            m_HasLastObservedTransform = true;
+            return;
+        }
+
+        if (!SameTransformSnapshot(current, m_LastObservedTransform))
+        {
+            // 첫 변화가 발생한 순간의 이전 상태를 Before로 저장한다.
+            // 이후 드래그 중에는 After만 계속 최신 값으로 갱신해서 작업 하나로 묶는다.
+            if (!m_HasPendingTransformUndo)
+            {
+                m_PendingTransformUndo.Entity = selectedHandle;
+                m_PendingTransformUndo.Before = m_LastObservedTransform;
+                m_HasPendingTransformUndo = true;
+            }
+
+            m_PendingTransformUndo.After = current;
+            m_LastObservedTransform = current;
+        }
+
+        bool isLeftMouseDown = CCEngine::Application::Get()->GetWindow().IsMouseButtonPressed(0);
+        if (m_HasPendingTransformUndo && !isLeftMouseDown && !m_GizmoSystem.IsDragging())
+        {
+            // 마우스를 놓았고 기즈모도 드래그 중이 아니면 실제 Undo 스택에 확정한다.
+            CommitPendingTransformUndo();
+        }
+    }
+
+    void EditorLayer::CommitPendingTransformUndo()
+    {
+        // Pending 상태의 Transform 변경을 Undo 스택에 넣는다.
+        // 새 작업이 추가되면 기존 Redo 경로는 더 이상 유효하지 않으므로 비운다.
+        if (!m_HasPendingTransformUndo)
+            return;
+
+        if (!SameTransformSnapshot(m_PendingTransformUndo.Before, m_PendingTransformUndo.After))
+        {
+            constexpr size_t maxUndoCommands = 100;
+            m_TransformUndoStack.push_back(m_PendingTransformUndo);
+            if (m_TransformUndoStack.size() > maxUndoCommands)
+                m_TransformUndoStack.erase(m_TransformUndoStack.begin());
+            m_TransformRedoStack.clear();
+            MarkHistoryPanelDirty();
+        }
+
+        m_HasPendingTransformUndo = false;
+        m_PendingTransformUndo = {};
+    }
+
+    void EditorLayer::UndoTransform()
+    {
+        // 마지막으로 적용된 작업을 Before 상태로 되돌리고 Redo 스택으로 이동한다.
+        // 삭제된 엔티티처럼 더 이상 유효하지 않은 기록은 건너뛴다.
+        CommitPendingTransformUndo();
+
+        while (!m_TransformUndoStack.empty())
+        {
+            TransformUndoCommand command = m_TransformUndoStack.back();
+            m_TransformUndoStack.pop_back();
+
+            if (!IsValidTransformEntity(command.Entity))
+                continue;
+
+            ApplyTransform(command.Entity, command.Before);
+            m_TransformRedoStack.push_back(command);
+            MarkHistoryPanelDirty();
+            return;
+        }
+    }
+
+    void EditorLayer::RedoTransform()
+    {
+        // 되돌린 작업을 After 상태로 다시 적용하고 Undo 스택으로 이동한다.
+        CommitPendingTransformUndo();
+
+        while (!m_TransformRedoStack.empty())
+        {
+            TransformUndoCommand command = m_TransformRedoStack.back();
+            m_TransformRedoStack.pop_back();
+
+            if (!IsValidTransformEntity(command.Entity))
+                continue;
+
+            ApplyTransform(command.Entity, command.After);
+            m_TransformUndoStack.push_back(command);
+            MarkHistoryPanelDirty();
+            return;
+        }
+    }
+     
+    void EditorLayer::SeekTransformHistory(size_t targetAppliedCount)
+    {
+        // History 패널에서 특정 시점을 클릭했을 때 호출된다.
+        // 현재 적용된 작업 개수와 목표 개수를 비교해서 필요한 만큼 Undo/Redo를 반복한다.
+        CommitPendingTransformUndo();
+
+        size_t totalCommands = m_TransformUndoStack.size() + m_TransformRedoStack.size();
+        targetAppliedCount = (std::min)(targetAppliedCount, totalCommands);
+
+        while (m_TransformUndoStack.size() > targetAppliedCount)
+        {
+            // 현재 위치가 목표보다 뒤에 있으면 Undo 방향으로 이동한다.
+            if (m_TransformUndoStack.empty())
+                break;
+
+            TransformUndoCommand command = m_TransformUndoStack.back();
+            m_TransformUndoStack.pop_back();
+
+            if (IsValidTransformEntity(command.Entity))
+                ApplyTransform(command.Entity, command.Before);
+
+            m_TransformRedoStack.push_back(command);
+        }
+
+        while (m_TransformUndoStack.size() < targetAppliedCount)
+        {
+            // 현재 위치가 목표보다 앞에 있으면 Redo 방향으로 이동한다.
+            if (m_TransformRedoStack.empty())
+                break;
+
+            TransformUndoCommand command = m_TransformRedoStack.back();
+            m_TransformRedoStack.pop_back();
+
+            if (IsValidTransformEntity(command.Entity))
+                ApplyTransform(command.Entity, command.After);
+
+            m_TransformUndoStack.push_back(command);
+        }
+
+        MarkHistoryPanelDirty();
+    }
+
+    void EditorLayer::ClearTransformUndoHistory()
+    {
+        // 씬 로드/플레이모드 전환처럼 엔티티 핸들이 바뀔 수 있는 순간에는
+        // 오래된 히스토리가 잘못된 엔티티를 가리키지 않도록 모두 초기화한다.
+        m_TransformUndoStack.clear();
+        m_TransformRedoStack.clear();
+        m_HasPendingTransformUndo = false;
+        m_PendingTransformUndo = {};
+        m_ObservedTransformEntity = entt::null;
+        m_HasLastObservedTransform = false;
+        m_IsApplyingTransformUndoRedo = false;
+        MarkHistoryPanelDirty();
+    }
+
+    void EditorLayer::RebuildHistoryPanel()
+    {
+        // UndoStack + RedoStack을 합쳐 포토샵/유니티식 History 목록으로 다시 그린다.
+        // UndoStack 크기가 현재 적용된 작업 위치이며, 해당 항목을 활성 표시한다.
+        m_HistoryPanelDirty = false;
+        if (!m_HistoryContentPanel)
+            return;
+
+        m_HistoryContentPanel->ClearChildren();
+
+        std::vector<TransformUndoCommand> history = m_TransformUndoStack;
+        for (auto it = m_TransformRedoStack.rbegin(); it != m_TransformRedoStack.rend(); ++it)
+            history.push_back(*it);
+
+        size_t appliedCount = m_TransformUndoStack.size();
+        float itemHeight = 24.0f;
+
+        auto createHistoryButton = [&](size_t stateIndex, const std::string& text)
+        {
+            // stateIndex는 "이 버튼을 눌렀을 때 적용되어 있어야 하는 작업 개수"다.
+            // 0은 Scene Start, 1은 첫 작업 적용 후, 2는 두 번째 작업 적용 후를 뜻한다.
+            UI::Button* button = new UI::Button("HistoryItem", text);
+            button->SetAnchorMin(0.0f, 0.0f);
+            button->SetAnchorMax(1.0f, 0.0f);
+            button->SetOffsetMin(0.0f, (float)stateIndex * itemHeight);
+            button->SetOffsetMax(0.0f, ((float)stateIndex + 1.0f) * itemHeight);
+            button->SetNormalColor({ 0.14f, 0.14f, 0.15f, 1.0f });
+            button->SetHoverColor({ 0.22f, 0.22f, 0.24f, 1.0f });
+            button->SetClickColor({ 0.10f, 0.10f, 0.11f, 1.0f });
+            button->SetActive(stateIndex == appliedCount);
+            button->SetOnClick([this, stateIndex]() { SeekTransformHistory(stateIndex); });
+            m_HistoryContentPanel->AddChild(button);
+        };
+
+        createHistoryButton(0, "Scene Start");
+        for (size_t i = 0; i < history.size(); ++i)
+        {
+            const TransformUndoCommand& command = history[i];
+            std::string actionName = "Transform";
+            if (!SameTransformSnapshot({ command.Before.Translation, command.After.Rotation, command.After.Scale, command.After.EulerRotation, command.After.QuaternionRotation }, command.After))
+                actionName = "Move";
+            else if (!SameTransformSnapshot({ command.After.Translation, command.Before.Rotation, command.After.Scale, command.After.EulerRotation, command.After.QuaternionRotation }, command.After))
+                actionName = "Rotate";
+            else if (!SameTransformSnapshot({ command.After.Translation, command.After.Rotation, command.Before.Scale, command.After.EulerRotation, command.After.QuaternionRotation }, command.After))
+                actionName = "Scale";
+
+            std::string entityName = "Entity";
+            if (IsValidTransformEntity(command.Entity))
+            {
+                Entity entity(command.Entity, m_ActiveScene);
+                if (entity.HasComponent<TagComponent>())
+                    entityName = entity.GetComponent<TagComponent>().Tag;
+            }
+
+            std::string label = std::to_string(i + 1) + ". " + actionName + " " + entityName;
+            createHistoryButton(i + 1, label);
+        }
+    }
+
+    void EditorLayer::MarkHistoryPanelDirty()
+    {
+        m_HistoryPanelDirty = true;
     }
 
     void EditorLayer::RefreshHierarchy()
@@ -575,10 +911,26 @@ namespace CCEngine {
 
         m_InspectorPanel = new UI::InspectorPanel("InspectorUI", "Inspector");
         m_InspectorPanel->SetAnchorMin(0.8f, 0.0f);
-        m_InspectorPanel->SetAnchorMax(1.0f, 1.0f);
+        m_InspectorPanel->SetAnchorMax(1.0f, 0.65f);
         m_InspectorPanel->SetOffsetMin(0.0f, 48.0f);
         m_InspectorPanel->SetOffsetMax(0.0f, 0.0f);
         m_RootUI->AddChild(m_InspectorPanel);
+
+        m_HistoryPanel = new UI::WindowPanel("HistoryPanelUI", "History");
+        m_HistoryPanel->SetAnchorMin(0.8f, 0.65f);
+        m_HistoryPanel->SetAnchorMax(1.0f, 1.0f);
+        m_HistoryPanel->SetOffsetMin(0.0f, 0.0f);
+        m_HistoryPanel->SetOffsetMax(0.0f, 0.0f);
+        m_RootUI->AddChild(m_HistoryPanel);
+
+        m_HistoryContentPanel = new UI::Panel("HistoryContentUI", { 0.10f, 0.10f, 0.11f, 1.0f });
+        m_HistoryContentPanel->SetAnchorMin(0.0f, 0.0f);
+        m_HistoryContentPanel->SetAnchorMax(1.0f, 1.0f);
+        m_HistoryContentPanel->SetOffsetMin(0.0f, 24.0f);
+        m_HistoryContentPanel->SetOffsetMax(0.0f, 0.0f);
+        m_HistoryContentPanel->SetClipToBounds(true);
+        m_HistoryPanel->AddChild(m_HistoryContentPanel);
+        MarkHistoryPanelDirty();
 
         m_ToolbarPanel = new UI::Panel("ToolbarUI", { 0.15f, 0.15f, 0.15f, 1.0f });
         m_ToolbarPanel->SetAnchorMin(0.0f, 0.0f); m_ToolbarPanel->SetAnchorMax(1.0f, 0.0f);
@@ -683,6 +1035,7 @@ namespace CCEngine {
         m_BtnPlay->SetOnClick([this]() {
             CCEngine::SceneState state = m_ActiveScene->GetState();
             if (state == CCEngine::SceneState::Edit) {
+                ClearTransformUndoHistory();
                 m_EditorScene = m_ActiveScene;
                 m_ActiveScene = CCEngine::Scene::Copy(m_EditorScene);
                 m_ActiveScene->OnRuntimeStart();
@@ -696,6 +1049,7 @@ namespace CCEngine {
                 delete m_ActiveScene;
                 m_ActiveScene = m_EditorScene;
                 m_EditorScene = nullptr;
+                ClearTransformUndoHistory();
                 m_ActiveScene->SetSceneState(CCEngine::SceneState::Edit);
                 m_HierarchyPanel->SetContext(m_ActiveScene);
                 m_BtnPlay->SetActive(false);
@@ -727,6 +1081,7 @@ namespace CCEngine {
                 delete m_ActiveScene;
                 m_ActiveScene = m_EditorScene;
                 m_EditorScene = nullptr;
+                ClearTransformUndoHistory();
                 m_ActiveScene->SetSceneState(CCEngine::SceneState::Edit);
                 m_HierarchyPanel->SetContext(m_ActiveScene);
                 m_BtnPlay->SetActive(false);

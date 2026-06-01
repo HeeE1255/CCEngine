@@ -28,7 +28,7 @@ namespace CCEngine
             virtual void UpdateLayout(const DirectX::XMFLOAT2& parentPos, const DirectX::XMFLOAT2& parentSize) override;
             virtual void OnRender() override;
             virtual bool OnEvent(Event& e) override;
-            virtual bool WantsMouseCapture() const override { return m_IsDraggingScrollbar || m_IsDraggingAsset; }
+            virtual bool WantsMouseCapture() const override { return WindowPanel::WantsMouseCapture() || m_IsDraggingScrollbar || m_IsDraggingAsset; }
 
         private:
             enum class AssetType
