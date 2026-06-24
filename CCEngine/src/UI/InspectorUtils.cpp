@@ -3,8 +3,10 @@
 #include "Scene/Components.h"
 #include "Utils/PlatformUtils.h"
 #include "UI/Button.h"
+#include "UI/InspectorPanel.h"
 #include <iostream>
 #include <cmath>
+#include <type_traits>
 
 namespace CCEngine {
     namespace UI {
@@ -59,6 +61,53 @@ namespace CCEngine {
                 }
 
                 return false;
+            }
+
+            template<typename T>
+            void AddRemoveComponentButton(UI::Widget* parent, UI::InspectorItem* item, Entity entity, const std::string& label)
+            {
+                // Transform을 제외한 컴포넌트들은 이 공통 함수로 제거 버튼을 붙인다.
+                auto button = new UI::Button("BtnRemove" + label, "Remove Component");
+                button->SetNormalColor({ 0.28f, 0.12f, 0.12f, 1.0f });
+                button->SetHoverColor({ 0.42f, 0.16f, 0.16f, 1.0f });
+                button->SetOnClick([parent, entity]() mutable
+                    {
+                        auto inspector = dynamic_cast<UI::InspectorPanel*>(parent);
+                        if (!entity || !entity.HasComponent<T>())
+                            return;
+
+                        if (inspector)
+                            // 실제 제거 전에 현재 씬 상태를 저장한다.
+                            inspector->BeginStructureChange("Remove Component");
+
+                        bool removedPrimaryCamera = false;
+                        if constexpr (std::is_same_v<T, CameraComponent>)
+                            removedPrimaryCamera = entity.GetComponent<CameraComponent>().Primary;
+
+                        entity.RemoveComponent<T>();
+
+                        if constexpr (std::is_same_v<T, CameraComponent>)
+                        {
+                            if (removedPrimaryCamera)
+                            {
+                                // 게임 뷰 카메라를 지웠다면 남은 카메라 하나를 대신 사용한다.
+                                auto view = entity.GetScene()->GetRegistry().view<CameraComponent>();
+                                for (auto cameraEntity : view)
+                                {
+                                    view.get<CameraComponent>(cameraEntity).Primary = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (inspector)
+                        {
+                            // 제거 후 상태를 저장하고 인스펙터 UI를 다시 그린다.
+                            inspector->CommitStructureChange();
+                            inspector->RequestRebuild();
+                        }
+                    });
+                item->AddChild(button);
             }
         }
 
@@ -191,6 +240,7 @@ namespace CCEngine {
                             }
                         });
                     item->AddChild(btnTexture);
+                    AddRemoveComponentButton<MeshComponent>(parent, item, entity, "Mesh");
                 });
 
             // ==========================================================
@@ -212,6 +262,123 @@ namespace CCEngine {
                     UI::InspectorUtils::AddDragFloat(item, "Intensity", "Intensity",
                         [entity]() mutable { return entity.GetComponent<LightComponent>().Intensity; },
                         [entity](float v) mutable { entity.GetComponent<LightComponent>().Intensity = v; });
+                    AddRemoveComponentButton<LightComponent>(parent, item, entity, "Light");
+                });
+
+            // ==========================================================
+            // 4. Camera 컴포넌트
+            // ==========================================================
+            UI::InspectorRegistry::RegisterComponent<CameraComponent>(
+                [](UI::Widget* parent, CCEngine::Entity entity, CameraComponent& camera)
+                {
+                    auto item = new UI::InspectorItem("CameraItem", "Camera");
+                    item->SetAnchorMin(0.0f, 0.0f); item->SetAnchorMax(1.0f, 0.0f);
+                    parent->AddChild(item);
+
+                    UI::InspectorUtils::AddDragFloat(item, "FOV", "FOV",
+                        [entity]() mutable { return entity.GetComponent<CameraComponent>().FOV; },
+                        [entity](float v) mutable { entity.GetComponent<CameraComponent>().FOV = v; });
+                    UI::InspectorUtils::AddDragFloat(item, "NearClip", "Near Clip",
+                        [entity]() mutable { return entity.GetComponent<CameraComponent>().NearClip; },
+                        [entity](float v) mutable { entity.GetComponent<CameraComponent>().NearClip = v; });
+                    UI::InspectorUtils::AddDragFloat(item, "FarClip", "Far Clip",
+                        [entity]() mutable { return entity.GetComponent<CameraComponent>().FarClip; },
+                        [entity](float v) mutable { entity.GetComponent<CameraComponent>().FarClip = v; });
+
+                    auto btnPrimary = new UI::Button("BtnPrimaryCamera", "Game View Camera: Off");
+                    btnPrimary->SetAnchorMin(0.0f, 0.0f); btnPrimary->SetAnchorMax(1.0f, 0.0f);
+                    btnPrimary->SetOffsetMin(15.0f, 0.0f); btnPrimary->SetOffsetMax(-10.0f, 28.0f);
+                    btnPrimary->SetActive(camera.Primary);
+                    btnPrimary->SetText(camera.Primary ? "Game View Camera: On" : "Game View Camera: Off");
+                    btnPrimary->SetOnClick([entity, btnPrimary]() mutable
+                        {
+                            if (!entity || !entity.HasComponent<CameraComponent>())
+                                return;
+
+                            auto& selectedCamera = entity.GetComponent<CameraComponent>();
+                            if (!selectedCamera.Primary)
+                            {
+                                // 게임 뷰 카메라는 씬에 하나만 존재하도록 다른 카메라를 모두 해제한다.
+                                auto view = entity.GetScene()->GetRegistry().view<CameraComponent>();
+                                for (auto cameraEntity : view)
+                                    view.get<CameraComponent>(cameraEntity).Primary = false;
+                                selectedCamera.Primary = true;
+                            }
+
+                            btnPrimary->SetActive(selectedCamera.Primary);
+                            btnPrimary->SetText(selectedCamera.Primary ? "Game View Camera: On" : "Game View Camera: Off");
+                        });
+                    item->AddChild(btnPrimary);
+                    AddRemoveComponentButton<CameraComponent>(parent, item, entity, "Camera");
+                });
+
+            UI::InspectorRegistry::RegisterComponent<SpriteRendererComponent>(
+                [](UI::Widget* parent, CCEngine::Entity entity, SpriteRendererComponent& sprite)
+                {
+                    auto item = new UI::InspectorItem("SpriteRendererItem", "Sprite Renderer");
+                    item->SetAnchorMin(0.0f, 0.0f); item->SetAnchorMax(1.0f, 0.0f);
+                    parent->AddChild(item);
+                    UI::InspectorUtils::AddColor4(item, "SpriteColor", "Color",
+                        [entity]() mutable { return entity.GetComponent<SpriteRendererComponent>().Color; },
+                        [entity](DirectX::XMFLOAT4 v) mutable { entity.GetComponent<SpriteRendererComponent>().Color = v; });
+                    AddRemoveComponentButton<SpriteRendererComponent>(parent, item, entity, "SpriteRenderer");
+                });
+
+            UI::InspectorRegistry::RegisterComponent<Rigidbody2DComponent>(
+                [](UI::Widget* parent, CCEngine::Entity entity, Rigidbody2DComponent& rigidbody)
+                {
+                    auto item = new UI::InspectorItem("Rigidbody2DItem", "Rigidbody 2D");
+                    item->SetAnchorMin(0.0f, 0.0f); item->SetAnchorMax(1.0f, 0.0f);
+                    parent->AddChild(item);
+
+                    auto bodyTypeText = [](Rigidbody2DComponent::BodyType type)
+                        {
+                            switch (type)
+                            {
+                                case Rigidbody2DComponent::BodyType::Dynamic: return "Body Type: Dynamic";
+                                case Rigidbody2DComponent::BodyType::Kinematic: return "Body Type: Kinematic";
+                                default: return "Body Type: Static";
+                            }
+                        };
+                    auto btnBodyType = new UI::Button("BtnBodyType", bodyTypeText(rigidbody.Type));
+                    btnBodyType->SetOnClick([entity, btnBodyType, bodyTypeText]() mutable
+                        {
+                            auto& rb = entity.GetComponent<Rigidbody2DComponent>();
+                            rb.Type = static_cast<Rigidbody2DComponent::BodyType>(((int)rb.Type + 1) % 3);
+                            btnBodyType->SetText(bodyTypeText(rb.Type));
+                        });
+                    item->AddChild(btnBodyType);
+
+                    auto btnFixedRotation = new UI::Button("BtnFixedRotation",
+                        rigidbody.FixedRotation ? "Fixed Rotation: On" : "Fixed Rotation: Off");
+                    btnFixedRotation->SetActive(rigidbody.FixedRotation);
+                    btnFixedRotation->SetOnClick([entity, btnFixedRotation]() mutable
+                        {
+                            auto& rb = entity.GetComponent<Rigidbody2DComponent>();
+                            rb.FixedRotation = !rb.FixedRotation;
+                            btnFixedRotation->SetActive(rb.FixedRotation);
+                            btnFixedRotation->SetText(rb.FixedRotation ? "Fixed Rotation: On" : "Fixed Rotation: Off");
+                        });
+                    item->AddChild(btnFixedRotation);
+                    AddRemoveComponentButton<Rigidbody2DComponent>(parent, item, entity, "Rigidbody2D");
+                });
+
+            UI::InspectorRegistry::RegisterComponent<BoxCollider2DComponent>(
+                [](UI::Widget* parent, CCEngine::Entity entity, BoxCollider2DComponent& collider)
+                {
+                    auto item = new UI::InspectorItem("BoxCollider2DItem", "Box Collider 2D");
+                    item->SetAnchorMin(0.0f, 0.0f); item->SetAnchorMax(1.0f, 0.0f);
+                    parent->AddChild(item);
+                    UI::InspectorUtils::AddDragFloat(item, "Density", "Density",
+                        [entity]() mutable { return entity.GetComponent<BoxCollider2DComponent>().Density; },
+                        [entity](float v) mutable { entity.GetComponent<BoxCollider2DComponent>().Density = v; });
+                    UI::InspectorUtils::AddDragFloat(item, "Friction", "Friction",
+                        [entity]() mutable { return entity.GetComponent<BoxCollider2DComponent>().Friction; },
+                        [entity](float v) mutable { entity.GetComponent<BoxCollider2DComponent>().Friction = v; });
+                    UI::InspectorUtils::AddDragFloat(item, "Restitution", "Restitution",
+                        [entity]() mutable { return entity.GetComponent<BoxCollider2DComponent>().Restitution; },
+                        [entity](float v) mutable { entity.GetComponent<BoxCollider2DComponent>().Restitution = v; });
+                    AddRemoveComponentButton<BoxCollider2DComponent>(parent, item, entity, "BoxCollider2D");
                 });
         }
 

@@ -3,6 +3,7 @@
 #include "Application.h"
 #include "Events/Event.h"
 #include "Events/MouseEvent.h"
+#include "Events/KeyEvent.h"
 #include <DirectXMath.h>
 #include <vector>
 #include <string>
@@ -62,7 +63,7 @@ namespace CCEngine
             virtual bool OnEvent(Event& e);
             virtual bool WantsMouseCapture() const { return false; }
 
-            bool IsPointInside(float mouseX, float mouseY) const
+            virtual bool IsPointInside(float mouseX, float mouseY) const
             {
                 return mouseX >= m_CalculatedPos.x &&
                     mouseX <= m_CalculatedPos.x + m_CalculatedSize.x &&
@@ -94,6 +95,17 @@ namespace CCEngine
 
             void SetVisible(bool visible) { m_IsVisible = visible; }
             bool IsVisible() const { return m_IsVisible; }
+            void SetBlockMouseEvents(bool block) { m_BlockMouseEvents = block; }
+            bool BlocksMouseEvents() const { return m_BlockMouseEvents; }
+            bool IsMouseBlockedByWidgetAbove(float mouseX, float mouseY) const;
+
+            static void BeginMouseInteraction(Widget* owner);
+            static void EndMouseInteraction(Widget* owner);
+            static bool IsMouseInteractionActive();
+            static bool IsMouseInteractionBlockedFor(const Widget* widget);
+            static void SetKeyboardFocus(Widget* owner);
+            static void ClearKeyboardFocus(Widget* owner = nullptr);
+            static bool IsKeyboardFocusOwner(const Widget* widget);
 
             void SetAnchorMin(float x, float y) { m_AnchorMin = { x, y }; }
             void SetAnchorMax(float x, float y) { m_AnchorMax = { x, y }; }
@@ -127,9 +139,12 @@ namespace CCEngine
             virtual bool OnMouseButtonPressed(MouseButtonPressedEvent& e) { return false; }
             virtual bool OnMouseMoved(MouseMovedEvent& e) { return false; }
             virtual bool OnMouseButtonReleased(MouseButtonReleasedEvent& e) { return false; }
+            virtual bool OnKeyPressed(KeyPressedEvent& e) { return false; }
+            virtual bool OnTextInput(TextInputEvent& e) { return false; }
 
             std::string m_Name;
             bool m_IsVisible = true;
+            bool m_BlockMouseEvents = false;
 
             Widget* m_Parent = nullptr;
             std::vector<Widget*> m_Children;
@@ -145,6 +160,10 @@ namespace CCEngine
 
             bool m_ClipToBounds = false;
             DirectX::XMFLOAT4 m_ClipPadding = { 0.0f, 0.0f, 0.0f, 0.0f }; // 좌, 상, 우, 하
+
+        private:
+            static Widget* s_MouseInteractionOwner;
+            static Widget* s_KeyboardFocusOwner;
         };
     }
 }

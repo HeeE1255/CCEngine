@@ -4,9 +4,106 @@
 #include "Renderer/Renderer2D.h"
 #include "Renderer/Renderer3D.h"
 #include <box2d/box2d.h>
+#include <algorithm>
+#include <functional>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace CCEngine
 {
+    namespace
+    {
+        bool EntityNameExists(Scene* scene, const std::string& name)
+        {
+            auto view = scene->GetRegistry().view<TagComponent>();
+            for (auto handle : view)
+            {
+                Entity entity{ handle, scene };
+                if (entity.GetComponent<TagComponent>().Tag == name)
+                    return true;
+            }
+            return false;
+        }
+
+        std::string MakeDuplicateName(Scene* scene, const std::string& sourceName)
+        {
+            std::string baseName = sourceName.empty() ? "Entity" : sourceName;
+            int firstSuffix = 1;
+
+            size_t numberStart = baseName.find_last_not_of("0123456789");
+            if (numberStart != std::string::npos && numberStart + 1 < baseName.size() && baseName[numberStart] == ' ')
+            {
+                std::string numberText = baseName.substr(numberStart + 1);
+                baseName = baseName.substr(0, numberStart);
+                firstSuffix = std::max(1, std::stoi(numberText) + 1);
+            }
+
+            // 이미 번호가 붙은 복제본을 다시 복제해도 "Name 1 1"이 아니라 "Name 2"처럼 이어 붙인다.
+            int suffix = firstSuffix;
+            std::string candidate = baseName + " " + std::to_string(suffix);
+
+            while (EntityNameExists(scene, candidate))
+            {
+                ++suffix;
+                candidate = baseName + " " + std::to_string(suffix);
+            }
+
+            return candidate;
+        }
+
+        void CopyEntityComponents(Entity srcEntity, Entity dstEntity)
+        {
+            if (srcEntity.HasComponent<TransformComponent>())
+                dstEntity.GetComponent<TransformComponent>() = srcEntity.GetComponent<TransformComponent>();
+
+            if (srcEntity.HasComponent<CameraComponent>())
+                dstEntity.AddComponent<CameraComponent>(srcEntity.GetComponent<CameraComponent>());
+
+            if (srcEntity.HasComponent<SpriteRendererComponent>())
+                dstEntity.AddComponent<SpriteRendererComponent>(srcEntity.GetComponent<SpriteRendererComponent>());
+
+            if (srcEntity.HasComponent<MeshComponent>())
+                dstEntity.AddComponent<MeshComponent>(srcEntity.GetComponent<MeshComponent>());
+
+            if (srcEntity.HasComponent<ModelComponent>())
+                dstEntity.AddComponent<ModelComponent>(srcEntity.GetComponent<ModelComponent>());
+
+            if (srcEntity.HasComponent<AnimatorComponent>())
+                dstEntity.AddComponent<AnimatorComponent>(srcEntity.GetComponent<AnimatorComponent>());
+
+            if (srcEntity.HasComponent<LightComponent>())
+                dstEntity.AddComponent<LightComponent>(srcEntity.GetComponent<LightComponent>());
+
+            if (srcEntity.HasComponent<Rigidbody2DComponent>())
+            {
+                auto& srcRb = srcEntity.GetComponent<Rigidbody2DComponent>();
+                auto& dstRb = dstEntity.AddComponent<Rigidbody2DComponent>();
+                dstRb.Type = srcRb.Type;
+                dstRb.FixedRotation = srcRb.FixedRotation;
+            }
+
+            if (srcEntity.HasComponent<BoxCollider2DComponent>())
+            {
+                auto& srcBc = srcEntity.GetComponent<BoxCollider2DComponent>();
+                auto& dstBc = dstEntity.AddComponent<BoxCollider2DComponent>();
+                dstBc.Offset = srcBc.Offset;
+                dstBc.Size = srcBc.Size;
+                dstBc.Density = srcBc.Density;
+                dstBc.Friction = srcBc.Friction;
+                dstBc.Restitution = srcBc.Restitution;
+            }
+
+            if (srcEntity.HasComponent<NativeScriptComponent>())
+            {
+                auto& srcNsc = srcEntity.GetComponent<NativeScriptComponent>();
+                auto& dstNsc = dstEntity.AddComponent<NativeScriptComponent>();
+                dstNsc.InstantiateScript = srcNsc.InstantiateScript;
+                dstNsc.DestroyScript = srcNsc.DestroyScript;
+            }
+        }
+    }
+
     Scene::Scene()
     {
     }
@@ -28,7 +125,142 @@ namespace CCEngine
 
     void Scene::DestroyEntity(Entity entity)
     {
-        m_Registry.destroy(entity);
+        entt::entity handle = (entt::entity)entity;
+        if (handle == entt::null || !m_Registry.valid(handle))
+            return;
+
+        if (m_Registry.all_of<RelationshipComponent>(handle))
+        {
+            auto& relationship = m_Registry.get<RelationshipComponent>(handle);
+            std::vector<entt::entity> children = relationship.Children;
+            for (entt::entity child : children)
+            {
+                if (m_Registry.valid(child))
+                    DestroyEntity(Entity{ child, this });
+            }
+
+            if (relationship.Parent != entt::null && m_Registry.valid(relationship.Parent) &&
+                m_Registry.all_of<RelationshipComponent>(relationship.Parent))
+            {
+                auto& parentRelationship = m_Registry.get<RelationshipComponent>(relationship.Parent);
+                parentRelationship.Children.erase(
+                    std::remove(parentRelationship.Children.begin(), parentRelationship.Children.end(), handle),
+                    parentRelationship.Children.end());
+            }
+        }
+
+        m_Registry.destroy(handle);
+    }
+
+    Entity Scene::DuplicateEntity(Entity source)
+    {
+        if (!source || !m_Registry.valid((entt::entity)source))
+            return {};
+
+        std::vector<entt::entity> sourceHandles;
+        std::function<void(Entity)> collectSubtree = [&](Entity current)
+        {
+            sourceHandles.push_back((entt::entity)current);
+
+            if (!current.HasComponent<RelationshipComponent>())
+                return;
+
+            for (entt::entity childHandle : current.GetComponent<RelationshipComponent>().Children)
+            {
+                if (m_Registry.valid(childHandle))
+                    collectSubtree(Entity{ childHandle, this });
+            }
+        };
+
+        collectSubtree(source);
+
+        std::unordered_map<entt::entity, entt::entity> entityMap;
+        Entity duplicatedRoot;
+
+        for (entt::entity srcHandle : sourceHandles)
+        {
+            Entity srcEntity{ srcHandle, this };
+            std::string name = srcEntity.HasComponent<TagComponent>() ? srcEntity.GetComponent<TagComponent>().Tag : "Entity";
+
+            if (srcHandle == (entt::entity)source)
+                name = MakeDuplicateName(this, name);
+
+            Entity dstEntity = CreateEntity(name);
+            entityMap[srcHandle] = (entt::entity)dstEntity;
+
+            if (srcHandle == (entt::entity)source)
+                duplicatedRoot = dstEntity;
+
+            CopyEntityComponents(srcEntity, dstEntity);
+        }
+
+        for (entt::entity srcHandle : sourceHandles)
+        {
+            Entity srcEntity{ srcHandle, this };
+            Entity dstEntity{ entityMap[srcHandle], this };
+
+            if (!srcEntity.HasComponent<RelationshipComponent>())
+                continue;
+
+            auto& srcRel = srcEntity.GetComponent<RelationshipComponent>();
+            auto& dstRel = dstEntity.HasComponent<RelationshipComponent>() ? dstEntity.GetComponent<RelationshipComponent>() : dstEntity.AddComponent<RelationshipComponent>();
+            dstRel.Children.clear();
+
+            // 복제 대상 내부의 부모는 새 엔티티로 바꾸고, 루트의 원래 부모는 그대로 공유한다.
+            auto parentIt = entityMap.find(srcRel.Parent);
+            if (parentIt != entityMap.end())
+            {
+                dstRel.Parent = parentIt->second;
+            }
+            else
+            {
+                dstRel.Parent = (srcHandle == (entt::entity)source) ? srcRel.Parent : entt::null;
+            }
+
+            for (entt::entity srcChild : srcRel.Children)
+            {
+                auto childIt = entityMap.find(srcChild);
+                if (childIt != entityMap.end())
+                    dstRel.Children.push_back(childIt->second);
+            }
+        }
+
+        if (source.HasComponent<RelationshipComponent>())
+        {
+            entt::entity originalParent = source.GetComponent<RelationshipComponent>().Parent;
+            if (originalParent != entt::null && m_Registry.valid(originalParent))
+            {
+                Entity parent{ originalParent, this };
+                auto& parentRel = parent.HasComponent<RelationshipComponent>() ? parent.GetComponent<RelationshipComponent>() : parent.AddComponent<RelationshipComponent>();
+                parentRel.Children.push_back((entt::entity)duplicatedRoot);
+            }
+        }
+
+        for (entt::entity srcHandle : sourceHandles)
+        {
+            Entity dstEntity{ entityMap[srcHandle], this };
+            if (!dstEntity.HasComponent<ModelComponent>())
+                continue;
+
+            auto& model = dstEntity.GetComponent<ModelComponent>();
+
+            // 모델 컴포넌트는 노드 경로별 엔티티 맵을 들고 있다. 복제 후에는 새 엔티티 핸들로 다시 연결해야 한다.
+            for (auto& [name, mappedEntity] : model.NodeEntityMap)
+            {
+                auto it = entityMap.find(mappedEntity);
+                if (it != entityMap.end())
+                    mappedEntity = it->second;
+            }
+
+            for (auto& [path, mappedEntity] : model.NodePathEntityMap)
+            {
+                auto it = entityMap.find(mappedEntity);
+                if (it != entityMap.end())
+                    mappedEntity = it->second;
+            }
+        }
+
+        return duplicatedRoot;
     }
 
     // ====================================================================

@@ -23,6 +23,7 @@ namespace CCEngine
         // 엔티티를 생성하는 팩토리 함수
         Entity CreateEntity(const std::string& name = "Empty Entity");
         void DestroyEntity(Entity entity); // 엔티티 파괴 함수
+        Entity DuplicateEntity(Entity source); // 선택한 엔티티와 자식들을 같은 씬 안에서 복제
 
         // 매 프레임 이 씬 안의 컴포넌트들을 업데이트
         void OnUpdate(float deltaTime);

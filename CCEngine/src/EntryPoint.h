@@ -12,12 +12,46 @@
 //////
 
 #include <clocale>
+#include <filesystem>
 #include <Windows.h>
 
 // 엔트리 포인트 헤더: 플랫폼별로 메인 함수를 정의하는 헤더
 // 설명 : 엔진이 실행될 때 가장 먼저 호출되는 함수인 main 함수를 정의하는 헤더
 // 샌드박스에서 이 이름으로 사용자가 코드를 작성하면, 엔진이 이 함수를 호출하여 게임을 시작
 extern CCEngine::Application* CCEngine::CreateApplication();
+
+namespace
+{
+    void SetupProjectWorkingDirectory()
+    {
+        std::error_code ec;
+        auto current = std::filesystem::current_path(ec);
+        if (ec)
+            return;
+
+        if (std::filesystem::exists(current / "assets", ec) && !ec)
+            return;
+
+        // 에디터 리소스는 Sandbox/assets를 기준으로 둔다.
+        // 실행 위치가 솔루션 루트나 bin 폴더여도 같은 프로젝트 에셋을 보게 맞춘다.
+        std::filesystem::path candidates[] =
+        {
+            current / "Sandbox",
+            current.parent_path() / "Sandbox",
+            current.parent_path().parent_path() / "Sandbox"
+        };
+
+        for (const auto& candidate : candidates)
+        {
+            ec.clear();
+            if (std::filesystem::exists(candidate / "assets", ec) && !ec)
+            {
+                std::filesystem::current_path(candidate, ec);
+                return;
+            }
+        }
+    }
+}
 
 int main(int argc, char** argv) 
 {
@@ -34,6 +68,8 @@ int main(int argc, char** argv)
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
     ////////////////////////////////////////////////////////
+
+    SetupProjectWorkingDirectory();
 
     HWND consoleWindow = GetConsoleWindow();
     if (consoleWindow != NULL)

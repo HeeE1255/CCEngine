@@ -4,6 +4,7 @@
 #include "Events/ApplicationEvent.h"
 #include "UI/Widget.h"
 #include "Events/MouseEvent.h"
+#include "Events/KeyEvent.h"
 #include <iostream>
 #include <windows.h>
 #include <windowsx.h>
@@ -20,6 +21,24 @@ namespace CCEngine
 
 		switch (message)
 		{
+		case WM_KEYDOWN:
+		{
+			if (window && window->GetRootUI())
+			{
+				CCEngine::KeyPressedEvent e((int)wParam);
+				window->GetRootUI()->OnEvent(e);
+			}
+			return 0;
+		}
+		case WM_CHAR:
+		{
+			if (window && window->GetRootUI() && wParam >= 32 && wParam <= 126)
+			{
+				CCEngine::TextInputEvent e((char)wParam);
+				window->GetRootUI()->OnEvent(e);
+			}
+			return 0;
+		}
 		case WM_SIZE:
 		{
 			if (wParam == SIZE_MINIMIZED) return 0;
@@ -114,6 +133,33 @@ namespace CCEngine
 		}
 		break;
 
+		case WM_RBUTTONUP:
+		{
+			if (window)
+			{
+				ReleaseCapture();
+				float mouseX = static_cast<float>((short)LOWORD(lParam));
+				float mouseY = static_cast<float>((short)HIWORD(lParam));
+
+				CCEngine::MouseButtonReleasedEvent e(1, mouseX, mouseY);
+
+				bool isMainWindow = (CCEngine::Application::Get() &&
+					window == &(CCEngine::Application::Get()->GetWindow()));
+
+				if (isMainWindow)
+				{
+					CCEngine::Application::Get()->OnEvent(e);
+				}
+
+				if (!e.Handled && window->GetRootUI())
+				{
+					window->GetRootUI()->OnEvent(e);
+				}
+			}
+			return 0;
+		}
+		break;
+
 		//
 		case WM_LBUTTONDOWN:
 		{
@@ -124,6 +170,33 @@ namespace CCEngine
 				float mouseY = static_cast<float>((short)HIWORD(lParam));
 
 				CCEngine::MouseButtonPressedEvent e(0, mouseX, mouseY);
+
+				bool isMainWindow = (CCEngine::Application::Get() &&
+					window == &(CCEngine::Application::Get()->GetWindow()));
+
+				if (isMainWindow)
+				{
+					CCEngine::Application::Get()->OnEvent(e);
+				}
+
+				if (!e.Handled && window->GetRootUI())
+				{
+					window->GetRootUI()->OnEvent(e);
+				}
+			}
+			return 0;
+		}
+		break;
+
+		case WM_RBUTTONDOWN:
+		{
+			SetCapture(hWnd);
+			if (window)
+			{
+				float mouseX = static_cast<float>((short)LOWORD(lParam));
+				float mouseY = static_cast<float>((short)HIWORD(lParam));
+
+				CCEngine::MouseButtonPressedEvent e(1, mouseX, mouseY);
 
 				bool isMainWindow = (CCEngine::Application::Get() &&
 					window == &(CCEngine::Application::Get()->GetWindow()));

@@ -4,10 +4,15 @@
 #include "Scene/Scene.h"
 #include "Renderer/Framebuffer.h"
 #include "Editor/EditorCamera.h"
+#include "Editor/EditorUndoManager.h"
+#include "Core/ConsoleLog.h"
+#include "Core/ProjectSettings.h"
 
 //#include "imgui.h" 
 //#include "ImGuizmo.h"
 #include <DirectXMath.h>
+#include <filesystem>
+#include <memory>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -17,6 +22,8 @@
 #include "UI/ImageWidget.h"
 #include "UI/Button.h"
 #include "UI/AssetBrowserPanel.h"
+#include "UI/ConsolePanel.h"
+#include "UI/ProjectSettingsPanel.h"
 #include "UI/WindowPanel.h"
 #include "UI/VBoxContainer.h"
 #include "UI/HierarchyPanel.h"
@@ -44,65 +51,41 @@ namespace CCEngine {
         void OpenScene(const std::string& filepath);
         void LoadSceneAdditive(const std::string& filepath);
         void SaveSelectedPrefab();
+        void SaveSelectedPrefabToCurrentAssetFolder();
+        void SavePrefabToDirectory(Entity entity, const std::filesystem::path& directory);
         void InstantiatePrefab();
         void InstantiatePrefab(const std::string& filepath);
         void ImportModelAsset(const std::string& filepath);
         void HandleAssetDropped(const std::string& filepath, const std::string& assetType);
+        void ShowObjectContextMenu(float x, float y, bool allowDelete);
+        void ShowMeshObjectSubmenu();
+        void HideObjectContextMenu();
+        Entity CreateEmptyObject();
+        Entity CreatePrimitiveObject(const std::string& name, int meshType);
+        Entity CreateLightObject();
+        Entity CreateCameraObject();
+        void DeleteSelectedObject();
+        void DuplicateSelectedObject();
         void HandleShortcuts();
-        void TrackTransformUndo();
-        void CommitPendingTransformUndo();
-        void UndoTransform();
-        void RedoTransform();
-        void SeekTransformHistory(size_t targetAppliedCount);
-        void ClearTransformUndoHistory();
+        void ConfigureUndoManager();
         void RebuildHistoryPanel();
         void MarkHistoryPanelDirty();
+        void RefreshEditorSelection(Entity selected = {});
+        void SetCurrentSceneAsProjectStartScene();
+        void OpenProjectStartScene();
+        void SaveProjectSettings();
+        void ApplyProjectGameResolution();
+        void OpenEditorWindow(int windowKind);
+        void BringEditorOverlaysToFront();
 
     private:
         void BuildEditorUI();
         void RefreshHierarchy();
 
-        // Transform Undo/Redo에서 한 순간의 Transform 상태를 저장하는 스냅샷.
-        // Before/After 두 개의 스냅샷을 비교하거나 적용해서 되돌리기/다시하기를 수행한다.
-        struct TransformSnapshot
-        {
-            DirectX::XMFLOAT3 Translation = { 0.0f, 0.0f, 0.0f };
-            DirectX::XMFLOAT3 Rotation = { 0.0f, 0.0f, 0.0f };
-            DirectX::XMFLOAT3 Scale = { 1.0f, 1.0f, 1.0f };
-            DirectX::XMFLOAT3 EulerRotation = { 0.0f, 0.0f, 0.0f };
-            DirectX::XMFLOAT4 QuaternionRotation = { 0.0f, 0.0f, 0.0f, 1.0f };
-        };
-
-        // 하나의 Undo 작업 단위.
-        // 특정 엔티티가 Before 상태에서 After 상태로 바뀐 기록이다.
-        struct TransformUndoCommand
-        {
-            entt::entity Entity = entt::null;
-            TransformSnapshot Before;
-            TransformSnapshot After;
-        };
-
-        TransformSnapshot CaptureTransform(Entity entity) const;
-        void ApplyTransform(entt::entity entityHandle, const TransformSnapshot& snapshot);
-        bool IsValidTransformEntity(entt::entity entityHandle) const;
-        static bool SameTransformSnapshot(const TransformSnapshot& a, const TransformSnapshot& b);
-
         bool m_NeedsHierarchyRefresh = false; // 재조립 트리거 (메모리 뻑 방지용)
         std::unordered_set<entt::entity> m_ExpandedNodes; // 열려있는(Expanded) 엔티티들의 ID를 기억하는 장부
 
-        // 적용된 작업은 UndoStack, 되돌린 작업은 RedoStack에 저장한다.
-        // History 패널은 이 두 스택을 합쳐서 전체 작업 타임라인처럼 보여준다.
-        std::vector<TransformUndoCommand> m_TransformUndoStack;
-        std::vector<TransformUndoCommand> m_TransformRedoStack;
-
-        // 드래그 중 계속 변하는 Transform을 매 프레임 작업으로 쌓지 않고,
-        // 마우스를 놓을 때 하나의 작업으로 확정하기 위한 임시 기록이다.
-        TransformUndoCommand m_PendingTransformUndo;
-        TransformSnapshot m_LastObservedTransform;
-        entt::entity m_ObservedTransformEntity = entt::null;
-        bool m_HasLastObservedTransform = false;
-        bool m_HasPendingTransformUndo = false;
-        bool m_IsApplyingTransformUndoRedo = false;
+        EditorUndoManager m_UndoManager;
         bool m_HistoryPanelDirty = false;
 
         Scene* m_ActiveScene = nullptr;
@@ -117,6 +100,7 @@ namespace CCEngine {
         float m_ClearColor[4] = { 0.1f, 0.1f, 0.1f, 1.0f };
         bool m_IsSPressedLastFrame = false;
         std::string m_CurrentScenePath = "";
+        ProjectSettings m_ProjectSettings;
 
         int m_GizmoType = 0;
 
@@ -132,19 +116,30 @@ namespace CCEngine {
         // 2. 메뉴바 & 드롭다운 (기존)
         UI::Panel* m_MenuBarPanel = nullptr;
         UI::Button* m_BtnFileMenu = nullptr;       // 메뉴바의 "File" 버튼
+        UI::Button* m_BtnEditMenu = nullptr;
+        UI::Button* m_BtnWindowMenu = nullptr;
         UI::Panel* m_FileDropdownPanel = nullptr;  // 드롭다운 창(배경)
+        UI::Panel* m_EditDropdownPanel = nullptr;
+        UI::Panel* m_WindowDropdownPanel = nullptr;
         UI::Button* m_BtnOpen = nullptr;
         UI::Button* m_BtnSave = nullptr;
         UI::Button* m_BtnSaveAs = nullptr;
         UI::Button* m_BtnSavePrefab = nullptr;
         UI::Button* m_BtnInstantiatePrefab = nullptr;
         UI::Button* m_BtnExit = nullptr;
+        UI::Button* m_BtnEditUndo = nullptr;
+        UI::Button* m_BtnEditRedo = nullptr;
+        UI::Button* m_BtnEditDuplicate = nullptr;
+        UI::Button* m_BtnProjectSettings = nullptr;
+        std::vector<UI::Button*> m_WindowMenuButtons;
 
         // 3. 좌/우 패널
         UI::HierarchyPanel* m_HierarchyPanel = nullptr;
         UI::InspectorPanel* m_InspectorPanel = nullptr;
         UI::AssetBrowserPanel* m_AssetBrowserPanel = nullptr;
         UI::WindowPanel* m_HistoryPanel = nullptr;
+        UI::ConsolePanel* m_ConsolePanel = nullptr;
+        UI::ProjectSettingsPanel* m_ProjectSettingsPanel = nullptr;
         UI::Panel* m_HistoryContentPanel = nullptr;
         UI::VBoxContainer* m_HierarchyContainer = nullptr;
 
@@ -154,14 +149,44 @@ namespace CCEngine {
         UI::Button* m_BtnPlay = nullptr;
         UI::Button* m_BtnPause = nullptr;
         UI::Button* m_BtnStop = nullptr;
+        UI::Panel* m_ObjectContextMenuPanel = nullptr;
+        UI::Panel* m_MeshObjectSubmenuPanel = nullptr;
+        UI::Button* m_BtnCreateEmpty = nullptr;
+        UI::Button* m_BtnCreateMeshObject = nullptr;
+        UI::Button* m_BtnCreateLight = nullptr;
+        UI::Button* m_BtnCreateCamera = nullptr;
+        UI::Button* m_BtnCreatePrefab = nullptr;
+        UI::Button* m_BtnCreateCube = nullptr;
+        UI::Button* m_BtnCreateSphere = nullptr;
+        UI::Button* m_BtnCreateCapsule = nullptr;
+        UI::Button* m_BtnCreateCylinder = nullptr;
+        UI::Button* m_BtnCreatePlane = nullptr;
+        UI::Button* m_BtnCreateQuad = nullptr;
+        UI::Button* m_BtnCreateTorus = nullptr;
+        UI::Button* m_BtnDeleteObject = nullptr;
 
         // 5. 화면 위젯
         UI::WindowPanel* m_ViewportWindow = nullptr;
         UI::WindowPanel* m_GameWindow = nullptr;
         UI::ImageWidget* m_ViewportWidget = nullptr;
         UI::ImageWidget* m_GameViewWidget = nullptr;
+        std::vector<UI::ImageWidget*> m_ViewportWidgets;
+        std::vector<UI::ImageWidget*> m_GameViewWidgets;
+        std::vector<UI::WindowPanel*> m_ViewportWindows;
+        std::vector<UI::WindowPanel*> m_GameWindows;
+        std::vector<UI::WindowPanel*> m_HistoryPanels;
+        std::vector<UI::HierarchyPanel*> m_HierarchyPanels;
+        std::vector<UI::InspectorPanel*> m_InspectorPanels;
+        std::vector<UI::AssetBrowserPanel*> m_AssetBrowserPanels;
+        std::vector<UI::ConsolePanel*> m_ConsolePanels;
+        std::vector<UI::Panel*> m_HistoryContentPanels;
 
         GizmoSystem m_GizmoSystem;
+
+        Entity m_PrefabDragEntity = {};
+        bool m_IsDraggingPrefabToAssetBrowser = false;
+        float m_PrefabDragStartX = 0.0f;
+        float m_PrefabDragStartY = 0.0f;
 
     };
 

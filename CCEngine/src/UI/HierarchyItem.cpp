@@ -61,8 +61,10 @@ namespace CCEngine
             float verticalPadding = 8.0f;
             headerHeight += verticalPadding;
 
-            bool isHovered = (mouseX >= m_CalculatedPos.x && mouseX <= m_CalculatedPos.x + m_CalculatedSize.x &&
+            bool isHovered = !Widget::IsMouseInteractionActive() &&
+                (mouseX >= m_CalculatedPos.x && mouseX <= m_CalculatedPos.x + m_CalculatedSize.x &&
                 mouseY >= m_CalculatedPos.y && mouseY <= m_CalculatedPos.y + headerHeight);
+            isHovered = isHovered && !IsMouseBlockedByWidgetAbove(mouseX, mouseY);
 
             if (m_IsSelected)
             {
@@ -79,8 +81,10 @@ namespace CCEngine
             float hitBoxLeft = indentX;
             float hitBoxRight = indentX + 24.0f;
 
-            bool hoveringArrow = (mouseX >= hitBoxLeft && mouseX <= hitBoxRight &&
+            bool hoveringArrow = !Widget::IsMouseInteractionActive() &&
+                (mouseX >= hitBoxLeft && mouseX <= hitBoxRight &&
                 mouseY >= m_CalculatedPos.y && mouseY <= m_CalculatedPos.y + headerHeight);
+            hoveringArrow = hoveringArrow && !IsMouseBlockedByWidgetAbove(mouseX, mouseY);
 
             float centerY = m_CalculatedPos.y + (headerHeight * 0.5f);
 

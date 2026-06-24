@@ -15,7 +15,7 @@ namespace CCEngine {
             if (!m_IsVisible) return;
 
             auto [mouseX, mouseY] = CCEngine::Application::Get()->GetWindow().GetMousePosition();
-            m_IsHovered = IsPointInside(mouseX, mouseY);
+            m_IsHovered = IsPointInside(mouseX, mouseY) && !IsMouseBlockedByWidgetAbove(mouseX, mouseY);
             if (!m_IsHovered) m_IsPressed = false;
 
             DirectX::XMFLOAT4 currentColor = m_NormalColor;

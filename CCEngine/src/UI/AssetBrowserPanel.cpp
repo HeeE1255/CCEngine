@@ -1,7 +1,9 @@
 #include "UI/AssetBrowserPanel.h"
+#include "Core/AssetDatabase.h"
 #include "Renderer/UIRenderer.h"
 #include "Application.h"
 #include "Core/Window.h"
+#include "Events/KeyEvent.h"
 #include <algorithm>
 #include <iostream>
 
@@ -25,10 +27,15 @@ namespace CCEngine
 
         void AssetBrowserPanel::Refresh()
         {
+            // 에셋 브라우저 새로고침은 프로젝트 파일을 확인하는 시점이다.
+            // 여기서 meta를 맞춰 두면 저장 시스템은 GUID를 안정적으로 사용할 수 있다.
+            AssetDatabase::Scan(m_RootDirectory);
+
             m_Entries.clear();
             m_SelectedIndex = -1;
             m_HoveredIndex = -1;
             m_LastClickedIndex = -1;
+            m_ContextMenuVisible = false;
 
             if (!std::filesystem::exists(m_CurrentDirectory))
                 return;
@@ -137,6 +144,41 @@ namespace CCEngine
             }
         }
 
+        bool AssetBrowserPanel::DeleteSelectedAsset()
+        {
+            if (m_SelectedIndex < 0 || m_SelectedIndex >= (int)m_Entries.size())
+                return false;
+
+            const auto& entry = m_Entries[m_SelectedIndex];
+            if (entry.Type == AssetType::Folder || entry.Type == AssetType::Unknown)
+                return false;
+
+            std::error_code ec;
+            auto target = std::filesystem::weakly_canonical(entry.Path, ec);
+            if (ec || !std::filesystem::exists(target) || !std::filesystem::is_regular_file(target))
+                return false;
+
+            auto root = std::filesystem::weakly_canonical(m_RootDirectory, ec);
+            if (ec)
+                return false;
+
+            std::wstring targetString = target.wstring();
+            std::wstring rootString = root.wstring();
+            if (targetString.rfind(rootString, 0) != 0)
+                return false;
+
+            // 에셋 루트 내부의 일반 파일만 지운다. 프로젝트 바깥 경로와 폴더 삭제는 여기서 막는다.
+            if (!std::filesystem::remove(target, ec) || ec)
+                return false;
+
+            // 에셋을 지우면 짝이 되는 meta도 같이 지운다. 둘이 어긋나면 GUID 참조가 남아 버린다.
+            AssetDatabase::DeleteMetaFile(target);
+
+            std::cout << "[AssetBrowser] Asset deleted: " << target.string() << std::endl;
+            Refresh();
+            return true;
+        }
+
         void AssetBrowserPanel::NavigateTo(const std::filesystem::path& directory)
         {
             std::error_code ec;
@@ -181,6 +223,28 @@ namespace CCEngine
                 mouseY <= trackBottom;
         }
 
+        int AssetBrowserPanel::GetEntryIndexAt(float mouseX, float mouseY) const
+        {
+            if (!IsContentPoint(mouseX, mouseY))
+                return -1;
+
+            float localY = mouseY - (m_CalculatedPos.y + m_ContentTop + 8.0f) + m_ScrollState.ScrollY;
+            int index = (int)(localY / (m_RowHeight + m_RowGap));
+            if (index < 0 || index >= (int)m_Entries.size())
+                return -1;
+
+            return index;
+        }
+
+        bool AssetBrowserPanel::IsContextMenuPoint(float mouseX, float mouseY) const
+        {
+            return m_ContextMenuVisible &&
+                mouseX >= m_ContextMenuX &&
+                mouseX <= m_ContextMenuX + m_ContextMenuWidth &&
+                mouseY >= m_ContextMenuY &&
+                mouseY <= m_ContextMenuY + m_ContextMenuHeight;
+        }
+
         void AssetBrowserPanel::UpdateLayout(const DirectX::XMFLOAT2& parentPos, const DirectX::XMFLOAT2& parentSize)
         {
             WindowPanel::UpdateLayout(parentPos, parentSize);
@@ -216,7 +280,8 @@ namespace CCEngine
                 if (currentY + m_RowHeight < m_CalculatedPos.y + m_ContentTop || currentY > m_CalculatedPos.y + m_CalculatedSize.y)
                     continue;
 
-                bool hovered = mouseX >= rowX && mouseX <= rowX + rowWidth && mouseY >= currentY && mouseY <= currentY + m_RowHeight;
+                bool hovered = !Widget::IsMouseInteractionActive() &&
+                    mouseX >= rowX && mouseX <= rowX + rowWidth && mouseY >= currentY && mouseY <= currentY + m_RowHeight;
                 if (hovered)
                     m_HoveredIndex = (int)i;
 
@@ -252,6 +317,13 @@ namespace CCEngine
                 UIRenderer::DrawRect({ thumbX, m_CalculatedPos.y + m_ContentTop }, { 8.0f, m_ScrollState.ViewportHeight }, { 0.08f, 0.08f, 0.08f, 0.5f });
                 UIRenderer::DrawRect({ thumbX, thumbY }, { 8.0f, thumbH }, { 0.42f, 0.42f, 0.42f, 1.0f });
             }
+
+            if (m_ContextMenuVisible)
+            {
+                UIRenderer::DrawRectFilled(m_ContextMenuX, m_ContextMenuY, m_ContextMenuWidth, m_ContextMenuHeight, { 0.14f, 0.14f, 0.15f, 1.0f });
+                UIRenderer::DrawRect({ m_ContextMenuX, m_ContextMenuY }, { m_ContextMenuWidth, m_ContextMenuHeight }, { 0.28f, 0.28f, 0.30f, 1.0f });
+                UIRenderer::DrawString("Delete", m_ContextMenuX + 10.0f, m_ContextMenuY + 19.0f, { 0.95f, 0.72f, 0.72f, 1.0f });
+            }
         }
 
         bool AssetBrowserPanel::OnEvent(Event& e)
@@ -267,9 +339,32 @@ namespace CCEngine
                 return true;
             }
 
+            if (e.GetEventType() == EventType::KeyPressed)
+            {
+                auto& ke = static_cast<KeyPressedEvent&>(e);
+                if (ke.GetKeyCode() == 46 && DeleteSelectedAsset())
+                {
+                    e.Handled = true;
+                    return true;
+                }
+            }
+
             if (e.GetEventType() == EventType::MouseButtonPressed)
             {
                 auto& me = static_cast<MouseButtonPressedEvent&>(e);
+                if (me.GetButton() == 0 && m_ContextMenuVisible)
+                {
+                    if (IsContextMenuPoint(me.GetX(), me.GetY()))
+                    {
+                        DeleteSelectedAsset();
+                        m_ContextMenuVisible = false;
+                        e.Handled = true;
+                        return true;
+                    }
+
+                    m_ContextMenuVisible = false;
+                }
+
                 if (me.GetButton() == 0 && IsScrollbarPoint(me.GetX(), me.GetY()))
                 {
                     m_IsDraggingScrollbar = true;
@@ -282,8 +377,7 @@ namespace CCEngine
 
                 if (me.GetButton() == 0 && IsContentPoint(me.GetX(), me.GetY()))
                 {
-                    float localY = me.GetY() - (m_CalculatedPos.y + m_ContentTop + 8.0f) + m_ScrollState.ScrollY;
-                    int index = (int)(localY / (m_RowHeight + m_RowGap));
+                    int index = GetEntryIndexAt(me.GetX(), me.GetY());
 
                     if (index >= 0 && index < (int)m_Entries.size())
                     {
@@ -307,6 +401,26 @@ namespace CCEngine
 
                         m_LastClickedIndex = index;
                         m_LastClickTime = now;
+                    }
+
+                    e.Handled = true;
+                    return true;
+                }
+
+                if (me.GetButton() == 1 && IsContentPoint(me.GetX(), me.GetY()))
+                {
+                    int index = GetEntryIndexAt(me.GetX(), me.GetY());
+                    if (index >= 0 && index < (int)m_Entries.size())
+                    {
+                        m_SelectedIndex = index;
+                        const auto& entry = m_Entries[index];
+                        m_ContextMenuVisible = entry.Type != AssetType::Folder && entry.Type != AssetType::Unknown;
+                        m_ContextMenuX = (std::min)(me.GetX(), m_CalculatedPos.x + m_CalculatedSize.x - m_ContextMenuWidth - 4.0f);
+                        m_ContextMenuY = (std::min)(me.GetY(), m_CalculatedPos.y + m_CalculatedSize.y - m_ContextMenuHeight - 4.0f);
+                    }
+                    else
+                    {
+                        m_ContextMenuVisible = false;
                     }
 
                     e.Handled = true;

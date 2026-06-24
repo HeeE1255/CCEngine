@@ -47,6 +47,10 @@ namespace CCEngine
         s_Data->DefaultMeshes[MeshComponent::MeshType::Cube] = MeshFactory::CreateCube();
         s_Data->DefaultMeshes[MeshComponent::MeshType::Plane] = MeshFactory::CreatePlane();
         s_Data->DefaultMeshes[MeshComponent::MeshType::Sphere] = MeshFactory::CreateSphere();
+        s_Data->DefaultMeshes[MeshComponent::MeshType::Quad] = MeshFactory::CreateQuad();
+        s_Data->DefaultMeshes[MeshComponent::MeshType::Capsule] = MeshFactory::CreateCapsule();
+        s_Data->DefaultMeshes[MeshComponent::MeshType::Cylinder] = MeshFactory::CreateCylinder();
+        s_Data->DefaultMeshes[MeshComponent::MeshType::Torus] = MeshFactory::CreateTorus();
 
         s_Data->CameraConstantBuffer.reset(ConstantBuffer::Create(sizeof(CameraData)));
         s_Data->TransformConstantBuffer.reset(ConstantBuffer::Create(sizeof(TransformData)));

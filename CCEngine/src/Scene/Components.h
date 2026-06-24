@@ -124,7 +124,8 @@ namespace CCEngine
 
     struct MeshComponent
     {
-        enum class MeshType { Custom = 0, Cube, Sphere, Plane };
+        // 기존 값 순서 유지. 새 프리미티브는 뒤에 추가해 기존 프리팹 Type 숫자를 깨지 않습니다.
+        enum class MeshType { Custom = 0, Cube, Sphere, Plane, Quad, Capsule, Cylinder, Torus };
         MeshType Type = MeshType::Cube;
 
         // 실제 GPU에 올라간 버퍼 데이터를 가리키는 포인터
@@ -164,6 +165,8 @@ namespace CCEngine
     struct ModelComponent
     {
         std::shared_ptr<Model> TargetModel;
+        // 모델 파일은 이동될 수 있으므로 저장용 참조는 GUID를 우선 사용한다.
+        std::string AssetGuid;
         std::unordered_map<std::string, entt::entity> NodeEntityMap;
         std::unordered_map<std::string, entt::entity> NodePathEntityMap;
         bool ShowBoneLinks = false;

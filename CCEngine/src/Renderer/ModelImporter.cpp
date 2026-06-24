@@ -1,4 +1,5 @@
 #include "ModelImporter.h"
+#include "Core/AssetDatabase.h"
 #include "Scene/Components.h"
 #include "Renderer/Texture.h"
 #include <filesystem>
@@ -49,6 +50,8 @@ namespace CCEngine {
 
         modelRootEntity.AddComponent<RelationshipComponent>();
         auto& modelComponent = modelRootEntity.AddComponent<ModelComponent>(myModel);
+        // 임포트된 모델 루트에 원본 에셋 GUID를 남겨 저장/프리팹에서 같은 파일을 다시 찾는다.
+        modelComponent.AssetGuid = AssetDatabase::GetGuidFromPath(filepath);
 
         if (!myModel->GetBoneInfoMap().empty()) 
         {

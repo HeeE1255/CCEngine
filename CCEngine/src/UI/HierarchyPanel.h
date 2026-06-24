@@ -18,6 +18,7 @@ namespace CCEngine
             void SetSelectedEntity(Entity entity);
             void UpdateSelectionVisuals(Widget* widget);
             Entity GetSelectedEntity() const { return m_SelectionContext; }
+            Entity GetEntityAt(float mouseX, float mouseY) const;
 
             void Refresh();
             virtual void UpdateLayout(const DirectX::XMFLOAT2& parentPos, const DirectX::XMFLOAT2& parentSize) override;
@@ -29,6 +30,7 @@ namespace CCEngine
         private:
             // 트리 구조를 만들 때 부모 위젯을 인자로 받습니다.
             void BuildEntityTree(Entity entity, int depth, Widget* parentWidget);
+            Entity FindEntityAtRecursive(Widget* widget, float mouseX, float mouseY) const;
 
         private:
             Scene* m_Context = nullptr;

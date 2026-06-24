@@ -1,5 +1,6 @@
 #pragma once
 #include "MeshFactory.h"
+#include <algorithm>
 
 namespace CCEngine
 {
@@ -72,6 +73,21 @@ namespace CCEngine
         return std::make_shared<Mesh>(vertices, indices);
     }
 
+    std::shared_ptr<Mesh> MeshFactory::CreateQuad(float width, float height)
+    {
+        float w2 = width * 0.5f;
+        float h2 = height * 0.5f;
+
+        std::vector<Vertex3D> vertices = {
+            { {-w2, -h2, 0.0f}, {0.0f, 0.0f, -1.0f}, {0.0f, 1.0f} },
+            { { w2, -h2, 0.0f}, {0.0f, 0.0f, -1.0f}, {1.0f, 1.0f} },
+            { { w2,  h2, 0.0f}, {0.0f, 0.0f, -1.0f}, {1.0f, 0.0f} },
+            { {-w2,  h2, 0.0f}, {0.0f, 0.0f, -1.0f}, {0.0f, 0.0f} }
+        };
+        std::vector<uint32_t> indices = { 0, 3, 2, 2, 1, 0 };
+        return std::make_shared<Mesh>(vertices, indices);
+    }
+
     std::shared_ptr<Mesh> MeshFactory::CreateSphere(float radius, uint32_t sliceCount, uint32_t stackCount)
     {
         std::vector<Vertex3D> vertices;
@@ -123,6 +139,114 @@ namespace CCEngine
 
         return std::make_shared<Mesh>(vertices, indices);
     }
+
+    std::shared_ptr<Mesh> MeshFactory::CreateCapsule(float radius, float cylinderHeight, uint32_t radialSegments, uint32_t hemisphereSegments)
+    {
+        radialSegments = (std::max)(radialSegments, 3u);
+        hemisphereSegments = (std::max)(hemisphereSegments, 2u);
+        radius = (std::max)(radius, 0.001f);
+        cylinderHeight = (std::max)(cylinderHeight, 0.0f);
+
+        std::vector<Vertex3D> vertices;
+        std::vector<uint32_t> indices;
+        float halfCylinder = cylinderHeight * 0.5f;
+        uint32_t ringCount = hemisphereSegments * 2 + 2;
+
+        for (uint32_t ring = 0; ring < ringCount; ++ring)
+        {
+            bool top = ring <= hemisphereSegments;
+            uint32_t localRing = top ? ring : ring - hemisphereSegments - 1;
+            float angle = top
+                ? (DirectX::XM_PIDIV2 * (float)localRing / hemisphereSegments)
+                : (DirectX::XM_PIDIV2 + DirectX::XM_PIDIV2 * (float)localRing / hemisphereSegments);
+
+            float ringRadius = radius * sinf(angle);
+            float centerY = top ? halfCylinder : -halfCylinder;
+            float y = centerY + radius * cosf(angle);
+            float normalY = cosf(angle);
+            float normalRadius = sinf(angle);
+
+            for (uint32_t segment = 0; segment <= radialSegments; ++segment)
+            {
+                float theta = DirectX::XM_2PI * (float)segment / radialSegments;
+                float cosTheta = cosf(theta);
+                float sinTheta = sinf(theta);
+                vertices.push_back({
+                    { ringRadius * cosTheta, y, ringRadius * sinTheta },
+                    { normalRadius * cosTheta, normalY, normalRadius * sinTheta },
+                    { (float)segment / radialSegments, (float)ring / (ringCount - 1) }
+                    });
+            }
+        }
+
+        for (uint32_t ring = 0; ring + 1 < ringCount; ++ring)
+        {
+            for (uint32_t segment = 0; segment < radialSegments; ++segment)
+            {
+                uint32_t first = ring * (radialSegments + 1) + segment;
+                uint32_t second = first + radialSegments + 1;
+                indices.insert(indices.end(), { first, first + 1, second, second, first + 1, second + 1 });
+            }
+        }
+
+        return std::make_shared<Mesh>(vertices, indices);
+    }
+
+    std::shared_ptr<Mesh> MeshFactory::CreateCylinder(float radius, float height, uint32_t radialSegments)
+    {
+        radialSegments = (std::max)(radialSegments, 3u);
+        radius = (std::max)(radius, 0.001f);
+        height = (std::max)(height, 0.001f);
+
+        std::vector<Vertex3D> vertices;
+        std::vector<uint32_t> indices;
+        float halfHeight = height * 0.5f;
+
+        for (uint32_t segment = 0; segment <= radialSegments; ++segment)
+        {
+            float theta = DirectX::XM_2PI * (float)segment / radialSegments;
+            float x = radius * cosf(theta);
+            float z = radius * sinf(theta);
+            DirectX::XMFLOAT3 normal = { cosf(theta), 0.0f, sinf(theta) };
+            float u = (float)segment / radialSegments;
+            vertices.push_back({ {x, -halfHeight, z}, normal, {u, 1.0f} });
+            vertices.push_back({ {x,  halfHeight, z}, normal, {u, 0.0f} });
+        }
+        for (uint32_t segment = 0; segment < radialSegments; ++segment)
+        {
+            uint32_t first = segment * 2;
+            indices.insert(indices.end(), { first, first + 1, first + 2, first + 2, first + 1, first + 3 });
+        }
+
+        uint32_t topCenter = (uint32_t)vertices.size();
+        vertices.push_back({ {0.0f, halfHeight, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.5f, 0.5f} });
+        uint32_t bottomCenter = (uint32_t)vertices.size();
+        vertices.push_back({ {0.0f, -halfHeight, 0.0f}, {0.0f, -1.0f, 0.0f}, {0.5f, 0.5f} });
+
+        for (uint32_t segment = 0; segment <= radialSegments; ++segment)
+        {
+            float theta = DirectX::XM_2PI * (float)segment / radialSegments;
+            float x = radius * cosf(theta);
+            float z = radius * sinf(theta);
+            float u = 0.5f + 0.5f * cosf(theta);
+            float v = 0.5f + 0.5f * sinf(theta);
+            vertices.push_back({ {x, halfHeight, z}, {0.0f, 1.0f, 0.0f}, {u, v} });
+            vertices.push_back({ {x, -halfHeight, z}, {0.0f, -1.0f, 0.0f}, {u, v} });
+        }
+
+        uint32_t capStart = topCenter + 2;
+        for (uint32_t segment = 0; segment < radialSegments; ++segment)
+        {
+            uint32_t topA = capStart + segment * 2;
+            uint32_t topB = topA + 2;
+            uint32_t bottomA = topA + 1;
+            uint32_t bottomB = topB + 1;
+            indices.insert(indices.end(), { topCenter, topB, topA, bottomCenter, bottomA, bottomB });
+        }
+
+        return std::make_shared<Mesh>(vertices, indices);
+    }
+
     std::shared_ptr<Mesh> MeshFactory::CreateTorus(float majorRadius, float minorRadius, uint32_t radialSegments, uint32_t tubularSegments)
     {
         std::vector<Vertex3D> vertices;
@@ -146,9 +270,10 @@ namespace CCEngine
                 pos.y = (majorRadius + minorRadius * cosV) * sinU;
                 pos.z = minorRadius * sinV;
 
-                // 법선이 필요하면 중심점에서 정점 방향으로 계산합니다.
                 Vertex3D vertex;
                 vertex.Position = pos;
+                vertex.Normal = { cosV * cosU, cosV * sinU, sinV };
+                vertex.TexCoord = { (float)i / radialSegments, (float)j / tubularSegments };
 
                 vertices.push_back(vertex);
             }

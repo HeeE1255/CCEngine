@@ -66,6 +66,15 @@
     <ClInclude Include="src\Core\LayerStack.h">
       <Filter>src\Core</Filter>
     </ClInclude>
+    <ClInclude Include="src\Core\ConsoleLog.h">
+      <Filter>src\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Core\AssetDatabase.h">
+      <Filter>src\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Core\ProjectSettings.h">
+      <Filter>src\Core</Filter>
+    </ClInclude>
     <ClInclude Include="src\Core\Memory.h">
       <Filter>src\Core</Filter>
     </ClInclude>
@@ -79,6 +88,9 @@
       <Filter>src\Editor</Filter>
     </ClInclude>
     <ClInclude Include="src\Editor\EditorLayer.h">
+      <Filter>src\Editor</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Editor\EditorUndoManager.h">
       <Filter>src\Editor</Filter>
     </ClInclude>
     <ClInclude Include="src\EntryPoint.h">
@@ -195,6 +207,15 @@
     <ClInclude Include="src\UI\Button.h">
       <Filter>src\UI</Filter>
     </ClInclude>
+    <ClInclude Include="src\UI\ConsolePanel.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
+    <ClInclude Include="src\UI\ProjectSettingsPanel.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
+    <ClInclude Include="src\UI\TextInput.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
     <ClInclude Include="src\UI\AssetBrowserPanel.h">
       <Filter>src\UI</Filter>
     </ClInclude>
@@ -278,6 +299,15 @@
     <ClCompile Include="src\Core\LayerStack.cpp">
       <Filter>src\Core</Filter>
     </ClCompile>
+    <ClCompile Include="src\Core\ConsoleLog.cpp">
+      <Filter>src\Core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Core\AssetDatabase.cpp">
+      <Filter>src\Core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Core\ProjectSettings.cpp">
+      <Filter>src\Core</Filter>
+    </ClCompile>
     <ClCompile Include="src\Core\Memory.cpp">
       <Filter>src\Core</Filter>
     </ClCompile>
@@ -288,6 +318,9 @@
       <Filter>src\Editor</Filter>
     </ClCompile>
     <ClCompile Include="src\Editor\EditorLayer.cpp">
+      <Filter>src\Editor</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Editor\EditorUndoManager.cpp">
       <Filter>src\Editor</Filter>
     </ClCompile>
     <ClCompile Include="src\Platform\DirectX11\DX11Buffer.cpp">
@@ -389,6 +422,15 @@
     <ClCompile Include="src\UI\Button.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
+    <ClCompile Include="src\UI\ConsolePanel.cpp">
+      <Filter>src\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UI\ProjectSettingsPanel.cpp">
+      <Filter>src\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UI\TextInput.cpp">
+      <Filter>src\UI</Filter>
+    </ClCompile>
     <ClCompile Include="src\UI\DragFloat.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
@@ -438,6 +480,9 @@
       <Filter>src\UI</Filter>
     </ClCompile>
     <ClCompile Include="src\UI\InspectorUtils.cpp">
+      <Filter>src\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UI\DockManager.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
     <ClCompile Include="src\Editor\GizmoSystem.cpp">

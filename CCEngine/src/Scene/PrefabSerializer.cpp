@@ -1,9 +1,12 @@
 #include "Scene/PrefabSerializer.h"
+#include "Core/AssetDatabase.h"
 #include "Scene/Components.h"
 #include "Renderer/MeshFactory.h"
+#include "Renderer/Texture.h"
 #include "json.hpp"
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <queue>
 #include <unordered_map>
@@ -42,6 +45,21 @@ namespace CCEngine
             return { data[0].get<float>(), data[1].get<float>(), data[2].get<float>(), data[3].get<float>() };
         }
 
+        std::shared_ptr<Mesh> CreateMeshForType(MeshComponent::MeshType type)
+        {
+            switch (type)
+            {
+                case MeshComponent::MeshType::Cube: return MeshFactory::CreateCube();
+                case MeshComponent::MeshType::Sphere: return MeshFactory::CreateSphere();
+                case MeshComponent::MeshType::Plane: return MeshFactory::CreatePlane();
+                case MeshComponent::MeshType::Quad: return MeshFactory::CreateQuad();
+                case MeshComponent::MeshType::Capsule: return MeshFactory::CreateCapsule();
+                case MeshComponent::MeshType::Cylinder: return MeshFactory::CreateCylinder();
+                case MeshComponent::MeshType::Torus: return MeshFactory::CreateTorus();
+                default: return nullptr;
+            }
+        }
+
         void CollectPrefabEntities(Scene* scene, Entity rootEntity, std::vector<Entity>& entities)
         {
             if (!rootEntity)
@@ -59,8 +77,9 @@ namespace CCEngine
             }
         }
 
-        void SerializeComponents(Entity entity, nlohmann::json& entityData)
+        void SerializeComponents(Entity entity, nlohmann::json& entityData, const std::unordered_map<entt::entity, int>& localIDs)
         {
+            // 프리팹은 선택한 루트와 그 자식만 저장한다. 저장 대상 안에 있는 컴포넌트만 기록한다.
             if (entity.HasComponent<TagComponent>())
             {
                 entityData["TagComponent"]["Tag"] = entity.GetComponent<TagComponent>().Tag;
@@ -101,7 +120,21 @@ namespace CCEngine
             {
                 auto& model = entity.GetComponent<ModelComponent>();
                 if (model.TargetModel)
+                {
                     entityData["ModelComponent"]["Path"] = model.TargetModel->GetFilePath();
+                    std::string guid = model.AssetGuid.empty() ? AssetDatabase::GetGuidFromPath(model.TargetModel->GetFilePath()) : model.AssetGuid;
+                    if (!guid.empty())
+                        entityData["ModelComponent"]["Guid"] = guid;
+                }
+                entityData["ModelComponent"]["ShowBoneLinks"] = model.ShowBoneLinks;
+
+                // FBX 노드는 엔티티 핸들을 직접 저장하지 않고, 프리팹 안에서만 통하는 LocalID로 저장한다.
+                for (const auto& [nodePath, nodeEntity] : model.NodePathEntityMap)
+                {
+                    auto found = localIDs.find(nodeEntity);
+                    if (found != localIDs.end())
+                        entityData["ModelComponent"]["NodePathLocalIDMap"][nodePath] = found->second;
+                }
             }
 
             if (entity.HasComponent<Rigidbody2DComponent>())
@@ -136,6 +169,7 @@ namespace CCEngine
 
         void ApplyComponents(Entity entity, const nlohmann::json& entityData)
         {
+            // 엔티티와 부모관계는 별도 단계에서 만든다. 여기서는 값 컴포넌트만 복원한다.
             if (entityData.contains("TransformComponent"))
             {
                 auto& tc = entity.GetComponent<TransformComponent>();
@@ -145,6 +179,12 @@ namespace CCEngine
                 tc.Scale = JsonToFloat3(transformData["Scale"]);
                 if (transformData.contains("QuaternionRotation"))
                     tc.QuaternionRotation = JsonToFloat4(transformData["QuaternionRotation"]);
+                else
+                {
+                    DirectX::XMStoreFloat4(
+                        &tc.QuaternionRotation,
+                        DirectX::XMQuaternionRotationRollPitchYaw(tc.Rotation.x, tc.Rotation.y, tc.Rotation.z));
+                }
             }
 
             if (entityData.contains("SpriteRendererComponent"))
@@ -170,24 +210,38 @@ namespace CCEngine
                 auto& mesh = entity.HasComponent<MeshComponent>() ? entity.GetComponent<MeshComponent>() : entity.AddComponent<MeshComponent>();
                 mesh.Type = static_cast<MeshComponent::MeshType>(meshData["Type"].get<int>());
                 mesh.BaseColor = JsonToFloat4(meshData["BaseColor"]);
-
-                switch (mesh.Type)
-                {
-                    case MeshComponent::MeshType::Cube: mesh.MeshData = MeshFactory::CreateCube(); break;
-                    case MeshComponent::MeshType::Plane: mesh.MeshData = MeshFactory::CreatePlane(); break;
-                    case MeshComponent::MeshType::Sphere: mesh.MeshData = MeshFactory::CreateSphere(); break;
-                    default: break;
-                }
+                // 기본 도형은 Type 값으로 다시 만든다. Custom Mesh는 모델 노드 복원 단계에서 다시 연결한다.
+                mesh.MeshData = CreateMeshForType(mesh.Type);
             }
 
-            if (entityData.contains("ModelComponent") && entityData["ModelComponent"].contains("Path"))
+            if (entityData.contains("ModelComponent"))
             {
-                std::string path = entityData["ModelComponent"]["Path"].get<std::string>();
+                auto& modelData = entityData["ModelComponent"];
+                auto& modelComp = entity.HasComponent<ModelComponent>() ? entity.GetComponent<ModelComponent>() : entity.AddComponent<ModelComponent>();
+                modelComp.ShowBoneLinks = modelData.value("ShowBoneLinks", false);
+
+                std::string guid = modelData.value("Guid", "");
+                std::string path;
+                if (!guid.empty())
+                {
+                    // 프리팹도 GUID를 우선 사용한다. 같은 에셋을 옮겨도 인스턴스화가 끊기지 않게 하기 위해서다.
+                    path = AssetDatabase::GetPathFromGuid(guid).string();
+                    modelComp.AssetGuid = guid;
+                }
+
+                if (path.empty() && modelData.contains("Path"))
+                {
+                    path = modelData["Path"].get<std::string>();
+                    if (modelComp.AssetGuid.empty())
+                        modelComp.AssetGuid = AssetDatabase::GetGuidFromPath(path);
+                }
+
                 if (!path.empty() && std::filesystem::exists(path))
                 {
-                    auto model = std::make_shared<Model>(path);
-                    auto& modelComp = entity.HasComponent<ModelComponent>() ? entity.GetComponent<ModelComponent>() : entity.AddComponent<ModelComponent>();
-                    modelComp.TargetModel = model;
+                    // 프리팹에는 모델 파일 참조만 저장한다. 실제 메시와 본 정보는 인스턴스화할 때 다시 읽는다.
+                    modelComp.TargetModel = std::make_shared<Model>(path);
+                    if (!modelComp.TargetModel->GetBoneInfoMap().empty() && !entity.HasComponent<AnimatorComponent>())
+                        entity.AddComponent<AnimatorComponent>();
                 }
             }
 
@@ -222,6 +276,107 @@ namespace CCEngine
             {
                 entity.AddComponent<AnimatorComponent>();
             }
+        }
+
+        void RebuildModelNodeMaps(const nlohmann::json& entitiesData, const std::unordered_map<int, Entity>& entityMap)
+        {
+            for (auto& entityData : entitiesData)
+            {
+                if (!entityData.contains("ModelComponent") || !entityData["ModelComponent"].contains("NodePathLocalIDMap"))
+                    continue;
+
+                int localID = entityData["LocalID"].get<int>();
+                auto entityIt = entityMap.find(localID);
+                if (entityIt == entityMap.end())
+                    continue;
+
+                Entity modelEntity = entityIt->second;
+                if (!modelEntity.HasComponent<ModelComponent>())
+                    continue;
+
+                auto& model = modelEntity.GetComponent<ModelComponent>();
+                model.NodePathEntityMap.clear();
+                model.NodeEntityMap.clear();
+
+                // 저장된 LocalID를 현재 씬의 새 엔티티로 바꾼다. 이 과정을 거쳐야 본 선택과 기즈모가 다시 맞는다.
+                for (auto& [nodePath, nodeLocalIDJson] : entityData["ModelComponent"]["NodePathLocalIDMap"].items())
+                {
+                    int nodeLocalID = nodeLocalIDJson.get<int>();
+                    auto nodeIt = entityMap.find(nodeLocalID);
+                    if (nodeIt == entityMap.end())
+                        continue;
+
+                    Entity nodeEntity = nodeIt->second;
+                    model.NodePathEntityMap[nodePath] = (entt::entity)nodeEntity;
+                    if (nodeEntity.HasComponent<TagComponent>())
+                        model.NodeEntityMap[nodeEntity.GetComponent<TagComponent>().Tag] = (entt::entity)nodeEntity;
+                }
+            }
+        }
+
+        void RestoreCustomModelMeshes(Scene* scene, Entity entity)
+        {
+            if (!entity.HasComponent<ModelComponent>())
+                return;
+
+            auto& model = entity.GetComponent<ModelComponent>();
+            if (!model.TargetModel)
+                return;
+
+            std::function<void(const ModelNode&, bool)> restoreNode = [&](const ModelNode& node, bool isRootNode)
+            {
+                if (isRootNode)
+                {
+                    for (const auto& child : node.Children)
+                        restoreNode(child, false);
+                    return;
+                }
+
+                auto nodeIt = model.NodePathEntityMap.find(node.Path);
+                if (nodeIt != model.NodePathEntityMap.end() && scene->GetRegistry().valid(nodeIt->second))
+                {
+                    Entity nodeEntity(nodeIt->second, scene);
+                    for (size_t meshIndex = 0; meshIndex < node.Meshes.size(); ++meshIndex)
+                    {
+                        Entity target = nodeEntity;
+                        if (node.Meshes.size() > 1)
+                        {
+                            // 한 FBX 노드에 메시가 여러 개 있으면 저장된 SubMesh 자식에게 다시 나눠 준다.
+                            std::string subMeshName = node.Name + "_SubMesh_" + std::to_string(meshIndex);
+                            if (nodeEntity.HasComponent<RelationshipComponent>())
+                            {
+                                for (entt::entity childHandle : nodeEntity.GetComponent<RelationshipComponent>().Children)
+                                {
+                                    if (!scene->GetRegistry().valid(childHandle))
+                                        continue;
+
+                                    Entity child(childHandle, scene);
+                                    if (child.HasComponent<TagComponent>() && child.GetComponent<TagComponent>().Tag == subMeshName)
+                                    {
+                                        target = child;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        if (target.HasComponent<MeshComponent>())
+                        {
+                            auto& mesh = target.GetComponent<MeshComponent>();
+                            mesh.Type = MeshComponent::MeshType::Custom;
+                            mesh.MeshData = node.Meshes[meshIndex];
+                            if (!node.Meshes[meshIndex]->TexturePath.empty() && std::filesystem::exists(node.Meshes[meshIndex]->TexturePath))
+                                mesh.AlbedoMap.reset(Texture2D::Create(node.Meshes[meshIndex]->TexturePath));
+                        }
+                    }
+                }
+
+                for (const auto& child : node.Children)
+                    restoreNode(child, false);
+            };
+
+            // Custom Mesh의 버퍼 자체는 프리팹 파일에 저장하지 않는다. 원본 모델에서 다시 찾아 연결한다.
+            restoreNode(model.TargetModel->GetRootNode(), true);
         }
     }
 
@@ -258,7 +413,7 @@ namespace CCEngine
                     entityData["ParentID"] = found->second;
             }
 
-            SerializeComponents(entity, entityData);
+            SerializeComponents(entity, entityData, localIDs);
             prefabData["Entities"].push_back(entityData);
         }
 
@@ -324,6 +479,11 @@ namespace CCEngine
 
             ApplyComponents(entity, entityData);
         }
+
+        RebuildModelNodeMaps(data["Entities"], entityMap);
+
+        for (auto& [localID, entity] : entityMap)
+            RestoreCustomModelMeshes(scene, entity);
 
         if (!rootEntity && !entityMap.empty())
             rootEntity = entityMap.begin()->second;

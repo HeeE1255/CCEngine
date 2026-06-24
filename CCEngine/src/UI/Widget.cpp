@@ -5,10 +5,18 @@
 namespace CCEngine {
     namespace UI {
 
+        Widget* Widget::s_MouseInteractionOwner = nullptr;
+        Widget* Widget::s_KeyboardFocusOwner = nullptr;
+
         Widget::Widget(const std::string& name) : m_Name(name) {}
 
         Widget::~Widget()
         {
+            if (s_MouseInteractionOwner == this)
+                s_MouseInteractionOwner = nullptr;
+            if (s_KeyboardFocusOwner == this)
+                s_KeyboardFocusOwner = nullptr;
+
             for (auto child : m_Children)
             {
                 delete child;
@@ -119,12 +127,75 @@ namespace CCEngine {
 
             if (e.Handled) return true;
 
-            for (auto it = m_Children.rbegin(); it != m_Children.rend(); ++it)
+            if (e.GetEventType() == EventType::MouseButtonPressed &&
+                s_KeyboardFocusOwner &&
+                !s_KeyboardFocusOwner->IsPointInside(mouseX, mouseY))
             {
+                // 입력칸 밖을 누르면 키보드 포커스를 비운다.
+                // 이렇게 해야 값 입력 후 다른 UI를 눌렀을 때 편집 색이 남지 않는다.
+                s_KeyboardFocusOwner = nullptr;
+            }
+
+            if (isMouseEvent && s_MouseInteractionOwner && IsMouseInteractionBlockedFor(this))
+            {
+                e.Handled = true;
+                return true;
+            }
+
+            auto hasMouseCapture = [](Widget* widget, const auto& self) -> bool
+                {
+                    if (!widget || !widget->IsVisible())
+                        return false;
+
+                    if (widget->WantsMouseCapture())
+                        return true;
+
+                    for (Widget* child : widget->GetChildren())
+                    {
+                        if (self(child, self))
+                            return true;
+                    }
+                    return false;
+                };
+
+            // 콜백 안에서 BringToFront처럼 자식 순서를 바꾸면 원본 vector iterator가 무효화된다.
+            // 이벤트 디스패치 중에는 스냅샷을 순회해서 메뉴/창 정렬 변경으로 인한 Debug assertion을 막는다.
+            auto childrenSnapshot = m_Children;
+
+            if (isMouseEvent)
+            {
+                for (auto it = childrenSnapshot.rbegin(); it != childrenSnapshot.rend(); ++it)
+                {
+                    Widget* child = *it;
+                    if (!child || !child->IsVisible())
+                        continue;
+
+                    if (!hasMouseCapture(child, hasMouseCapture))
+                        continue;
+
+                    // 드래그/리사이즈 중인 위젯은 마우스를 캡처한 상태다.
+                    // 이때는 뒤쪽 패널에 hover/click 이벤트가 새지 않도록 캡처 위젯에만 전달한다.
+                    bool handled = child->OnEvent(e);
+                    e.Handled = true;
+                    return handled || true;
+                }
+            }
+
+            for (auto it = childrenSnapshot.rbegin(); it != childrenSnapshot.rend(); ++it)
+            {
+                if (!(*it)->IsVisible())
+                    continue;
+
                 if (isMouseEvent && !(*it)->IsPointInside(mouseX, mouseY) && !(*it)->WantsMouseCapture())
                     continue;
 
                 if ((*it)->OnEvent(e)) return true;
+
+                if (isMouseEvent && (*it)->BlocksMouseEvents() && (*it)->IsPointInside(mouseX, mouseY))
+                {
+                    e.Handled = true;
+                    return true;
+                }
             }
 
             if (e.GetEventType() == EventType::MouseMoved)
@@ -139,8 +210,146 @@ namespace CCEngine {
             {
                 if (OnMouseButtonReleased(static_cast<MouseButtonReleasedEvent&>(e))) return true;
             }
+            else if (e.GetEventType() == EventType::KeyPressed)
+            {
+                if (OnKeyPressed(static_cast<KeyPressedEvent&>(e))) return true;
+            }
+            else if (e.GetEventType() == EventType::TextInput)
+            {
+                if (OnTextInput(static_cast<TextInputEvent&>(e))) return true;
+            }
 
             return false;
+        }
+
+        namespace
+        {
+            bool ContainsMouseCaptureWidget(const Widget* widget)
+            {
+                if (!widget || !widget->IsVisible())
+                    return false;
+
+                if (widget->WantsMouseCapture())
+                    return true;
+
+                const auto& children = widget->GetChildren();
+                for (auto it = children.rbegin(); it != children.rend(); ++it)
+                {
+                    if (ContainsMouseCaptureWidget(*it))
+                        return true;
+                }
+
+                return false;
+            }
+
+            bool ContainsBlockingWidgetAt(const Widget* widget, float mouseX, float mouseY)
+            {
+                if (!widget || !widget->IsVisible() || !widget->IsPointInside(mouseX, mouseY))
+                    return false;
+
+                if (widget->BlocksMouseEvents())
+                    return true;
+
+                const auto& children = widget->GetChildren();
+                for (auto it = children.rbegin(); it != children.rend(); ++it)
+                {
+                    if (ContainsBlockingWidgetAt(*it, mouseX, mouseY))
+                        return true;
+                }
+
+                return false;
+            }
+        }
+
+        bool Widget::IsMouseBlockedByWidgetAbove(float mouseX, float mouseY) const
+        {
+            if (IsMouseInteractionBlockedFor(this))
+                return true;
+
+            const Widget* childOnPath = this;
+            const Widget* parent = m_Parent;
+
+            while (parent)
+            {
+                const auto& siblings = parent->GetChildren();
+                auto it = std::find(siblings.begin(), siblings.end(), childOnPath);
+                if (it != siblings.end())
+                {
+                    ++it;
+                    for (; it != siblings.end(); ++it)
+                    {
+                        if (ContainsMouseCaptureWidget(*it))
+                            return true;
+
+                        if (ContainsBlockingWidgetAt(*it, mouseX, mouseY))
+                            return true;
+                    }
+                }
+
+                childOnPath = parent;
+                parent = parent->GetParent();
+            }
+
+            return false;
+        }
+
+        void Widget::BeginMouseInteraction(Widget* owner)
+        {
+            if (owner)
+                s_MouseInteractionOwner = owner;
+        }
+
+        void Widget::EndMouseInteraction(Widget* owner)
+        {
+            if (!owner || s_MouseInteractionOwner == owner)
+                s_MouseInteractionOwner = nullptr;
+        }
+
+        bool Widget::IsMouseInteractionActive()
+        {
+            // 창 이동이나 리사이즈 중에는 마우스 아래에 있는 다른 위젯이 hover/click을 받으면 안 된다.
+            // 현재 조작을 시작한 위젯 하나를 캡처 소유자로 두고, 렌더/이벤트 쪽에서 이 값을 공통으로 본다.
+            return s_MouseInteractionOwner != nullptr;
+        }
+
+        bool Widget::IsMouseInteractionBlockedFor(const Widget* widget)
+        {
+            if (!s_MouseInteractionOwner)
+                return false;
+
+            const Widget* ownerPath = s_MouseInteractionOwner;
+            while (ownerPath)
+            {
+                if (ownerPath == widget)
+                    return false;
+                ownerPath = ownerPath->GetParent();
+            }
+
+            const Widget* current = widget;
+            while (current)
+            {
+                if (current == s_MouseInteractionOwner)
+                    return false;
+                current = current->GetParent();
+            }
+
+            return true;
+        }
+
+        void Widget::SetKeyboardFocus(Widget* owner)
+        {
+            s_KeyboardFocusOwner = owner;
+        }
+
+        void Widget::ClearKeyboardFocus(Widget* owner)
+        {
+            if (!owner || s_KeyboardFocusOwner == owner)
+                s_KeyboardFocusOwner = nullptr;
+        }
+
+        bool Widget::IsKeyboardFocusOwner(const Widget* widget)
+        {
+            return widget && s_KeyboardFocusOwner == widget;
         }
 
         void Widget::SetSize(float width, float height)

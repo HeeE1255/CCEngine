@@ -24,6 +24,12 @@ namespace CCEngine
             static bool ApplyPreview(WindowPanel* draggedPanel);
             static void RemoveRelations(WindowPanel* panel);
             static bool ResizeRelation(WindowPanel* resizedPanel, int resizeMode, float deltaX, float deltaY);
+            static void DetachFromAllWindowRoots(Widget* widget);
+            static void DetachFromOtherWindowRoots(Widget* widget, Window* keepWindow);
+            static void FillWindowRoot(Widget* widget);
+            static void SetOwnerWindowRecursive(Widget* widget, Window* ownerWindow);
+            static void CollapseDockRoot(Widget* dockRoot);
+            static void NormalizeWindowPanelOwnership();
 
         private:
             static WindowPanel* FindDockTarget(Widget* root, WindowPanel* draggedPanel, float mouseX, float mouseY);

@@ -2,6 +2,7 @@
 #include "Scene/Components.h"
 #include "UI/HierarchyItem.h"
 #include "Renderer/UIRenderer.h"
+#include "Renderer/Font.h"
 #include "Renderer/RenderCommand.h"
 #include "Renderer/Renderer2D.h"
 #include "Application.h"
@@ -35,6 +36,46 @@ namespace CCEngine {
         {
             m_SelectionContext = entity;
             m_NeedsSelectionUpdate = true;
+        }
+
+        Entity HierarchyPanel::GetEntityAt(float mouseX, float mouseY) const
+        {
+            if (!m_Context)
+                return {};
+
+            return FindEntityAtRecursive(const_cast<HierarchyPanel*>(this), mouseX, mouseY);
+        }
+
+        Entity HierarchyPanel::FindEntityAtRecursive(Widget* widget, float mouseX, float mouseY) const
+        {
+            if (!widget || !widget->IsVisible())
+                return {};
+
+            const auto& children = widget->GetChildren();
+            for (auto it = children.rbegin(); it != children.rend(); ++it)
+            {
+                if (Entity childHit = FindEntityAtRecursive(*it, mouseX, mouseY))
+                    return childHit;
+            }
+
+            auto item = dynamic_cast<UI::HierarchyItem*>(widget);
+            if (!item)
+                return {};
+
+            float headerHeight = UIRenderer::GetDefaultFont() ? UIRenderer::GetDefaultFont()->GetFontSize() : 24.0f;
+            headerHeight += 8.0f;
+            auto pos = item->GetCalculatedPosition();
+            auto size = item->GetCalculatedSize();
+            bool insideHeader = mouseX >= pos.x && mouseX <= pos.x + size.x &&
+                mouseY >= pos.y && mouseY <= pos.y + headerHeight;
+            if (!insideHeader)
+                return {};
+
+            entt::entity entityID = (entt::entity)item->GetEntityID();
+            if (entityID == entt::null || !m_Context->GetRegistry().valid(entityID))
+                return {};
+
+            return Entity{ entityID, m_Context };
         }
 
         void HierarchyPanel::UpdateSelectionVisuals(Widget* widget)
