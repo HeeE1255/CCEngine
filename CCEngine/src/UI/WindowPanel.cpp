@@ -18,6 +18,9 @@ namespace CCEngine
         WindowPanel::WindowPanel(const std::string& name, const std::string& title)
             : Panel(name, { 0.1f, 0.1f, 0.11f, 1.0f }), m_Title(title)
         {
+            // 창 패널은 사각형 전체가 마우스 차단 영역이다.
+            // 위에 떠 있는 창 아래의 버튼/하이어라키가 hover나 클릭을 받지 않게 한다.
+            SetBlockMouseEvents(true);
         }
 
         void WindowPanel::OnUpdate(float deltaTime)
@@ -48,7 +51,7 @@ namespace CCEngine
                     m_IsDragging = false;
                     Widget::EndMouseInteraction(this);
 
-                    if (!m_IsMovingOwnerWindow)
+                    if (!m_IsMovingOwnerWindow && m_DockingEnabled)
                     {
                         DockManager::UpdatePreview(this, 0.0f, 0.0f);
                         DockManager::ApplyPreview(this);
@@ -65,7 +68,7 @@ namespace CCEngine
                 {
                     m_OwnerWindow->SetPosition((int)(screenX - m_DragOffsetX), (int)(screenY - m_DragOffsetY));
 
-                    if (!m_IsMovingOwnerWindow)
+                    if (!m_IsMovingOwnerWindow && m_DockingEnabled)
                         DockManager::UpdatePreview(this, 0.0f, 0.0f);
                     return;
                 }
@@ -213,7 +216,7 @@ namespace CCEngine
                         return true;
                     }
 
-                    if (m_Parent != nullptr && m_Parent->GetName() == "DockRoot" && DetachFromFloatingGroup())
+                    if (m_DockingEnabled && m_Parent != nullptr && m_Parent->GetName() == "DockRoot" && DetachFromFloatingGroup())
                     {
                         e.Handled = true;
                         return true;
@@ -378,7 +381,7 @@ namespace CCEngine
 
                     // OS 이벤트/캡처 타이밍 때문에 MouseButtonReleased가 현재 패널까지
                     // 도달하지 않을 수 있으므로, MouseMoved 보정 경로에서도 드롭을 확정한다.
-                    if (m_IsFloating)
+                    if (m_IsFloating && m_DockingEnabled)
                     {
                         DockManager::UpdatePreview(this, 0.0f, 0.0f);
                         if (!DockManager::ApplyPreview(this))
@@ -495,10 +498,11 @@ namespace CCEngine
                 auto& mainWindow = Application::Get()->GetWindow();
                 float displayWidth = (float)mainWindow.GetWidth();
                 float displayHeight = (float)mainWindow.GetHeight();
-                DockManager::UpdatePreview(this, e.GetX(), e.GetY());
+                if (m_DockingEnabled)
+                    DockManager::UpdatePreview(this, e.GetX(), e.GetY());
 
                 // 메인 창 밖으로 드래그하면 별도 창으로 분리합니다.
-                if (e.GetX() < 0 || e.GetX() > displayWidth || e.GetY() < 0 || e.GetY() > displayHeight)
+                if (m_DockingEnabled && (e.GetX() < 0 || e.GetX() > displayWidth || e.GetY() < 0 || e.GetY() > displayHeight))
                 {
                     DockManager::ClearPreview();
                     DockManager::RemoveRelations(this);
@@ -563,13 +567,13 @@ namespace CCEngine
                     e.Handled = true; return true;
                 }
 
-                if (m_IsFloating && m_Parent == nullptr)
+                if (m_IsFloating && m_DockingEnabled && m_Parent == nullptr)
                 {
                     DockManager::UpdatePreview(this, 0.0f, 0.0f);
                     if (!DockManager::ApplyPreview(this))
                         DockManager::ClearPreview();
                 }
-                else if (m_IsFloating)
+                else if (m_IsFloating && m_DockingEnabled)
                 {
                     // 메인 창 내부에서만 떠 있는 패널은 마지막 MouseMoved 이후의
                     // 실제 릴리즈 좌표로 도킹 후보를 다시 계산해야 한다.

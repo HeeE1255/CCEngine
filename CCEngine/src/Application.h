@@ -30,6 +30,10 @@ namespace CCEngine
         // 엔진 어디서든 현재 윈도우 창 객체에 접근할 수 있도록 해주는 유틸리티 함수
         inline Window& GetWindow() { return *m_Window; }
         inline const std::vector<Window*>& GetSecondaryWindows() const { return m_SecondaryWindows; }
+        void ActivateInputWindow(Window* window);
+        void SetModalInputWindow(Window* window);
+        void ClearModalInputWindow(Window* window = nullptr);
+        bool IsInputEnabledForWindow(Window* window) const;
 
         inline static Application* Get() { return s_Instance; }
 
@@ -37,6 +41,8 @@ namespace CCEngine
         inline void RequestCloseSecondaryWindow(Window* window);
 
     private:
+        void ForgetInputWindow(Window* window);
+
         bool m_Running = true;
         bool m_Minimized = false;
 
@@ -48,6 +54,8 @@ namespace CCEngine
 
 		std::unique_ptr<Window> m_Window; // 메인 창 (스왑체인과 렌더 타겟이 있는 창)
 		std::vector<Window*> m_SecondaryWindows; // 서브 창들 (스왑체인과 렌더 타겟이 없는 창, UI 용도)
+        Window* m_ActiveInputWindow = nullptr;
+        std::vector<Window*> m_ModalInputWindows;
     };
 
     // 클라이언트(Sandbox 등)에서 정의해서 엔진에 넘겨줄 팩토리 함수

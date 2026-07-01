@@ -13,8 +13,13 @@ namespace CCEngine::UI
     {
         if (!m_IsVisible) return;
 
-        auto [mouseX, mouseY] = CCEngine::Application::Get()->GetWindow().GetMousePosition();
-        const bool hovered = IsPointInside(mouseX, mouseY) && !IsMouseBlockedByWidgetAbove(mouseX, mouseY);
+        Window* renderWindow = Widget::GetCurrentRenderWindow();
+        auto [mouseX, mouseY] = renderWindow
+            ? renderWindow->GetMousePosition()
+            : CCEngine::Application::Get()->GetWindow().GetMousePosition();
+        const bool hovered = Widget::IsCurrentRenderWindowMouseActive() &&
+            IsPointInside(mouseX, mouseY) &&
+            !IsMouseBlockedByWidgetAbove(mouseX, mouseY);
         const bool editing = IsKeyboardFocusOwner(this);
 
         // 기본/마우스 오버/편집 중 상태를 색으로 구분한다.

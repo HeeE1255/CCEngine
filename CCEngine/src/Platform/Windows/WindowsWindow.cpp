@@ -15,14 +15,59 @@
 
 namespace CCEngine
 { 
+	namespace
+	{
+		bool IsWindowInputEnabled(WindowsWindow* window)
+		{
+			return !Application::Get() || !window || Application::Get()->IsInputEnabledForWindow(window);
+		}
+
+		void ActivateWindowInput(WindowsWindow* window)
+		{
+			if (Application::Get() && window)
+				Application::Get()->ActivateInputWindow(window);
+		}
+
+		bool IsFramePoint(HWND hWnd, LPARAM lParam)
+		{
+			POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+			ScreenToClient(hWnd, &pt);
+
+			RECT rc;
+			GetClientRect(hWnd, &rc);
+
+			const int borderWidth = 8;
+			const int titleHeight = 24;
+			return pt.x < borderWidth ||
+				pt.x >= rc.right - borderWidth ||
+				pt.y < borderWidth ||
+				pt.y >= rc.bottom - borderWidth ||
+				(pt.y >= 0 && pt.y <= titleHeight);
+		}
+	}
+
 	LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	{
 		WindowsWindow* window = reinterpret_cast<WindowsWindow*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
 
 		switch (message)
 		{
+		case WM_SETFOCUS:
+		{
+			ActivateWindowInput(window);
+			break;
+		}
+		case WM_NCLBUTTONDOWN:
+		case WM_NCRBUTTONDOWN:
+		{
+			ActivateWindowInput(window);
+			return DefWindowProc(hWnd, message, wParam, lParam);
+		}
 		case WM_KEYDOWN:
 		{
+			if (!IsWindowInputEnabled(window))
+				return 0;
+
 			if (window && window->GetRootUI())
 			{
 				CCEngine::KeyPressedEvent e((int)wParam);
@@ -32,6 +77,9 @@ namespace CCEngine
 		}
 		case WM_CHAR:
 		{
+			if (!IsWindowInputEnabled(window))
+				return 0;
+
 			if (window && window->GetRootUI() && wParam >= 32 && wParam <= 126)
 			{
 				CCEngine::TextInputEvent e((char)wParam);
@@ -108,9 +156,12 @@ namespace CCEngine
 
 		case WM_LBUTTONUP:
 		{
+			ReleaseCapture();
+			if (!IsWindowInputEnabled(window))
+				return 0;
+
 			if (window)
 			{
-				ReleaseCapture();
 				float mouseX = static_cast<float>((short)LOWORD(lParam));
 				float mouseY = static_cast<float>((short)HIWORD(lParam));
 
@@ -135,9 +186,12 @@ namespace CCEngine
 
 		case WM_RBUTTONUP:
 		{
+			ReleaseCapture();
+			if (!IsWindowInputEnabled(window))
+				return 0;
+
 			if (window)
 			{
-				ReleaseCapture();
 				float mouseX = static_cast<float>((short)LOWORD(lParam));
 				float mouseY = static_cast<float>((short)HIWORD(lParam));
 
@@ -163,6 +217,10 @@ namespace CCEngine
 		//
 		case WM_LBUTTONDOWN:
 		{
+			ActivateWindowInput(window);
+			if (!IsWindowInputEnabled(window) && !IsFramePoint(hWnd, lParam))
+				return 0;
+
 			SetCapture(hWnd);
 			if (window)
 			{
@@ -190,6 +248,10 @@ namespace CCEngine
 
 		case WM_RBUTTONDOWN:
 		{
+			ActivateWindowInput(window);
+			if (!IsWindowInputEnabled(window) && !IsFramePoint(hWnd, lParam))
+				return 0;
+
 			SetCapture(hWnd);
 			if (window)
 			{
@@ -217,6 +279,9 @@ namespace CCEngine
 
 		case WM_MOUSEMOVE:
 		{
+			if (!IsWindowInputEnabled(window))
+				return 0;
+
 			if (window)
 			{
 				float mouseX = static_cast<float>((short)LOWORD(lParam));
@@ -309,6 +374,9 @@ namespace CCEngine
 
 		case WM_MOUSEWHEEL:
 		{
+			if (!IsWindowInputEnabled(window))
+				return 0;
+
 			if (window)
 			{
 				// GET_WHEEL_DELTA_WPARAM은 휠 회전 방향과 크기를 반환합니다. (보통 120 단위)

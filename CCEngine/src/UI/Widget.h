@@ -106,6 +106,10 @@ namespace CCEngine
             static void SetKeyboardFocus(Widget* owner);
             static void ClearKeyboardFocus(Widget* owner = nullptr);
             static bool IsKeyboardFocusOwner(const Widget* widget);
+            static void SetCurrentRenderWindow(Window* window);
+            static Window* GetCurrentRenderWindow();
+            static void SetCurrentRenderWindowMouseActive(bool active);
+            static bool IsCurrentRenderWindowMouseActive();
 
             void SetAnchorMin(float x, float y) { m_AnchorMin = { x, y }; }
             void SetAnchorMax(float x, float y) { m_AnchorMax = { x, y }; }
@@ -164,6 +168,8 @@ namespace CCEngine
         private:
             static Widget* s_MouseInteractionOwner;
             static Widget* s_KeyboardFocusOwner;
+            static Window* s_CurrentRenderWindow;
+            static bool s_CurrentRenderWindowMouseActive;
         };
     }
 }

@@ -28,6 +28,7 @@
 #include "UI/VBoxContainer.h"
 #include "UI/HierarchyPanel.h"
 #include "UI/InspectorPanel.h"
+#include "UI/KeyBindingInput.h"
 #include "GizmoSystem.h"
 
 namespace CCEngine {
@@ -76,6 +77,8 @@ namespace CCEngine {
         void SaveProjectSettings();
         void ApplyProjectGameResolution();
         void OpenEditorWindow(int windowKind);
+        void OpenProjectSettingsWindow();
+        void OpenKeyBindingPickerWindow(UI::KeyBindingInput* targetInput);
         void BringEditorOverlaysToFront();
 
     private:

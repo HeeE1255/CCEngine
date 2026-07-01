@@ -1,6 +1,12 @@
 {
     "GameHeight": 720,
     "GameWidth": 1280,
+    "MoveBackwardKey": "S",
+    "MoveDownKey": "Q",
+    "MoveForwardKey": "W",
+    "MoveLeftKey": "A",
+    "MoveRightKey": "D",
+    "MoveUpKey": "E",
     "ProjectName": "CCEngine Project",
     "StartScenePath": ""
 }

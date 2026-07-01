@@ -210,6 +210,12 @@
     <ClInclude Include="src\UI\ConsolePanel.h">
       <Filter>src\UI</Filter>
     </ClInclude>
+    <ClInclude Include="src\UI\KeyBindingInput.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
+    <ClInclude Include="src\UI\KeyBindingPickerPanel.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
     <ClInclude Include="src\UI\ProjectSettingsPanel.h">
       <Filter>src\UI</Filter>
     </ClInclude>
@@ -423,6 +429,12 @@
       <Filter>src\UI</Filter>
     </ClCompile>
     <ClCompile Include="src\UI\ConsolePanel.cpp">
+      <Filter>src\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UI\KeyBindingInput.cpp">
+      <Filter>src\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UI\KeyBindingPickerPanel.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
     <ClCompile Include="src\UI\ProjectSettingsPanel.cpp">

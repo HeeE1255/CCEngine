@@ -217,6 +217,8 @@
     <ClInclude Include="src\UI\AssetBrowserPanel.h" />
     <ClInclude Include="src\UI\Button.h" />
     <ClInclude Include="src\UI\ConsolePanel.h" />
+    <ClInclude Include="src\UI\KeyBindingInput.h" />
+    <ClInclude Include="src\UI\KeyBindingPickerPanel.h" />
     <ClInclude Include="src\UI\ProjectSettingsPanel.h" />
     <ClInclude Include="src\UI\TextInput.h" />
     <ClInclude Include="src\UI\DragFloat.h" />
@@ -288,6 +290,8 @@
     <ClCompile Include="src\UI\AssetBrowserPanel.cpp" />
     <ClCompile Include="src\UI\Button.cpp" />
     <ClCompile Include="src\UI\ConsolePanel.cpp" />
+    <ClCompile Include="src\UI\KeyBindingInput.cpp" />
+    <ClCompile Include="src\UI\KeyBindingPickerPanel.cpp" />
     <ClCompile Include="src\UI\ProjectSettingsPanel.cpp" />
     <ClCompile Include="src\UI\TextInput.cpp" />
     <ClCompile Include="src\UI\DragFloat.cpp" />

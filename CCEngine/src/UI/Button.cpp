@@ -14,9 +14,13 @@ namespace CCEngine {
         {
             if (!m_IsVisible) return;
 
-            auto [mouseX, mouseY] = CCEngine::Application::Get()->GetWindow().GetMousePosition();
-            m_IsHovered = IsPointInside(mouseX, mouseY) && !IsMouseBlockedByWidgetAbove(mouseX, mouseY);
-            if (!m_IsHovered) m_IsPressed = false;
+            Window* renderWindow = Widget::GetCurrentRenderWindow();
+            auto [mouseX, mouseY] = renderWindow
+                ? renderWindow->GetMousePosition()
+                : CCEngine::Application::Get()->GetWindow().GetMousePosition();
+            m_IsHovered = Widget::IsCurrentRenderWindowMouseActive() &&
+                IsPointInside(mouseX, mouseY) &&
+                !IsMouseBlockedByWidgetAbove(mouseX, mouseY);
 
             DirectX::XMFLOAT4 currentColor = m_NormalColor;
 
@@ -77,8 +81,10 @@ namespace CCEngine {
                 if (m_IsPressed && IsPointInside(e.GetX(), e.GetY()))
                 {
                     if (m_OnClick) m_OnClick();
+                    e.Handled = true;
                 }
                 m_IsPressed = false; // 무조건 상태 해제
+                return e.Handled;
             }
             return false;
         }

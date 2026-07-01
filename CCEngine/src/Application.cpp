@@ -6,6 +6,7 @@
 #include "Renderer/UIRenderer.h"
 #include "UI/Widget.h"
 #include "UI/DockManager.h"
+#include <algorithm>
 #include <iostream>
 
 #ifdef CC_PLATFORM_WINDOWS
@@ -36,6 +37,37 @@ namespace CCEngine
             (void)window;
 #endif
         }
+
+        bool IsMouseOverNativeWindow(Window* window)
+        {
+#ifdef CC_PLATFORM_WINDOWS
+            if (!window || !window->GetNativeWindow())
+                return true;
+
+            POINT cursor;
+            GetCursorPos(&cursor);
+
+            HWND target = static_cast<HWND>(window->GetNativeWindow());
+            HWND hovered = WindowFromPoint(cursor);
+            if (!hovered)
+                return false;
+
+            return hovered == target || GetAncestor(hovered, GA_ROOT) == target;
+#else
+            (void)window;
+            return true;
+#endif
+        }
+
+        bool IsInputEvent(EventType type)
+        {
+            return type == EventType::MouseMoved ||
+                type == EventType::MouseButtonPressed ||
+                type == EventType::MouseButtonReleased ||
+                type == EventType::MouseScrolled ||
+                type == EventType::KeyPressed ||
+                type == EventType::TextInput;
+        }
     }
 
     Application::Application(const std::string& commandLineArg)
@@ -55,6 +87,7 @@ namespace CCEngine
 
         // 플랫폼별 Window 구현은 Window::Create 내부에서 선택됩니다.
         m_Window = std::unique_ptr<Window>(Window::Create());
+        m_ActiveInputWindow = m_Window.get();
     }
 
     Application::~Application()
@@ -81,6 +114,7 @@ namespace CCEngine
         // 추상화된 팩토리 함수로 창을 생성합니다.
         Window* newWindow = Window::Create(props);
         m_SecondaryWindows.push_back(newWindow);
+        ActivateInputWindow(newWindow);
 
         // 메인 윈도우의 화면 좌표를 기준으로 새 창의 초기 위치를 정합니다.
         auto [mouseX, mouseY] = m_Window->GetScreenMousePosition();
@@ -97,6 +131,7 @@ namespace CCEngine
         {
             if ((*it)->GetRootUI() == rootUI)
             {
+                ForgetInputWindow(*it);
                 (*it)->SetShouldClose(true);
                 HideNativeWindow(*it);
 
@@ -115,11 +150,82 @@ namespace CCEngine
         {
             if (secondaryWindow == window)
             {
+                ForgetInputWindow(secondaryWindow);
                 secondaryWindow->SetShouldClose(true);
                 HideNativeWindow(secondaryWindow);
                 secondaryWindow->SetRootUI(nullptr);
                 return;
             }
+        }
+    }
+
+    void Application::ActivateInputWindow(Window* window)
+    {
+        if (!window)
+            return;
+
+        m_ActiveInputWindow = window;
+    }
+
+    void Application::SetModalInputWindow(Window* window)
+    {
+        if (!window)
+            return;
+
+        // 같은 창을 중복 등록하지 않고 맨 위 Modal로 올린다.
+        m_ModalInputWindows.erase(
+            std::remove(m_ModalInputWindows.begin(), m_ModalInputWindows.end(), window),
+            m_ModalInputWindows.end()
+        );
+        m_ModalInputWindows.push_back(window);
+        if (window)
+            m_ActiveInputWindow = window;
+    }
+
+    void Application::ClearModalInputWindow(Window* window)
+    {
+        if (!window)
+        {
+            m_ModalInputWindows.clear();
+        }
+        else
+        {
+            m_ModalInputWindows.erase(
+                std::remove(m_ModalInputWindows.begin(), m_ModalInputWindows.end(), window),
+                m_ModalInputWindows.end()
+            );
+        }
+
+        if (!m_ModalInputWindows.empty())
+            m_ActiveInputWindow = m_ModalInputWindows.back();
+        else if (!m_ActiveInputWindow)
+            m_ActiveInputWindow = m_Window.get();
+    }
+
+    bool Application::IsInputEnabledForWindow(Window* window) const
+    {
+        if (!window)
+            return false;
+
+        return window == m_ActiveInputWindow;
+    }
+
+    void Application::ForgetInputWindow(Window* window)
+    {
+        if (!window)
+            return;
+
+        m_ModalInputWindows.erase(
+            std::remove(m_ModalInputWindows.begin(), m_ModalInputWindows.end(), window),
+            m_ModalInputWindows.end()
+        );
+
+        if (m_ActiveInputWindow == window)
+        {
+            if (!m_ModalInputWindows.empty())
+                m_ActiveInputWindow = m_ModalInputWindows.back();
+            else
+                m_ActiveInputWindow = m_Window.get();
         }
     }
 
@@ -146,6 +252,7 @@ namespace CCEngine
 
                 if (secWin->ShouldClose())
                 {
+                    ForgetInputWindow(secWin);
                     delete secWin;
                     it = m_SecondaryWindows.erase(it);
                 }
@@ -215,7 +322,12 @@ namespace CCEngine
                     UIRenderer::BeginUI(win->GetWidth(), win->GetHeight());
 
                     // 현재 창에 속한 UI만 렌더링합니다.
+                    // 활성 입력 창만 hover/click 표시를 켠다. Modal 창이 있으면 그 창만 입력을 받는다.
+                    UI::Widget::SetCurrentRenderWindow(win);
+                    UI::Widget::SetCurrentRenderWindowMouseActive(IsInputEnabledForWindow(win) && IsMouseOverNativeWindow(win));
                     rootUI->OnRender();
+                    UI::Widget::SetCurrentRenderWindowMouseActive(true);
+                    UI::Widget::SetCurrentRenderWindow(nullptr);
                     UI::DockManager::DrawPreview(win);
 
                     // 누적된 UI 드로우 콜을 제출합니다.
@@ -240,6 +352,12 @@ namespace CCEngine
 
     void Application::OnEvent(Event& e)
     {
+        if (IsInputEvent(e.GetEventType()) && !IsInputEnabledForWindow(m_Window.get()))
+        {
+            e.Handled = true;
+            return;
+        }
+
         // 창 크기 변경과 닫기 이벤트는 애플리케이션에서 먼저 처리합니다.
         if (e.GetEventType() == EventType::WindowResize)
         {

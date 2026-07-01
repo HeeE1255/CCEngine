@@ -1,11 +1,82 @@
 #include "EditorCamera.h"
 #include <windows.h> // GetAsyncKeyState, GetCursorPos 용도
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
+#include <sstream>
+#include <string>
 
 // [ImGui 완전 제거됨]
 // #include "imgui.h"
 
 namespace CCEngine
 {
+    namespace
+    {
+        std::string TrimUpper(std::string value)
+        {
+            value.erase(value.begin(), std::find_if(value.begin(), value.end(), [](unsigned char c) { return !std::isspace(c); }));
+            value.erase(std::find_if(value.rbegin(), value.rend(), [](unsigned char c) { return !std::isspace(c); }).base(), value.end());
+            std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return (char)std::toupper(c); });
+            return value;
+        }
+
+        int KeyNameToVirtualKey(const std::string& token)
+        {
+            if (token.size() == 1 && ((token[0] >= 'A' && token[0] <= 'Z') || (token[0] >= '0' && token[0] <= '9')))
+                return token[0];
+            if (token.size() >= 2 && token[0] == 'F')
+            {
+                int functionIndex = std::atoi(token.c_str() + 1);
+                if (functionIndex >= 1 && functionIndex <= 24)
+                    return VK_F1 + functionIndex - 1;
+            }
+
+            if (token == "SPACE") return VK_SPACE;
+            if (token == "TAB") return VK_TAB;
+            if (token == "ENTER") return VK_RETURN;
+            if (token == "BACKSPACE") return VK_BACK;
+            if (token == "INSERT") return VK_INSERT;
+            if (token == "DELETE") return VK_DELETE;
+            if (token == "HOME") return VK_HOME;
+            if (token == "END") return VK_END;
+            if (token == "PAGEUP") return VK_PRIOR;
+            if (token == "PAGEDOWN") return VK_NEXT;
+            if (token == "LEFT") return VK_LEFT;
+            if (token == "RIGHT") return VK_RIGHT;
+            if (token == "UP") return VK_UP;
+            if (token == "DOWN") return VK_DOWN;
+            return 0;
+        }
+
+        bool IsBindingPressed(const std::string& binding)
+        {
+            std::stringstream stream(binding);
+            std::string token;
+            bool requiresCtrl = false;
+            bool requiresShift = false;
+            bool requiresAlt = false;
+            int mainKey = 0;
+
+            while (std::getline(stream, token, '+'))
+            {
+                token = TrimUpper(token);
+                if (token == "CTRL") requiresCtrl = true;
+                else if (token == "SHIFT") requiresShift = true;
+                else if (token == "ALT") requiresAlt = true;
+                else mainKey = KeyNameToVirtualKey(token);
+            }
+
+            if (mainKey == 0)
+                return false;
+
+            if (requiresCtrl && !(GetAsyncKeyState(VK_CONTROL) & 0x8000)) return false;
+            if (requiresShift && !(GetAsyncKeyState(VK_SHIFT) & 0x8000)) return false;
+            if (requiresAlt && !(GetAsyncKeyState(VK_MENU) & 0x8000)) return false;
+            return (GetAsyncKeyState(mainKey) & 0x8000) != 0;
+        }
+    }
+
     EditorCamera::EditorCamera(float fov, float aspectRatio, float nearClip, float farClip)
         : PerspectiveCamera(fov, aspectRatio, nearClip, farClip)
     {
@@ -13,7 +84,7 @@ namespace CCEngine
         ResetCamera();
     }
 
-    void EditorCamera::OnUpdate(float deltaTime)
+    void EditorCamera::OnUpdate(float deltaTime, const ProjectSettingsData& settings)
     {
         // 1. 네이티브 Win32 우클릭 감지
         bool isRightMouseDown = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
@@ -72,12 +143,12 @@ namespace CCEngine
             float moveSpeed = m_MoveSpeed * deltaTime;
             DirectX::XMVECTOR pos = DirectX::XMLoadFloat3(&m_Position);
 
-            if (GetAsyncKeyState('W') & 0x8000) pos = DirectX::XMVectorAdd(pos, DirectX::XMVectorScale(forward, moveSpeed));
-            if (GetAsyncKeyState('S') & 0x8000) pos = DirectX::XMVectorSubtract(pos, DirectX::XMVectorScale(forward, moveSpeed));
-            if (GetAsyncKeyState('D') & 0x8000) pos = DirectX::XMVectorAdd(pos, DirectX::XMVectorScale(right, moveSpeed));
-            if (GetAsyncKeyState('A') & 0x8000) pos = DirectX::XMVectorSubtract(pos, DirectX::XMVectorScale(right, moveSpeed));
-            if (GetAsyncKeyState('E') & 0x8000) pos = DirectX::XMVectorAdd(pos, DirectX::XMVectorScale(up, moveSpeed));
-            if (GetAsyncKeyState('Q') & 0x8000) pos = DirectX::XMVectorSubtract(pos, DirectX::XMVectorScale(up, moveSpeed));
+            if (IsBindingPressed(settings.MoveForwardKey)) pos = DirectX::XMVectorAdd(pos, DirectX::XMVectorScale(forward, moveSpeed));
+            if (IsBindingPressed(settings.MoveBackwardKey)) pos = DirectX::XMVectorSubtract(pos, DirectX::XMVectorScale(forward, moveSpeed));
+            if (IsBindingPressed(settings.MoveRightKey)) pos = DirectX::XMVectorAdd(pos, DirectX::XMVectorScale(right, moveSpeed));
+            if (IsBindingPressed(settings.MoveLeftKey)) pos = DirectX::XMVectorSubtract(pos, DirectX::XMVectorScale(right, moveSpeed));
+            if (IsBindingPressed(settings.MoveUpKey)) pos = DirectX::XMVectorAdd(pos, DirectX::XMVectorScale(up, moveSpeed));
+            if (IsBindingPressed(settings.MoveDownKey)) pos = DirectX::XMVectorSubtract(pos, DirectX::XMVectorScale(up, moveSpeed));
 
             DirectX::XMStoreFloat3(&m_Position, pos);
 

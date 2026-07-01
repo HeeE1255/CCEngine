@@ -261,7 +261,9 @@ namespace CCEngine
             SetClipPadding(0.0f, m_ContentTop, 0.0f, 0.0f);
             WindowPanel::OnRender();
 
-            Window* mouseWindow = GetOwnerWindow() ? GetOwnerWindow() : &CCEngine::Application::Get()->GetWindow();
+            Window* mouseWindow = Widget::GetCurrentRenderWindow()
+                ? Widget::GetCurrentRenderWindow()
+                : (GetOwnerWindow() ? GetOwnerWindow() : &CCEngine::Application::Get()->GetWindow());
             auto [mouseX, mouseY] = mouseWindow->GetMousePosition();
             m_HoveredIndex = -1;
 
@@ -280,8 +282,11 @@ namespace CCEngine
                 if (currentY + m_RowHeight < m_CalculatedPos.y + m_ContentTop || currentY > m_CalculatedPos.y + m_CalculatedSize.y)
                     continue;
 
-                bool hovered = !Widget::IsMouseInteractionActive() &&
-                    mouseX >= rowX && mouseX <= rowX + rowWidth && mouseY >= currentY && mouseY <= currentY + m_RowHeight;
+                bool hovered = Widget::IsCurrentRenderWindowMouseActive() &&
+                    !Widget::IsMouseInteractionActive() &&
+                    mouseX >= rowX && mouseX <= rowX + rowWidth &&
+                    mouseY >= currentY && mouseY <= currentY + m_RowHeight &&
+                    !IsMouseBlockedByWidgetAbove(mouseX, mouseY);
                 if (hovered)
                     m_HoveredIndex = (int)i;
 

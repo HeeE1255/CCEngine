@@ -1,7 +1,9 @@
 #include "UI/ProjectSettingsPanel.h"
 #include "Renderer/UIRenderer.h"
 #include "UI/Button.h"
+#include "UI/KeyBindingInput.h"
 #include "UI/TextInput.h"
+#include "Events/MouseEvent.h"
 #include <algorithm>
 #include <cctype>
 
@@ -58,8 +60,8 @@ namespace CCEngine::UI
         m_GameWidthInput = new TextInput("GameResolutionWidthInput", "Width");
         m_GameWidthInput->SetAnchorMin(0.0f, 0.0f);
         m_GameWidthInput->SetAnchorMax(0.0f, 0.0f);
-        m_GameWidthInput->SetOffsetMin(SidebarWidth + 120.0f, 130.0f);
-        m_GameWidthInput->SetOffsetMax(SidebarWidth + 250.0f, 156.0f);
+        m_GameWidthInput->SetOffsetMin(SidebarWidth + 120.0f, 156.0f);
+        m_GameWidthInput->SetOffsetMax(SidebarWidth + 250.0f, 182.0f);
         m_GameWidthInput->SetOnTextChanged([this](const std::string& text)
             {
                 if (m_Settings)
@@ -70,8 +72,8 @@ namespace CCEngine::UI
         m_GameHeightInput = new TextInput("GameResolutionHeightInput", "Height");
         m_GameHeightInput->SetAnchorMin(0.0f, 0.0f);
         m_GameHeightInput->SetAnchorMax(0.0f, 0.0f);
-        m_GameHeightInput->SetOffsetMin(SidebarWidth + 285.0f, 130.0f);
-        m_GameHeightInput->SetOffsetMax(SidebarWidth + 415.0f, 156.0f);
+        m_GameHeightInput->SetOffsetMin(SidebarWidth + 285.0f, 156.0f);
+        m_GameHeightInput->SetOffsetMax(SidebarWidth + 415.0f, 182.0f);
         m_GameHeightInput->SetOnTextChanged([this](const std::string& text)
             {
                 if (m_Settings)
@@ -82,9 +84,36 @@ namespace CCEngine::UI
         m_BtnApplyResolution = new Button("BtnApplyGameResolution", "Save Default Resolution");
         m_BtnApplyResolution->SetAnchorMin(0.0f, 0.0f);
         m_BtnApplyResolution->SetAnchorMax(0.0f, 0.0f);
-        m_BtnApplyResolution->SetOffsetMin(SidebarWidth + 120.0f, 174.0f);
-        m_BtnApplyResolution->SetOffsetMax(SidebarWidth + 415.0f, 200.0f);
+        m_BtnApplyResolution->SetOffsetMin(SidebarWidth + 120.0f, 208.0f);
+        m_BtnApplyResolution->SetOffsetMax(SidebarWidth + 415.0f, 234.0f);
         AddChild(m_BtnApplyResolution);
+
+        auto configureInputBinding = [this](KeyBindingInput*& input, const char* name, const char* binding, float y, std::string ProjectSettingsData::* target)
+            {
+                input = new KeyBindingInput(name, binding);
+                input->SetAnchorMin(0.0f, 0.0f);
+                input->SetAnchorMax(0.0f, 0.0f);
+                input->SetOffsetMin(SidebarWidth + 260.0f, y);
+                input->SetOffsetMax(SidebarWidth + 430.0f, y + 26.0f);
+                input->SetOnBindingChanged([this, target](const std::string& text)
+                    {
+                        if (m_Settings)
+                            m_Settings->Data().*target = text;
+                    });
+                input->SetOnPickerRequested([this](KeyBindingInput* targetInput)
+                    {
+                        if (m_OpenKeyBindingPicker)
+                            m_OpenKeyBindingPicker(targetInput);
+                    });
+                AddChild(input);
+            };
+
+        configureInputBinding(m_MoveForwardInput, "InputMoveForward", "W", 146.0f, &ProjectSettingsData::MoveForwardKey);
+        configureInputBinding(m_MoveBackwardInput, "InputMoveBackward", "S", 178.0f, &ProjectSettingsData::MoveBackwardKey);
+        configureInputBinding(m_MoveLeftInput, "InputMoveLeft", "A", 210.0f, &ProjectSettingsData::MoveLeftKey);
+        configureInputBinding(m_MoveRightInput, "InputMoveRight", "D", 242.0f, &ProjectSettingsData::MoveRightKey);
+        configureInputBinding(m_MoveUpInput, "InputMoveUp", "E", 274.0f, &ProjectSettingsData::MoveUpKey);
+        configureInputBinding(m_MoveDownInput, "InputMoveDown", "Q", 306.0f, &ProjectSettingsData::MoveDownKey);
 
         m_BtnSetStartScene = new Button("BtnSetStartScene", "Set Current Scene");
         m_BtnSetStartScene->SetAnchorMin(0.0f, 0.0f);
@@ -103,8 +132,8 @@ namespace CCEngine::UI
         m_BtnSaveSettings = new Button("BtnSaveProjectSettings", "Save Project Settings");
         m_BtnSaveSettings->SetAnchorMin(0.0f, 0.0f);
         m_BtnSaveSettings->SetAnchorMax(1.0f, 0.0f);
-        m_BtnSaveSettings->SetOffsetMin(SidebarWidth + 120.0f, 308.0f);
-        m_BtnSaveSettings->SetOffsetMax(-16.0f, 334.0f);
+        m_BtnSaveSettings->SetOffsetMin(SidebarWidth + 18.0f, 392.0f);
+        m_BtnSaveSettings->SetOffsetMax(-16.0f, 418.0f);
         AddChild(m_BtnSaveSettings);
 
         SelectPage(SettingsPage::Project);
@@ -118,12 +147,68 @@ namespace CCEngine::UI
         m_BtnApplyResolution->SetOnClick(std::move(applyResolution));
     }
 
+    void ProjectSettingsPanel::SetKeyBindingPickerCallback(std::function<void(KeyBindingInput*)> callback)
+    {
+        m_OpenKeyBindingPicker = std::move(callback);
+    }
+
     void ProjectSettingsPanel::OnOpened()
     {
         SyncFieldsFromSettings();
 
         SelectPage(m_SelectedPage);
         BringToFront();
+    }
+
+    bool ProjectSettingsPanel::OnEvent(Event& e)
+    {
+        if (!m_IsVisible)
+            return false;
+
+        if (e.GetEventType() == EventType::MouseButtonPressed)
+        {
+            auto& mouseEvent = static_cast<MouseButtonPressedEvent&>(e);
+            if (mouseEvent.GetButton() == 0 && HandleSidebarPageClick(mouseEvent.GetX(), mouseEvent.GetY()))
+            {
+                e.Handled = true;
+                return true;
+            }
+        }
+
+        return WindowPanel::OnEvent(e);
+    }
+
+    bool ProjectSettingsPanel::HandleSidebarPageClick(float mouseX, float mouseY)
+    {
+        float localX = mouseX - m_CalculatedPos.x;
+        float localY = mouseY - m_CalculatedPos.y;
+        if (localX < 10.0f || localX > SidebarWidth - 10.0f)
+            return false;
+
+        struct PageHit
+        {
+            SettingsPage Page;
+            float Top;
+            float Bottom;
+        };
+
+        const PageHit hits[] =
+        {
+            { SettingsPage::Project, 42.0f, 68.0f },
+            { SettingsPage::Graphics, 70.0f, 96.0f },
+            { SettingsPage::Input, 98.0f, 124.0f }
+        };
+
+        for (const PageHit& hit : hits)
+        {
+            if (localY >= hit.Top && localY <= hit.Bottom)
+            {
+                SelectPage(hit.Page);
+                return true;
+            }
+        }
+
+        return false;
     }
 
     void ProjectSettingsPanel::SelectPage(SettingsPage page)
@@ -136,13 +221,20 @@ namespace CCEngine::UI
     {
         bool isProject = m_SelectedPage == SettingsPage::Project;
         bool isGraphics = m_SelectedPage == SettingsPage::Graphics;
+        bool isInput = m_SelectedPage == SettingsPage::Input;
         if (m_ProjectNameInput) m_ProjectNameInput->SetVisible(isProject);
         if (m_BtnSetStartScene) m_BtnSetStartScene->SetVisible(isProject);
         if (m_BtnOpenStartScene) m_BtnOpenStartScene->SetVisible(isProject);
-        if (m_BtnSaveSettings) m_BtnSaveSettings->SetVisible(isProject);
+        if (m_BtnSaveSettings) m_BtnSaveSettings->SetVisible(true);
         if (m_GameWidthInput) m_GameWidthInput->SetVisible(isGraphics);
         if (m_GameHeightInput) m_GameHeightInput->SetVisible(isGraphics);
         if (m_BtnApplyResolution) m_BtnApplyResolution->SetVisible(isGraphics);
+        if (m_MoveForwardInput) m_MoveForwardInput->SetVisible(isInput);
+        if (m_MoveBackwardInput) m_MoveBackwardInput->SetVisible(isInput);
+        if (m_MoveLeftInput) m_MoveLeftInput->SetVisible(isInput);
+        if (m_MoveRightInput) m_MoveRightInput->SetVisible(isInput);
+        if (m_MoveUpInput) m_MoveUpInput->SetVisible(isInput);
+        if (m_MoveDownInput) m_MoveDownInput->SetVisible(isInput);
 
         if (m_BtnProjectPage) m_BtnProjectPage->SetActive(m_SelectedPage == SettingsPage::Project);
         if (m_BtnGraphicsPage) m_BtnGraphicsPage->SetActive(m_SelectedPage == SettingsPage::Graphics);
@@ -161,6 +253,18 @@ namespace CCEngine::UI
             m_GameWidthInput->SetText(std::to_string(data.GameWidth), false);
         if (m_GameHeightInput)
             m_GameHeightInput->SetText(std::to_string(data.GameHeight), false);
+        if (m_MoveForwardInput)
+            m_MoveForwardInput->SetBinding(data.MoveForwardKey, false);
+        if (m_MoveBackwardInput)
+            m_MoveBackwardInput->SetBinding(data.MoveBackwardKey, false);
+        if (m_MoveLeftInput)
+            m_MoveLeftInput->SetBinding(data.MoveLeftKey, false);
+        if (m_MoveRightInput)
+            m_MoveRightInput->SetBinding(data.MoveRightKey, false);
+        if (m_MoveUpInput)
+            m_MoveUpInput->SetBinding(data.MoveUpKey, false);
+        if (m_MoveDownInput)
+            m_MoveDownInput->SetBinding(data.MoveDownKey, false);
     }
 
     uint32_t ProjectSettingsPanel::ParseResolutionValue(const std::string& text, uint32_t fallback)
@@ -232,14 +336,32 @@ namespace CCEngine::UI
             UIRenderer::DrawString("Graphics", detailX, y, { 0.92f, 0.92f, 0.92f, 1.0f });
             y += 44.0f;
             UIRenderer::DrawString("Default Game Resolution", detailX, y, { 0.68f, 0.68f, 0.68f, 1.0f });
-            UIRenderer::DrawString("Width", detailX + 120.0f, y + 24.0f, { 0.62f, 0.62f, 0.62f, 1.0f });
-            UIRenderer::DrawString("Height", detailX + 285.0f, y + 24.0f, { 0.62f, 0.62f, 0.62f, 1.0f });
-            UIRenderer::DrawString("Used as the default resolution for play/build output.", detailX, y + 88.0f, { 0.62f, 0.62f, 0.62f, 1.0f });
+            UIRenderer::DrawString("Width", detailX + 120.0f, y + 50.0f, { 0.62f, 0.62f, 0.62f, 1.0f });
+            UIRenderer::DrawString("Height", detailX + 285.0f, y + 50.0f, { 0.62f, 0.62f, 0.62f, 1.0f });
+            UIRenderer::DrawString("Used as the default resolution for play/build output.", detailX, y + 122.0f, { 0.62f, 0.62f, 0.62f, 1.0f });
         }
         else
         {
             UIRenderer::DrawString("Input", detailX, y, { 0.92f, 0.92f, 0.92f, 1.0f });
-            UIRenderer::DrawString("No input settings yet.", detailX, y + 36.0f, { 0.62f, 0.62f, 0.62f, 1.0f });
+            y += 44.0f;
+            UIRenderer::DrawString("Editor Camera Bindings", detailX, y, { 0.68f, 0.68f, 0.68f, 1.0f });
+
+            const char* labels[] =
+            {
+                "Move Forward",
+                "Move Backward",
+                "Move Left",
+                "Move Right",
+                "Move Up",
+                "Move Down"
+            };
+
+            for (int i = 0; i < 6; ++i)
+            {
+                UIRenderer::DrawString(labels[i], detailX, y + 44.0f + (float)i * 32.0f, { 0.68f, 0.68f, 0.68f, 1.0f });
+            }
+            UIRenderer::DrawString("Click a binding field to open the key picker.",
+                detailX, y + 252.0f, { 0.62f, 0.62f, 0.62f, 1.0f });
         }
 
         Widget::OnRender();

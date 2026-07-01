@@ -7,6 +7,8 @@ namespace CCEngine {
 
         Widget* Widget::s_MouseInteractionOwner = nullptr;
         Widget* Widget::s_KeyboardFocusOwner = nullptr;
+        Window* Widget::s_CurrentRenderWindow = nullptr;
+        bool Widget::s_CurrentRenderWindowMouseActive = true;
 
         Widget::Widget(const std::string& name) : m_Name(name) {}
 
@@ -350,6 +352,26 @@ namespace CCEngine {
         bool Widget::IsKeyboardFocusOwner(const Widget* widget)
         {
             return widget && s_KeyboardFocusOwner == widget;
+        }
+
+        void Widget::SetCurrentRenderWindow(Window* window)
+        {
+            s_CurrentRenderWindow = window;
+        }
+
+        Window* Widget::GetCurrentRenderWindow()
+        {
+            return s_CurrentRenderWindow;
+        }
+
+        void Widget::SetCurrentRenderWindowMouseActive(bool active)
+        {
+            s_CurrentRenderWindowMouseActive = active;
+        }
+
+        bool Widget::IsCurrentRenderWindowMouseActive()
+        {
+            return s_CurrentRenderWindowMouseActive;
         }
 
         void Widget::SetSize(float width, float height)

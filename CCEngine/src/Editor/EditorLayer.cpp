@@ -20,6 +20,7 @@
 #include "UI/InspectorRegistry.h"
 #include "UI/InspectorItem.h"
 #include "UI/InspectorUtils.h"
+#include "UI/KeyBindingPickerPanel.h"
 #include <windows.h>
 #include <cmath>
 #include <filesystem>
@@ -94,6 +95,8 @@ namespace CCEngine {
 
     void EditorLayer::OnAttach()
     {
+        m_ProjectSettings.Load();
+        m_ProjectSettings.Normalize();
 
         FramebufferSpecification fbSpec;
         fbSpec.Width = 1280;
@@ -101,13 +104,12 @@ namespace CCEngine {
         m_Framebuffer = Framebuffer::Create(fbSpec);
 
         FramebufferSpecification gameFbSpec;
-        gameFbSpec.Width = 1280;
-        gameFbSpec.Height = 720;
+        gameFbSpec.Width = m_ProjectSettings.Data().GameWidth;
+        gameFbSpec.Height = m_ProjectSettings.Data().GameHeight;
         m_GameFramebuffer = Framebuffer::Create(gameFbSpec);
+        m_GameViewportSize = { (float)gameFbSpec.Width, (float)gameFbSpec.Height };
 
         m_ActiveScene = new Scene();
-        m_ProjectSettings.Load();
-        ApplyProjectGameResolution();
 
         // ==========================================
         // 씬 기본 오브젝트 세팅 
@@ -222,7 +224,7 @@ namespace CCEngine {
         }
 
         // 2. 카메라 및 로직 업데이트
-        m_Camera.OnUpdate(deltaTime);
+        m_Camera.OnUpdate(deltaTime, m_ProjectSettings.Data());
         HandleShortcuts();
 
         // 선택된 엔티티가 있다면 인스펙터 패널에 전달하여 UI 갱신
@@ -986,17 +988,20 @@ namespace CCEngine {
 
     void EditorLayer::SaveProjectSettings()
     {
+        m_ProjectSettings.Normalize();
         m_ProjectSettings.Save();
+        if (m_ProjectSettingsPanel)
+            m_ProjectSettingsPanel->OnOpened();
     }
 
     void EditorLayer::ApplyProjectGameResolution()
     {
-        uint32_t width = (std::max)(320u, (std::min)(m_ProjectSettings.Data().GameWidth, 8192u));
-        uint32_t height = (std::max)(320u, (std::min)(m_ProjectSettings.Data().GameHeight, 8192u));
+        m_ProjectSettings.Normalize();
+        uint32_t width = m_ProjectSettings.Data().GameWidth;
+        uint32_t height = m_ProjectSettings.Data().GameHeight;
 
-        m_ProjectSettings.Data().GameWidth = width;
-        m_ProjectSettings.Data().GameHeight = height;
-
+        // Game View 패널은 창 크기를 따라가고, 이 값은 패널이 없을 때와 플레이어 빌드의 기본값으로 쓴다.
+        m_GameViewportSize = { (float)width, (float)height };
         SaveProjectSettings();
         ConsoleLog::Info("Default game resolution saved: " + std::to_string(width) + " x " + std::to_string(height));
     }
@@ -1454,17 +1459,70 @@ namespace CCEngine {
             }
             case 7:
             {
-                if (m_ProjectSettingsPanel)
-                {
-                    m_ProjectSettingsPanel->SetVisible(true);
-                    m_ProjectSettingsPanel->BringToFront();
-                    m_ProjectSettingsPanel->OnOpened();
-                }
+                OpenProjectSettingsWindow();
                 break;
             }
             default:
                 break;
         }
+    }
+
+    void EditorLayer::OpenProjectSettingsWindow()
+    {
+        if (!m_ProjectSettingsPanel)
+            return;
+
+        for (Window* window : Application::Get()->GetSecondaryWindows())
+        {
+            if (window && !window->ShouldClose() && window->GetRootUI() == m_ProjectSettingsPanel)
+            {
+                auto [mouseX, mouseY] = Application::Get()->GetWindow().GetScreenMousePosition();
+                window->SetPosition(mouseX - 410, mouseY - 24);
+                m_ProjectSettingsPanel->SetVisible(true);
+                m_ProjectSettingsPanel->OnOpened();
+                Application::Get()->SetModalInputWindow(window);
+                return;
+            }
+        }
+
+        if (m_ProjectSettingsPanel->GetParent())
+            m_ProjectSettingsPanel->GetParent()->RemoveChild(m_ProjectSettingsPanel);
+
+        Window* settingsWindow = Application::Get()->CreateSecondaryWindow("Project Settings", 820, 560);
+        m_ProjectSettingsPanel->SetDockingEnabled(false);
+        m_ProjectSettingsPanel->SetOwnerWindow(settingsWindow);
+        m_ProjectSettingsPanel->SetVisible(true);
+        m_ProjectSettingsPanel->SetAnchorMin(0.0f, 0.0f);
+        m_ProjectSettingsPanel->SetAnchorMax(1.0f, 1.0f);
+        m_ProjectSettingsPanel->SetOffsetMin(0.0f, 0.0f);
+        m_ProjectSettingsPanel->SetOffsetMax(0.0f, 0.0f);
+        settingsWindow->SetRootUI(m_ProjectSettingsPanel);
+        m_ProjectSettingsPanel->OnOpened();
+        Application::Get()->SetModalInputWindow(settingsWindow);
+    }
+
+    void EditorLayer::OpenKeyBindingPickerWindow(UI::KeyBindingInput* targetInput)
+    {
+        if (!targetInput)
+            return;
+
+        Window* pickerWindow = Application::Get()->CreateSecondaryWindow("Key Binding", 560, 360);
+        auto* pickerPanel = new UI::KeyBindingPickerPanel("KeyBindingPickerPanelUI");
+        pickerPanel->SetOwnerWindow(pickerWindow);
+        pickerPanel->SetDockingEnabled(false);
+        pickerPanel->SetAnchorMin(0.0f, 0.0f);
+        pickerPanel->SetAnchorMax(1.0f, 1.0f);
+        pickerPanel->SetOffsetMin(0.0f, 0.0f);
+        pickerPanel->SetOffsetMax(0.0f, 0.0f);
+        pickerPanel->SetInitialBinding(targetInput->GetBinding());
+        pickerPanel->SetOnBindingSelected([targetInput](const std::string& binding)
+            {
+                // 선택 창은 키 문자열만 만들고, 실제 설정 반영은 입력칸의 변경 콜백을 탄다.
+                targetInput->SetBinding(binding);
+            });
+
+        pickerWindow->SetRootUI(pickerPanel);
+        Application::Get()->SetModalInputWindow(pickerWindow);
     }
 
     void EditorLayer::RefreshHierarchy()
@@ -1714,18 +1772,20 @@ namespace CCEngine {
 
         m_ProjectSettingsPanel = new UI::ProjectSettingsPanel("ProjectSettingsPanelUI");
         m_ProjectSettingsPanel->SetSettings(&m_ProjectSettings);
+        m_ProjectSettingsPanel->SetDockingEnabled(false);
         m_ProjectSettingsPanel->SetVisible(false);
         m_ProjectSettingsPanel->SetBlockMouseEvents(true);
-        m_ProjectSettingsPanel->SetAnchorMin(0.5f, 0.5f);
-        m_ProjectSettingsPanel->SetAnchorMax(0.5f, 0.5f);
-        m_ProjectSettingsPanel->SetOffsetMin(-400.0f, -290.0f);
-        m_ProjectSettingsPanel->SetOffsetMax(400.0f, 290.0f);
+        m_ProjectSettingsPanel->SetAnchorMin(0.0f, 0.0f);
+        m_ProjectSettingsPanel->SetAnchorMax(1.0f, 1.0f);
+        m_ProjectSettingsPanel->SetOffsetMin(0.0f, 0.0f);
+        m_ProjectSettingsPanel->SetOffsetMax(0.0f, 0.0f);
         m_ProjectSettingsPanel->SetCallbacks(
             [this]() { SetCurrentSceneAsProjectStartScene(); },
             [this]() { OpenProjectStartScene(); },
             [this]() { SaveProjectSettings(); },
             [this]() { ApplyProjectGameResolution(); });
-        m_RootUI->AddChild(m_ProjectSettingsPanel);
+        m_ProjectSettingsPanel->SetKeyBindingPickerCallback(
+            [this](UI::KeyBindingInput* targetInput) { OpenKeyBindingPickerWindow(targetInput); });
 
         m_ObjectContextMenuPanel = new UI::Panel("ObjectContextMenu", { 0.14f, 0.14f, 0.15f, 1.0f });
         m_ObjectContextMenuPanel->SetVisible(false);
@@ -1854,9 +1914,8 @@ namespace CCEngine {
         m_BtnProjectSettings->SetOnClick([this]()
             {
                 m_EditDropdownPanel->SetVisible(false);
-                m_ProjectSettingsPanel->SetVisible(true);
+                OpenProjectSettingsWindow();
                 BringEditorOverlaysToFront();
-                m_ProjectSettingsPanel->OnOpened();
             });
         m_BtnCreateEmpty->SetOnClick([this]() { CreateEmptyObject(); HideObjectContextMenu(); });
         m_BtnCreateMeshObject->SetOnClick([this]() { ShowMeshObjectSubmenu(); });

@@ -29,6 +29,8 @@ namespace CCEngine
             virtual bool OnMouseMoved(MouseMovedEvent& e) override;
             virtual bool OnMouseButtonReleased(MouseButtonReleasedEvent& e) override;
             void Redock(Widget* newParent);
+            void SetDockingEnabled(bool enabled) { m_DockingEnabled = enabled; }
+            bool IsDockingEnabled() const { return m_DockingEnabled; }
 
             DirectX::XMFLOAT2 GetContentPosition() const
             {
@@ -56,6 +58,7 @@ namespace CCEngine
             bool m_IsDragging = false;
             bool m_IsFloating = false; // 도킹 해제(플로팅) 여부
             bool m_IsMovingOwnerWindow = false;
+            bool m_DockingEnabled = true;
 
             float m_LastMouseX = 0.0f;
 			float m_LastMouseY = 0.0f;

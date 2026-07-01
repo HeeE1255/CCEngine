@@ -55,13 +55,17 @@ namespace CCEngine
         {
             if (!m_IsVisible) return;
 
-            auto [mouseX, mouseY] = CCEngine::Application::Get()->GetWindow().GetMousePosition();
+            Window* renderWindow = Widget::GetCurrentRenderWindow();
+            auto [mouseX, mouseY] = renderWindow
+                ? renderWindow->GetMousePosition()
+                : CCEngine::Application::Get()->GetWindow().GetMousePosition();
 
             float headerHeight = UIRenderer::GetDefaultFont() ? UIRenderer::GetDefaultFont()->GetFontSize() : 24.0f;
             float verticalPadding = 8.0f;
             headerHeight += verticalPadding;
 
-            bool isHovered = !Widget::IsMouseInteractionActive() &&
+            bool isHovered = Widget::IsCurrentRenderWindowMouseActive() &&
+                !Widget::IsMouseInteractionActive() &&
                 (mouseX >= m_CalculatedPos.x && mouseX <= m_CalculatedPos.x + m_CalculatedSize.x &&
                 mouseY >= m_CalculatedPos.y && mouseY <= m_CalculatedPos.y + headerHeight);
             isHovered = isHovered && !IsMouseBlockedByWidgetAbove(mouseX, mouseY);
@@ -81,7 +85,8 @@ namespace CCEngine
             float hitBoxLeft = indentX;
             float hitBoxRight = indentX + 24.0f;
 
-            bool hoveringArrow = !Widget::IsMouseInteractionActive() &&
+            bool hoveringArrow = Widget::IsCurrentRenderWindowMouseActive() &&
+                !Widget::IsMouseInteractionActive() &&
                 (mouseX >= hitBoxLeft && mouseX <= hitBoxRight &&
                 mouseY >= m_CalculatedPos.y && mouseY <= m_CalculatedPos.y + headerHeight);
             hoveringArrow = hoveringArrow && !IsMouseBlockedByWidgetAbove(mouseX, mouseY);

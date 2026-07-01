@@ -1133,7 +1133,7 @@ namespace CCEngine
         void DockManager::UpdatePreview(WindowPanel* draggedPanel, float mouseX, float mouseY)
         {
             s_DockPreview = {};
-            if (!draggedPanel)
+            if (!draggedPanel || !draggedPanel->IsDockingEnabled())
                 return;
 
             auto app = Application::Get();
@@ -1272,7 +1272,7 @@ namespace CCEngine
 
         bool DockManager::ApplyPreview(WindowPanel* draggedPanel)
         {
-            if (!draggedPanel || !s_DockPreview.Active || s_DockPreview.Dragged != draggedPanel)
+            if (!draggedPanel || !draggedPanel->IsDockingEnabled() || !s_DockPreview.Active || s_DockPreview.Dragged != draggedPanel)
                 return false;
 
             WindowPanel* target = s_DockPreview.Target;
@@ -1474,7 +1474,7 @@ namespace CCEngine
             // DockRoot 안에 다시 DockRoot가 들어갈 수 있으므로 자식 위젯을 재귀적으로 탐색합니다.
             // 뒤에서부터 확인해 화면상 가장 위에 그려진 패널을 우선 타겟으로 선택합니다.
             WindowPanel* rootPanel = dynamic_cast<WindowPanel*>(root);
-            if (rootPanel && rootPanel != draggedPanel && rootPanel->IsVisible() && rootPanel->IsPointInside(mouseX, mouseY))
+            if (rootPanel && rootPanel != draggedPanel && rootPanel->IsDockingEnabled() && rootPanel->IsVisible() && rootPanel->IsPointInside(mouseX, mouseY))
                 return rootPanel;
 
             const auto& children = root->GetChildren();
@@ -1486,7 +1486,7 @@ namespace CCEngine
 
                 if (WindowPanel* panel = dynamic_cast<WindowPanel*>(child))
                 {
-                    if (panel != draggedPanel)
+                    if (panel != draggedPanel && panel->IsDockingEnabled())
                         return panel;
                     continue;
                 }
@@ -1506,7 +1506,7 @@ namespace CCEngine
             WindowPanel* bestTarget = nullptr;
             float bestArea = 0.0f;
             WindowPanel* rootPanel = dynamic_cast<WindowPanel*>(root);
-            if (rootPanel && rootPanel != draggedPanel && rootPanel->IsVisible())
+            if (rootPanel && rootPanel != draggedPanel && rootPanel->IsDockingEnabled() && rootPanel->IsVisible())
             {
                 auto pos = rootPanel->GetCalculatedPosition();
                 auto size = rootPanel->GetCalculatedSize();
@@ -1527,7 +1527,7 @@ namespace CCEngine
             for (auto it = children.rbegin(); it != children.rend(); ++it)
             {
                 WindowPanel* panel = dynamic_cast<WindowPanel*>(*it);
-                if (!panel || panel == draggedPanel || !panel->IsVisible())
+                if (!panel || panel == draggedPanel || !panel->IsDockingEnabled() || !panel->IsVisible())
                     continue;
 
                 auto pos = panel->GetCalculatedPosition();

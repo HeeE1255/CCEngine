@@ -10,6 +10,12 @@ namespace CCEngine
         std::string StartScenePath;
         uint32_t GameWidth = 1280;
         uint32_t GameHeight = 720;
+        std::string MoveForwardKey = "W";
+        std::string MoveBackwardKey = "S";
+        std::string MoveLeftKey = "A";
+        std::string MoveRightKey = "D";
+        std::string MoveUpKey = "E";
+        std::string MoveDownKey = "Q";
     };
 
     class CC_API ProjectSettings
@@ -17,6 +23,7 @@ namespace CCEngine
     public:
         bool Load(const std::string& filepath = "project.ccproject");
         bool Save(const std::string& filepath = "project.ccproject") const;
+        void Normalize();
 
         ProjectSettingsData& Data() { return m_Data; }
         const ProjectSettingsData& Data() const { return m_Data; }
