@@ -114,6 +114,18 @@ namespace CCEngine
                 auto& mesh = entity.GetComponent<MeshComponent>();
                 entityData["MeshComponent"]["Type"] = static_cast<int>(mesh.Type);
                 entityData["MeshComponent"]["BaseColor"] = Float4ToJson(mesh.BaseColor);
+                if (!mesh.AlbedoAssetGuid.empty())
+                    entityData["MeshComponent"]["AlbedoGuid"] = mesh.AlbedoAssetGuid;
+                if (!mesh.AlbedoPath.empty())
+                {
+                    entityData["MeshComponent"]["AlbedoPath"] = mesh.AlbedoPath;
+                    if (mesh.AlbedoAssetGuid.empty())
+                    {
+                        std::string guid = AssetDatabase::GetGuidFromPath(mesh.AlbedoPath);
+                        if (!guid.empty())
+                            entityData["MeshComponent"]["AlbedoGuid"] = guid;
+                    }
+                }
             }
 
             if (entity.HasComponent<ModelComponent>())
@@ -212,6 +224,24 @@ namespace CCEngine
                 mesh.BaseColor = JsonToFloat4(meshData["BaseColor"]);
                 // 기본 도형은 Type 값으로 다시 만든다. Custom Mesh는 모델 노드 복원 단계에서 다시 연결한다.
                 mesh.MeshData = CreateMeshForType(mesh.Type);
+
+                std::string textureGuid = meshData.value("AlbedoGuid", "");
+                std::string texturePath;
+                if (!textureGuid.empty())
+                {
+                    // 프리팹 안의 텍스처도 GUID를 우선한다. 인스턴스가 여러 개여도 같은 원본 에셋을 가리킨다.
+                    texturePath = AssetDatabase::GetPathFromGuid(textureGuid).string();
+                    mesh.AlbedoAssetGuid = textureGuid;
+                }
+                if (texturePath.empty() && meshData.contains("AlbedoPath"))
+                {
+                    texturePath = meshData["AlbedoPath"].get<std::string>();
+                    if (mesh.AlbedoAssetGuid.empty())
+                        mesh.AlbedoAssetGuid = AssetDatabase::GetGuidFromPath(texturePath);
+                }
+                mesh.AlbedoPath = texturePath;
+                if (!texturePath.empty() && std::filesystem::exists(texturePath))
+                    mesh.AlbedoMap.reset(Texture2D::Create(texturePath));
             }
 
             if (entityData.contains("ModelComponent"))
@@ -366,7 +396,11 @@ namespace CCEngine
                             mesh.Type = MeshComponent::MeshType::Custom;
                             mesh.MeshData = node.Meshes[meshIndex];
                             if (!node.Meshes[meshIndex]->TexturePath.empty() && std::filesystem::exists(node.Meshes[meshIndex]->TexturePath))
+                            {
+                                mesh.AlbedoPath = node.Meshes[meshIndex]->TexturePath;
+                                mesh.AlbedoAssetGuid = AssetDatabase::GetGuidFromPath(mesh.AlbedoPath);
                                 mesh.AlbedoMap.reset(Texture2D::Create(node.Meshes[meshIndex]->TexturePath));
+                            }
                         }
                     }
                 }
@@ -426,6 +460,7 @@ namespace CCEngine
             return false;
 
         fout << prefabData.dump(4);
+        AssetDatabase::EnsureMetaFile(filepath);
         return true;
     }
 

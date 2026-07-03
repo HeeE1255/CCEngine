@@ -124,7 +124,13 @@ namespace CCEngine {
             auto& meshComp = targetEnt.AddComponent<MeshComponent>(MeshComponent::MeshType::Custom);
             meshComp.MeshData = node.Meshes[i];
             if (!node.Meshes[i]->TexturePath.empty() && std::filesystem::exists(node.Meshes[i]->TexturePath))
+            {
+                // FBX가 물고 온 텍스처도 저장용 경로/GUID를 남긴다.
+                // 그래야 씬 저장 후 다시 열 때 텍스처 파일 이동을 AssetDatabase가 따라갈 수 있다.
+                meshComp.AlbedoPath = node.Meshes[i]->TexturePath;
+                meshComp.AlbedoAssetGuid = AssetDatabase::GetGuidFromPath(meshComp.AlbedoPath);
                 meshComp.AlbedoMap.reset(Texture2D::Create(node.Meshes[i]->TexturePath));
+            }
         }
 
         // 4. 자식 노드 재귀 호출 (상속 끝났으니 다음 레벨은 Identity를 넘김)

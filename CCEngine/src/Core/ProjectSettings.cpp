@@ -56,6 +56,7 @@ namespace CCEngine
 
         m_Data.ProjectName = data.value("ProjectName", m_Data.ProjectName);
         m_Data.StartScenePath = data.value("StartScenePath", m_Data.StartScenePath);
+        m_Data.StartSceneGuid = data.value("StartSceneGuid", m_Data.StartSceneGuid);
         m_Data.GameWidth = data.value("GameWidth", m_Data.GameWidth);
         m_Data.GameHeight = data.value("GameHeight", m_Data.GameHeight);
         m_Data.MoveForwardKey = data.value("MoveForwardKey", m_Data.MoveForwardKey);
@@ -77,6 +78,7 @@ namespace CCEngine
         nlohmann::json data;
         data["ProjectName"] = safeData.ProjectName;
         data["StartScenePath"] = safeData.StartScenePath;
+        data["StartSceneGuid"] = safeData.StartSceneGuid;
         data["GameWidth"] = safeData.GameWidth;
         data["GameHeight"] = safeData.GameHeight;
         data["MoveForwardKey"] = safeData.MoveForwardKey;

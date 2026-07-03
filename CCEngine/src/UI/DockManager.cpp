@@ -1190,7 +1190,14 @@ namespace CCEngine
             mouseX = candidate.MouseX;
             mouseY = candidate.MouseY;
 
-            WindowPanel* target = FindDockTarget(root, draggedPanel, mouseX, mouseY);
+            bool returningFloatingPanelToMainWindow =
+                draggedPanel->GetOwnerWindow() != nullptr &&
+                targetWindow == &mainWindow;
+
+            WindowPanel* target = nullptr;
+            if (!returningFloatingPanelToMainWindow)
+                target = FindDockTarget(root, draggedPanel, mouseX, mouseY);
+
             DockDropMode mode = DockDropMode::None;
             bool isRootTarget = false;
             DirectX::XMFLOAT2 targetPos = { 0.0f, 0.0f };
@@ -1203,14 +1210,16 @@ namespace CCEngine
                 draggedPanel->m_OffsetMax.y - draggedPanel->m_OffsetMin.y
             };
 
-            if (!target && draggedPanel->m_IsFloating && draggedPanel->m_Parent != nullptr && draggedPanel->m_Parent == root)
+            if (!target && !returningFloatingPanelToMainWindow && draggedPanel->m_IsFloating && draggedPanel->m_Parent != nullptr && draggedPanel->m_Parent == root)
             {
                 target = FindDockTargetByOverlap(root, draggedPanel, draggedRect);
             }
 
             if (!target)
             {
-                // 패널 위가 아니라 빈 작업 영역 위라면 루트 영역 도킹 후보로 전환합니다.
+                // 멀티 윈도우에서 메인 창으로 돌아올 때는 하위 패널이 아니라 메인 작업 영역만 타겟으로 삼는다.
+                // 그래야 Game View나 Asset Browser 위에 올려도 각 패널 기준 가이드가 뜨지 않고, 메인 창 기준 T/L/R/B만 보인다.
+                // 메인 창 내부 패널끼리 도킹할 때는 위의 FindDockTarget 경로를 그대로 사용한다.
                 isRootTarget = true;
                 DirectX::XMFLOAT4 workspace = GetDockWorkspace(targetWindow);
                 targetPos = { workspace.x, workspace.y };

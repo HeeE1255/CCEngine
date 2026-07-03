@@ -1,6 +1,7 @@
 #include "InspectorUtils.h"
 #include "UI/InspectorRegistry.h"
 #include "Scene/Components.h"
+#include "Core/AssetDatabase.h"
 #include "Utils/PlatformUtils.h"
 #include "UI/Button.h"
 #include "UI/InspectorPanel.h"
@@ -235,7 +236,12 @@ namespace CCEngine {
                             if (!filepath.empty())
                             {
                                 std::shared_ptr<Texture2D> newTex = std::shared_ptr<Texture2D>(Texture2D::Create(filepath));
-                                entity.GetComponent<MeshComponent>().AlbedoMap = newTex;
+                                auto& mesh = entity.GetComponent<MeshComponent>();
+                                mesh.AlbedoMap = newTex;
+                                // 인스펙터에서 직접 넣은 텍스처도 포인터만 들고 있으면 저장 후 잃어버린다.
+                                // 파일 참조는 GUID와 경로를 같이 남겨 구버전 파일도 읽을 수 있게 한다.
+                                mesh.AlbedoPath = filepath;
+                                mesh.AlbedoAssetGuid = AssetDatabase::GetGuidFromPath(filepath);
                                 std::cout << "Texture Applied to Mesh: " << filepath << std::endl;
                             }
                         });

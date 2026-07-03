@@ -133,6 +133,9 @@ namespace CCEngine
 
         DirectX::XMFLOAT4 BaseColor = { 1.0f, 1.0f, 1.0f, 1.0f }; // 기본값을 흰색으로 변경 (텍스처 색을 그대로 보기 위함)
         std::shared_ptr<Texture2D> AlbedoMap;
+        // 텍스처 파일은 이름이 바뀔 수 있으므로 저장할 때 GUID를 우선 사용한다.
+        std::string AlbedoAssetGuid;
+        std::string AlbedoPath;
 
         MeshComponent() = default;
         MeshComponent(const MeshComponent&) = default;

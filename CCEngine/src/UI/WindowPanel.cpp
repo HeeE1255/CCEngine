@@ -141,22 +141,47 @@ namespace CCEngine
             UIRenderer::DrawRectFilled(closeBtnX, m_CalculatedPos.y, 30.0f, HeadeHeight, { 0.8f, 0.2f, 0.2f, 1.0f });
             UIRenderer::DrawString("X", closeBtnX + 10.0f, m_CalculatedPos.y + HeadeHeight * 0.7f, { 1.0f, 1.0f, 1.0f, 1.0f });
 
+            constexpr float borderThickness = 1.0f;
+            DirectX::XMFLOAT4 outerBorderColor = { 0.26f, 0.26f, 0.29f, 0.95f };
+            DirectX::XMFLOAT4 bottomBorderColor = { 0.11f, 0.11f, 0.13f, 1.0f };
+
+            // 창들이 같은 배경색으로 겹치면 경계가 사라진다.
+            // 얇은 고채도 선을 공통 WindowPanel에서 그려 모든 패널의 외곽을 한눈에 구분하게 한다.
+            UIRenderer::DrawRectFilled(m_CalculatedPos.x, m_CalculatedPos.y, m_CalculatedSize.x, borderThickness, outerBorderColor);
+            UIRenderer::DrawRectFilled(m_CalculatedPos.x, m_CalculatedPos.y, borderThickness, m_CalculatedSize.y, outerBorderColor);
+            UIRenderer::DrawRectFilled(m_CalculatedPos.x + m_CalculatedSize.x - borderThickness, m_CalculatedPos.y, borderThickness, m_CalculatedSize.y, outerBorderColor);
+            UIRenderer::DrawRectFilled(m_CalculatedPos.x, m_CalculatedPos.y + (std::max)(0.0f, m_CalculatedSize.y - 2.0f), m_CalculatedSize.x, borderThickness, outerBorderColor);
+            UIRenderer::DrawRectFilled(m_CalculatedPos.x, m_CalculatedPos.y + (std::max)(0.0f, m_CalculatedSize.y - 1.0f), m_CalculatedSize.x, borderThickness, bottomBorderColor);
+
+        }
+
+        bool WindowPanel::IsPointInside(float mouseX, float mouseY) const
+        {
+            constexpr float resizeHitPadding = 6.0f;
+
+            // 창 테두리는 화면에는 1픽셀로 보이지만 실제 조작은 조금 넓게 잡아야 한다.
+            // 특히 왼쪽/위쪽 테두리는 마우스가 창 밖으로 살짝 나가면 부모가 이벤트를 넘기지 않는다.
+            return mouseX >= m_CalculatedPos.x - resizeHitPadding &&
+                mouseX <= m_CalculatedPos.x + m_CalculatedSize.x + resizeHitPadding &&
+                mouseY >= m_CalculatedPos.y - resizeHitPadding &&
+                mouseY <= m_CalculatedPos.y + m_CalculatedSize.y + resizeHitPadding;
         }
 
         bool WindowPanel::OnMouseButtonPressed(MouseButtonPressedEvent& e)
         {
             bool isTornOff = (m_OwnerWindow != nullptr);
             float edge = 8.0f; // 테두리 판정 픽셀
+            float outerEdge = 6.0f; // 창 밖으로 살짝 나간 마우스도 리사이즈로 인정하는 여유 폭
 
             if (e.GetButton() == 0)
             {
                 // ==============================================================
                 // 1. 상하좌우 8방향 모서리 리사이즈 히트박스 판별
                 // ==============================================================
-                bool isLeft = e.GetX() >= m_CalculatedPos.x && e.GetX() <= m_CalculatedPos.x + edge;
-                bool isRight = e.GetX() >= m_CalculatedPos.x + m_CalculatedSize.x - edge && e.GetX() <= m_CalculatedPos.x + m_CalculatedSize.x;
-                bool isTop = e.GetY() >= m_CalculatedPos.y && e.GetY() <= m_CalculatedPos.y + edge;
-                bool isBottom = e.GetY() >= m_CalculatedPos.y + m_CalculatedSize.y - edge && e.GetY() <= m_CalculatedPos.y + m_CalculatedSize.y;
+                bool isLeft = e.GetX() >= m_CalculatedPos.x - outerEdge && e.GetX() <= m_CalculatedPos.x + edge;
+                bool isRight = e.GetX() >= m_CalculatedPos.x + m_CalculatedSize.x - edge && e.GetX() <= m_CalculatedPos.x + m_CalculatedSize.x + outerEdge;
+                bool isTop = e.GetY() >= m_CalculatedPos.y - outerEdge && e.GetY() <= m_CalculatedPos.y + edge;
+                bool isBottom = e.GetY() >= m_CalculatedPos.y + m_CalculatedSize.y - edge && e.GetY() <= m_CalculatedPos.y + m_CalculatedSize.y + outerEdge;
 
                 if (isLeft || isRight || isTop || isBottom)
                 {
@@ -359,6 +384,7 @@ namespace CCEngine
         bool WindowPanel::OnMouseMoved(MouseMovedEvent& e)
         {
             float edge = 8.0f;
+            float outerEdge = 6.0f;
 
             // OS 이벤트 유실에 대비해 실제 마우스 버튼 상태로 드래그 상태를 보정합니다.
             if (m_ResizeMode != ResizeMode::None || m_IsDragging)
@@ -406,13 +432,12 @@ namespace CCEngine
             // 테두리 위에 마우스가 있을 때 리사이즈 커서를 표시합니다.
             if (m_ResizeMode == ResizeMode::None && !m_IsDragging)
             {
-                bool isLeft = e.GetX() >= m_CalculatedPos.x && e.GetX() <= m_CalculatedPos.x + edge;
-                bool isRight = e.GetX() >= m_CalculatedPos.x + m_CalculatedSize.x - edge && e.GetX() <= m_CalculatedPos.x + m_CalculatedSize.x;
-                bool isTop = e.GetY() >= m_CalculatedPos.y && e.GetY() <= m_CalculatedPos.y + edge;
-                bool isBottom = e.GetY() >= m_CalculatedPos.y + m_CalculatedSize.y - edge && e.GetY() <= m_CalculatedPos.y + m_CalculatedSize.y;
+                bool isLeft = e.GetX() >= m_CalculatedPos.x - outerEdge && e.GetX() <= m_CalculatedPos.x + edge;
+                bool isRight = e.GetX() >= m_CalculatedPos.x + m_CalculatedSize.x - edge && e.GetX() <= m_CalculatedPos.x + m_CalculatedSize.x + outerEdge;
+                bool isTop = e.GetY() >= m_CalculatedPos.y - outerEdge && e.GetY() <= m_CalculatedPos.y + edge;
+                bool isBottom = e.GetY() >= m_CalculatedPos.y + m_CalculatedSize.y - edge && e.GetY() <= m_CalculatedPos.y + m_CalculatedSize.y + outerEdge;
 
-                if (e.GetY() >= m_CalculatedPos.y && e.GetY() <= m_CalculatedPos.y + m_CalculatedSize.y &&
-                    e.GetX() >= m_CalculatedPos.x && e.GetX() <= m_CalculatedPos.x + m_CalculatedSize.x)
+                if (IsPointInside(e.GetX(), e.GetY()))
                 {
                     if ((isTop && isLeft) || (isBottom && isRight)) SetCursor(LoadCursor(nullptr, IDC_SIZENWSE));
                     else if ((isTop && isRight) || (isBottom && isLeft)) SetCursor(LoadCursor(nullptr, IDC_SIZENESW));

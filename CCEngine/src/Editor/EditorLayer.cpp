@@ -21,6 +21,7 @@
 #include "UI/InspectorItem.h"
 #include "UI/InspectorUtils.h"
 #include "UI/KeyBindingPickerPanel.h"
+#include "Core/AssetDatabase.h"
 #include <windows.h>
 #include <cmath>
 #include <filesystem>
@@ -158,8 +159,15 @@ namespace CCEngine {
         // --- 인스펙터 패널에 기본 컴포넌트 등록 ---
         UI::InspectorUtils::InitStandardComponents();
 
-        if (!m_ProjectSettings.Data().StartScenePath.empty())
-            OpenScene(m_ProjectSettings.Data().StartScenePath);
+        std::string startScenePath = m_ProjectSettings.Data().StartScenePath;
+        if (!m_ProjectSettings.Data().StartSceneGuid.empty())
+        {
+            std::filesystem::path resolved = AssetDatabase::GetPathFromGuid(m_ProjectSettings.Data().StartSceneGuid);
+            if (!resolved.empty())
+                startScenePath = resolved.string();
+        }
+        if (!startScenePath.empty())
+            OpenScene(startScenePath);
     }
 
     void EditorLayer::OnDetach()
@@ -367,6 +375,34 @@ namespace CCEngine {
                 return false;
             };
 
+        std::function<UI::Widget*(UI::Widget*, float, float)> getTopmostWidgetAt =
+            [&](UI::Widget* widget, float mouseX, float mouseY) -> UI::Widget*
+            {
+                if (!widget || !widget->IsVisible() || !widget->IsPointInside(mouseX, mouseY))
+                    return nullptr;
+
+                const auto& children = widget->GetChildren();
+                for (auto it = children.rbegin(); it != children.rend(); ++it)
+                {
+                    if (UI::Widget* hit = getTopmostWidgetAt(*it, mouseX, mouseY))
+                        return hit;
+                }
+                return widget;
+            };
+
+        auto isWidgetOrChildOf = [](UI::Widget* widget, UI::Widget* parent) -> bool
+            {
+                // 겹친 창에서는 마우스 아래 최상위 위젯만 입력을 가져야 한다.
+                // 부모 체인을 타고 올라가며 현재 패널 안쪽 위젯인지 확인한다.
+                while (widget)
+                {
+                    if (widget == parent)
+                        return true;
+                    widget = widget->GetParent();
+                }
+                return false;
+            };
+
         float popupMouseX = 0.0f;
         float popupMouseY = 0.0f;
         bool isPopupMouseEvent = getMousePoint(e, popupMouseX, popupMouseY);
@@ -434,8 +470,10 @@ namespace CCEngine {
             {
                 float mouseX = mouseEvent.GetX();
                 float mouseY = mouseEvent.GetY();
+                UI::Widget* topmostWidget = m_RootUI ? getTopmostWidgetAt(m_RootUI, mouseX, mouseY) : nullptr;
 
-                if (m_HierarchyPanel && m_HierarchyPanel->IsPointInside(mouseX, mouseY))
+                if (m_HierarchyPanel && m_HierarchyPanel->IsPointInside(mouseX, mouseY) &&
+                    isWidgetOrChildOf(topmostWidget, m_HierarchyPanel))
                 {
                     Entity hoveredEntity = m_HierarchyPanel->GetEntityAt(mouseX, mouseY);
                     if (hoveredEntity)
@@ -446,7 +484,8 @@ namespace CCEngine {
                     return;
                 }
 
-                if (m_ViewportWidget && m_ViewportWidget->IsPointInside(mouseX, mouseY))
+                if (m_ViewportWidget && m_ViewportWidget->IsPointInside(mouseX, mouseY) &&
+                    isWidgetOrChildOf(topmostWidget, m_ViewportWidget))
                 {
                     ShowObjectContextMenu(mouseX, mouseY, m_HierarchyPanel && m_HierarchyPanel->GetSelectedEntity());
                     mouseEvent.Handled = true;
@@ -530,21 +569,6 @@ namespace CCEngine {
                 std::cout << "[Picking] Ignored Empty Space!" << std::endl;
             }
             });
-
-        std::function<UI::Widget*(UI::Widget*, float, float)> getTopmostWidgetAt =
-            [&](UI::Widget* widget, float mouseX, float mouseY) -> UI::Widget*
-            {
-                if (!widget || !widget->IsVisible() || !widget->IsPointInside(mouseX, mouseY))
-                    return nullptr;
-
-                const auto& children = widget->GetChildren();
-                for (auto it = children.rbegin(); it != children.rend(); ++it)
-                {
-                    if (UI::Widget* hit = getTopmostWidgetAt(*it, mouseX, mouseY))
-                        return hit;
-                }
-                return widget;
-            };
 
         bool shouldRouteUIFirst = true;
         if (m_RootUI && m_ViewportWidget)
@@ -971,12 +995,21 @@ namespace CCEngine {
         }
 
         m_ProjectSettings.Data().StartScenePath = pathToStore;
+        // 시작 씬도 경로만 저장하면 파일명을 바꾸는 순간 끊어진다.
+        // GUID를 같이 저장해 두고, 경로는 사람이 읽기 쉬운 보조값으로 남긴다.
+        m_ProjectSettings.Data().StartSceneGuid = AssetDatabase::GetGuidFromPath(m_CurrentScenePath);
         SaveProjectSettings();
     }
 
     void EditorLayer::OpenProjectStartScene()
     {
-        const std::string& startScene = m_ProjectSettings.Data().StartScenePath;
+        std::string startScene = m_ProjectSettings.Data().StartScenePath;
+        if (!m_ProjectSettings.Data().StartSceneGuid.empty())
+        {
+            std::filesystem::path resolved = AssetDatabase::GetPathFromGuid(m_ProjectSettings.Data().StartSceneGuid);
+            if (!resolved.empty())
+                startScene = resolved.string();
+        }
         if (startScene.empty())
         {
             ConsoleLog::Warning("Project start scene is not set.");
@@ -1028,10 +1061,11 @@ namespace CCEngine {
         {
             if (PrefabSerializer::Serialize(m_ActiveScene, selected, filepath))
             {
+                AssetDatabase::MarkDirty(std::filesystem::current_path() / "assets");
                 for (UI::AssetBrowserPanel* browser : m_AssetBrowserPanels)
                 {
                     if (browser)
-                        browser->Refresh();
+                        browser->Refresh(true);
                 }
                 ConsoleLog::Info("Prefab saved: " + filepath);
                 printf("Prefab Saved to: %s\n", filepath.c_str());
@@ -1079,8 +1113,9 @@ namespace CCEngine {
         std::filesystem::path filepath = MakeUniquePrefabPath(directory, baseName);
         if (PrefabSerializer::Serialize(m_ActiveScene, entity, filepath.string()))
         {
+            AssetDatabase::MarkDirty(std::filesystem::current_path() / "assets");
             if (m_AssetBrowserPanel)
-                m_AssetBrowserPanel->Refresh();
+                m_AssetBrowserPanel->Refresh(true);
             ConsoleLog::Info("Prefab created: " + filepath.string());
             printf("Prefab Created: %s\n", filepath.string().c_str());
         }
