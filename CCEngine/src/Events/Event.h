@@ -10,7 +10,8 @@ namespace CCEngine {
         WindowClose, WindowResize,
         MouseMoved, MouseButtonPressed, MouseButtonReleased,
         MouseScrolled,
-        KeyPressed, TextInput
+        KeyPressed, TextInput,
+        FileDrop
     };
 
     class CC_API Event

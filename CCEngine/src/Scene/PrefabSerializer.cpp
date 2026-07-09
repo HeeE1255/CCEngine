@@ -177,6 +177,13 @@ namespace CCEngine
             {
                 entityData["AnimatorComponent"] = nlohmann::json::object();
             }
+
+            if (entity.HasComponent<ScriptComponent>())
+            {
+                const auto& script = entity.GetComponent<ScriptComponent>();
+                entityData["ScriptComponent"]["ClassName"] = script.ClassName;
+                entityData["ScriptComponent"]["Enabled"] = script.Enabled;
+            }
         }
 
         void ApplyComponents(Entity entity, const nlohmann::json& entityData)
@@ -305,6 +312,16 @@ namespace CCEngine
             if (entityData.contains("AnimatorComponent") && !entity.HasComponent<AnimatorComponent>())
             {
                 entity.AddComponent<AnimatorComponent>();
+            }
+
+            if (entityData.contains("ScriptComponent"))
+            {
+                const auto& scriptData = entityData["ScriptComponent"];
+                auto& script = entity.HasComponent<ScriptComponent>() ?
+                    entity.GetComponent<ScriptComponent>() : entity.AddComponent<ScriptComponent>();
+                script.ClassName = scriptData.value("ClassName", "");
+                script.Enabled = scriptData.value("Enabled", true);
+                script.RuntimeInstanceCreated = false;
             }
         }
 

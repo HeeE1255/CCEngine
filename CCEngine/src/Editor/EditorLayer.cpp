@@ -11,6 +11,7 @@
 #include "Scene/Components.h"
 #include "Scene/PrefabSerializer.h"
 #include "Scene/SceneSerializer.h"
+#include "Scripting/ScriptCompiler.h"
 #include "Utils/PlatformUtils.h"
 #include "Utils/MathUtils.h"
 #include "Renderer/ModelImporter.h"
@@ -182,6 +183,8 @@ namespace CCEngine {
 
     void EditorLayer::OnUpdate(float deltaTime)
     {
+        // 외부 컴파일 작업의 완료 결과는 메인 스레드에서 Console로 전달한다.
+        ScriptCompiler::Update();
         auto& mainWindow = CCEngine::Application::Get()->GetWindow();
 
         // 1. 뷰포트 크기 계산 및 프레임버퍼 리사이즈
@@ -1969,6 +1972,11 @@ namespace CCEngine {
         m_BtnPlay->SetOnClick([this]() {
             CCEngine::SceneState state = m_ActiveScene->GetState();
             if (state == CCEngine::SceneState::Edit) {
+                if (ScriptCompiler::IsCompiling())
+                {
+                    ConsoleLog::Warning("Wait for C# script compilation to finish before entering Play Mode.");
+                    return;
+                }
                 m_UndoManager.ClearTransformHistory();
                 m_UndoManager.ClearSceneStructureHistory();
                 m_EditorScene = m_ActiveScene;

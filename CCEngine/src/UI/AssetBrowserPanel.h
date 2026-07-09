@@ -31,6 +31,7 @@ namespace CCEngine
             void Refresh(bool forceAssetScan = false);
             const std::filesystem::path& GetCurrentAssetDirectory() const { return m_CurrentDirectory; }
             bool IsDropTargetPoint(float mouseX, float mouseY) const { return IsContentPoint(mouseX, mouseY); }
+            bool ImportExternalPaths(const std::vector<std::filesystem::path>& sourcePaths, float mouseX, float mouseY);
 
             void SetOnPrefabSelected(std::function<void(const std::string&)> callback) { m_OnPrefabSelected = callback; }
             void SetOnModelSelected(std::function<void(const std::string&)> callback) { m_OnModelSelected = callback; }
@@ -40,7 +41,7 @@ namespace CCEngine
             virtual void UpdateLayout(const DirectX::XMFLOAT2& parentPos, const DirectX::XMFLOAT2& parentSize) override;
             virtual void OnRender() override;
             virtual bool OnEvent(Event& e) override;
-            virtual bool WantsMouseCapture() const override { return WindowPanel::WantsMouseCapture() || m_IsDraggingScrollbar || m_IsDraggingTreeScrollbar || m_IsDraggingSplitter || m_IsDraggingAsset; }
+            virtual bool WantsMouseCapture() const override { return WindowPanel::WantsMouseCapture() || m_IsDraggingScrollbar || m_IsDraggingTreeScrollbar || m_IsDraggingSplitter || m_IsDraggingAsset || m_IsDraggingSelectionBox || m_IsMouseDownOnEmptyContent; }
 
         private:
             enum class AssetType
@@ -50,7 +51,8 @@ namespace CCEngine
                 Scene,
                 Prefab,
                 Model,
-                Texture
+                Texture,
+                Script
             };
 
             struct AssetEntry
@@ -81,6 +83,7 @@ namespace CCEngine
             bool IsSplitterPoint(float mouseX, float mouseY) const;
             bool IsScrollbarPoint(float mouseX, float mouseY) const;
             int GetEntryIndexAt(float mouseX, float mouseY) const;
+            bool GetEntryBounds(int index, float& x, float& y, float& w, float& h) const;
             int GetTreeIndexAt(float mouseX, float mouseY) const;
             bool IsTreeScrollbarPoint(float mouseX, float mouseY) const;
             bool IsContextMenuPoint(float mouseX, float mouseY) const;
@@ -92,12 +95,20 @@ namespace CCEngine
             bool IsSearchBoxPoint(float mouseX, float mouseY) const;
             void SetSearchQuery(const std::string& query);
             void ApplyFilter();
+            bool IsEntrySelected(int index) const;
+            void ClearSelection();
+            void SelectSingle(int index);
+            void ToggleSelection(int index);
+            void SelectRange(int index);
+            void UpdateSelectionBox(float mouseX, float mouseY);
+            std::vector<AssetEntry> GetSelectedEntries() const;
             void BuildTreeEntries();
             void BuildTreeEntriesRecursive(const std::filesystem::path& directory, int depth);
             std::string GetTreeKey(const std::filesystem::path& path) const;
             bool TreeEntryHasChildren(const std::filesystem::path& path) const;
             void ToggleTreeFolder(const std::filesystem::path& path);
             bool MoveEntryToDirectory(const AssetEntry& entry, const std::filesystem::path& targetDirectory);
+            bool MoveSelectedEntriesToDirectory(const std::filesystem::path& targetDirectory);
             void StepIconSize(int direction);
             Texture2D* GetTexturePreview(const AssetEntry& entry);
             void DrawAssetPreview(const AssetEntry& entry, float x, float y, float size);
@@ -143,6 +154,8 @@ namespace CCEngine
 
             int m_HoveredIndex = -1;
             int m_SelectedIndex = -1;
+            int m_AnchorSelectedIndex = -1;
+            std::unordered_set<int> m_SelectedIndices;
             bool m_IsDraggingScrollbar = false;
             bool m_IsDraggingTreeScrollbar = false;
             bool m_IsDraggingSplitter = false;
@@ -157,9 +170,17 @@ namespace CCEngine
             std::chrono::steady_clock::time_point m_LastTreeClickTime = {};
             bool m_IsMouseDownOnEntry = false;
             bool m_IsDraggingAsset = false;
+            bool m_IsMouseDownOnEmptyContent = false;
+            bool m_IsDraggingSelectionBox = false;
+            bool m_SelectionBoxAdditive = false;
             int m_DragEntryIndex = -1;
             float m_DragStartX = 0.0f;
             float m_DragStartY = 0.0f;
+            float m_SelectionBoxStartX = 0.0f;
+            float m_SelectionBoxStartY = 0.0f;
+            float m_SelectionBoxCurrentX = 0.0f;
+            float m_SelectionBoxCurrentY = 0.0f;
+            std::unordered_set<int> m_SelectionBeforeBox;
             bool m_ContextMenuVisible = false;
             float m_ContextMenuX = 0.0f;
             float m_ContextMenuY = 0.0f;
@@ -181,6 +202,7 @@ namespace CCEngine
             ModalMode m_ModalMode = ModalMode::None;
             std::string m_ModalText;
             std::filesystem::path m_ModalTargetPath;
+            std::vector<std::filesystem::path> m_ModalTargetPaths;
 
             float m_ContentTop = 50.0f;
             float m_RowHeight = 26.0f;

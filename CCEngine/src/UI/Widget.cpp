@@ -1,4 +1,5 @@
 #include "Widget.h"
+#include "Events/ApplicationEvent.h"
 #include "Renderer/Renderer2D.h"    
 #include "Renderer/RenderCommand.h" 
 
@@ -104,7 +105,8 @@ namespace CCEngine {
         {
             bool isMouseEvent = (e.GetEventType() == EventType::MouseMoved ||
                 e.GetEventType() == EventType::MouseButtonPressed ||
-                e.GetEventType() == EventType::MouseButtonReleased);
+                e.GetEventType() == EventType::MouseButtonReleased ||
+                e.GetEventType() == EventType::FileDrop);
             float mouseX = 0.0f, mouseY = 0.0f;
             if (isMouseEvent)
             {
@@ -122,6 +124,11 @@ namespace CCEngine {
                 {
                     MouseButtonReleasedEvent& mre = static_cast<MouseButtonReleasedEvent&>(e);
                     mouseX = mre.GetX(); mouseY = mre.GetY();
+                }
+                else if (e.GetEventType() == EventType::FileDrop)
+                {
+                    FileDropEvent& fde = static_cast<FileDropEvent&>(e);
+                    mouseX = fde.GetX(); mouseY = fde.GetY();
                 }
             }
 

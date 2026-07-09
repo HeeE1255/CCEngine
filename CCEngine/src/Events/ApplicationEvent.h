@@ -1,6 +1,8 @@
 #pragma once
 #include "Core.h" // CC_API (__declspec) 매크로가 정의된 파일
 #include "Events/Event.h"
+#include <filesystem>
+#include <vector>
 
 namespace CCEngine {
 
@@ -37,6 +39,26 @@ namespace CCEngine {
         WindowCloseEvent() = default;
 
         virtual EventType GetEventType() const override { return EventType::WindowClose; }
+    };
+
+    class CC_API FileDropEvent : public Event
+    {
+    public:
+        FileDropEvent(std::vector<std::filesystem::path> paths, float x, float y)
+            : m_Paths(std::move(paths)), m_MouseX(x), m_MouseY(y)
+        {
+        }
+
+        const std::vector<std::filesystem::path>& GetPaths() const { return m_Paths; }
+        float GetX() const { return m_MouseX; }
+        float GetY() const { return m_MouseY; }
+
+        virtual EventType GetEventType() const override { return EventType::FileDrop; }
+
+    private:
+        std::vector<std::filesystem::path> m_Paths;
+        float m_MouseX = 0.0f;
+        float m_MouseY = 0.0f;
     };
 
 }

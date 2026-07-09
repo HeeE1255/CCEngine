@@ -1,11 +1,16 @@
 #include "UI/AssetBrowserPanel.h"
+#define NOMINMAX
+#include <Windows.h>
+#include <shellapi.h>
 #include "Core/AssetDatabase.h"
 #include "Renderer/UIRenderer.h"
 #include "Renderer/Texture.h"
 #include "Application.h"
 #include "Core/Window.h"
+#include "Events/ApplicationEvent.h"
 #include "Events/KeyEvent.h"
 #include "stb_image.h"
+#include <windows.h>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -89,9 +94,83 @@ namespace CCEngine
                 return result;
             }
 
+            class ScopedUIClip
+            {
+            public:
+                ScopedUIClip(float x, float y, float width, float height)
+                    : m_Enabled(width > 0.0f && height > 0.0f)
+                {
+                    if (m_Enabled)
+                        UIRenderer::SetClipRect(x, y, width, height);
+                }
+
+                ~ScopedUIClip()
+                {
+                    if (m_Enabled)
+                        UIRenderer::ClearClipRect();
+                }
+
+            private:
+                bool m_Enabled = false;
+            };
+
+            bool IsMetaFile(const std::filesystem::path& path)
+            {
+                std::string extension = path.extension().string();
+                std::transform(extension.begin(), extension.end(), extension.begin(),
+                    [](unsigned char c) { return (char)std::tolower(c); });
+                return extension == ".meta";
+            }
+
+            bool CopyExternalPathWithoutMeta(const std::filesystem::path& source, const std::filesystem::path& destination)
+            {
+                std::error_code ec;
+                if (IsMetaFile(source))
+                    return false;
+
+                if (std::filesystem::is_directory(source, ec) && !ec)
+                {
+                    std::filesystem::create_directories(destination, ec);
+                    if (ec)
+                        return false;
+
+                    for (const auto& child : std::filesystem::directory_iterator(
+                        source,
+                        std::filesystem::directory_options::skip_permission_denied,
+                        ec))
+                    {
+                        if (ec)
+                            return false;
+
+                        const std::filesystem::path childDestination = destination / child.path().filename();
+                        if (!CopyExternalPathWithoutMeta(child.path(), childDestination))
+                            return false;
+                    }
+
+                    return true;
+                }
+
+                if (std::filesystem::is_regular_file(source, ec) && !ec)
+                {
+                    std::filesystem::create_directories(destination.parent_path(), ec);
+                    if (ec)
+                        return false;
+
+                    std::filesystem::copy_file(source, destination, std::filesystem::copy_options::none, ec);
+                    return !ec;
+                }
+
+                return false;
+            }
+
             void HashCombine(uint64_t& seed, uint64_t value)
             {
                 seed ^= value + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
+            }
+
+            bool IsKeyHeld(int virtualKey)
+            {
+                return (GetAsyncKeyState(virtualKey) & 0x8000) != 0;
             }
         }
 
@@ -130,10 +209,13 @@ namespace CCEngine
 
             m_Entries.clear();
             m_ViewEntries.clear();
-            m_SelectedIndex = -1;
+            ClearSelection();
             m_HoveredIndex = -1;
             m_LastClickedIndex = -1;
             m_ContextMenuVisible = false;
+            m_IsMouseDownOnEmptyContent = false;
+            m_IsDraggingSelectionBox = false;
+            m_SelectionBeforeBox.clear();
 
             if (!std::filesystem::exists(m_CurrentDirectory))
             {
@@ -186,6 +268,80 @@ namespace CCEngine
 
             ApplyFilter();
             UpdateDirectoryWatchState();
+        }
+
+        bool AssetBrowserPanel::ImportExternalPaths(const std::vector<std::filesystem::path>& sourcePaths, float mouseX, float mouseY)
+        {
+            if (sourcePaths.empty() || !IsPointInside(mouseX, mouseY))
+                return false;
+
+            if (!IsPathInsideRoot(m_CurrentDirectory, true))
+                return false;
+
+            bool importedAny = false;
+            std::vector<std::filesystem::path> importedPaths;
+
+            for (const auto& sourcePath : sourcePaths)
+            {
+                std::error_code ec;
+                if (IsMetaFile(sourcePath) || !std::filesystem::exists(sourcePath, ec) || ec)
+                    continue;
+
+                const bool isDirectory = std::filesystem::is_directory(sourcePath, ec) && !ec;
+                const bool isFile = std::filesystem::is_regular_file(sourcePath, ec) && !ec;
+                if (!isDirectory && !isFile)
+                    continue;
+
+                std::filesystem::path destination = isDirectory
+                    ? MakeUniquePath(m_CurrentDirectory, sourcePath.filename().string(), "")
+                    : MakeUniquePath(m_CurrentDirectory, sourcePath.stem().string(), sourcePath.extension().string());
+
+                auto sourceCanonical = std::filesystem::weakly_canonical(sourcePath, ec);
+                if (ec)
+                    continue;
+
+                auto destinationCanonical = std::filesystem::weakly_canonical(destination.parent_path(), ec) / destination.filename();
+                if (ec)
+                    continue;
+
+                if (sourceCanonical == destinationCanonical)
+                    continue;
+
+                // Explorer에서 들어오는 파일은 외부 원본을 프로젝트 안으로 복사하는 import다.
+                // 외부 .meta는 복사하지 않고, AssetDatabase가 현재 프로젝트용 GUID를 새로 만들게 둔다.
+                if (!CopyExternalPathWithoutMeta(sourceCanonical, destination))
+                    continue;
+
+                importedAny = true;
+                importedPaths.push_back(destination);
+            }
+
+            if (!importedAny)
+                return false;
+
+            AssetDatabase::MarkDirty(m_RootDirectory);
+            m_TreeChildCache.clear();
+            Refresh(true);
+
+            ClearSelection();
+            for (const auto& importedPath : importedPaths)
+            {
+                for (int i = 0; i < (int)m_ViewEntries.size(); ++i)
+                {
+                    std::error_code ec;
+                    if (std::filesystem::equivalent(m_ViewEntries[i].Path, importedPath, ec) && !ec)
+                        m_SelectedIndices.insert(i);
+                }
+            }
+            if (!m_SelectedIndices.empty())
+            {
+                m_SelectedIndex = *m_SelectedIndices.begin();
+                m_AnchorSelectedIndex = m_SelectedIndex;
+            }
+
+            std::cout << "[AssetBrowser] Imported " << importedPaths.size() << " external asset(s) into "
+                << m_CurrentDirectory.string() << std::endl;
+            return true;
         }
 
         void AssetBrowserPanel::BuildTreeEntries()
@@ -326,6 +482,7 @@ namespace CCEngine
             if (extension == ".ccprefab") return AssetType::Prefab;
             if (extension == ".fbx" || extension == ".obj" || extension == ".gltf" || extension == ".glb") return AssetType::Model;
             if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".tga") return AssetType::Texture;
+            if (extension == ".cs") return AssetType::Script;
             return AssetType::Unknown;
         }
 
@@ -338,6 +495,7 @@ namespace CCEngine
                 case AssetType::Prefab: return "PFB";
                 case AssetType::Model: return "MDL";
                 case AssetType::Texture: return "TEX";
+                case AssetType::Script: return "C#";
                 default: return "???";
             }
         }
@@ -350,6 +508,7 @@ namespace CCEngine
                 case AssetType::Prefab: return "prefab";
                 case AssetType::Model: return "model";
                 case AssetType::Texture: return "texture";
+                case AssetType::Script: return "script";
                 case AssetType::Folder: return "folder";
                 default: return "unknown";
             }
@@ -373,6 +532,15 @@ namespace CCEngine
                 case AssetType::Model:
                     if (m_OnModelSelected) m_OnModelSelected(path);
                     break;
+                case AssetType::Script:
+                {
+                    // 스크립트는 운영체제에 연결된 Visual Studio나 코드 편집기로 연다.
+                    auto result = reinterpret_cast<intptr_t>(
+                        ShellExecuteW(nullptr, L"open", entry.Path.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+                    if (result <= 32)
+                        std::cout << "[AssetBrowser] Failed to open script: " << path << std::endl;
+                    break;
+                }
                 default:
                     std::cout << "[AssetBrowser] No action for asset: " << path << std::endl;
                     break;
@@ -386,19 +554,7 @@ namespace CCEngine
 
         bool AssetBrowserPanel::RequestDeleteSelectedAsset()
         {
-            if (m_SelectedIndex < 0 || m_SelectedIndex >= (int)m_ViewEntries.size())
-                return false;
-
-            const auto& entry = m_ViewEntries[m_SelectedIndex];
-            if (entry.DisplayName == ".." || entry.Type == AssetType::Unknown)
-                return false;
-
-            std::error_code ec;
-            auto target = std::filesystem::weakly_canonical(entry.Path, ec);
-            if (ec || !std::filesystem::exists(target))
-                return false;
-
-            if (!IsPathInsideRoot(target, false))
+            if (GetSelectedEntries().empty())
                 return false;
 
             BeginDeleteSelected();
@@ -407,17 +563,27 @@ namespace CCEngine
 
         bool AssetBrowserPanel::RecycleSelectedAsset()
         {
-            if (m_ModalTargetPath.empty())
+            if (m_ModalTargetPaths.empty())
                 return false;
 
-            if (!IsPathInsideRoot(m_ModalTargetPath, false))
+            bool anyDeleted = false;
+            for (const auto& path : m_ModalTargetPaths)
+            {
+                if (!IsPathInsideRoot(path, false))
+                    continue;
+
+                if (AssetDatabase::RecycleAsset(path))
+                {
+                    anyDeleted = true;
+                    std::cout << "[AssetBrowser] Asset moved to recycle bin: " << path.string() << std::endl;
+                }
+            }
+
+            if (!anyDeleted)
                 return false;
 
-            if (!AssetDatabase::RecycleAsset(m_ModalTargetPath))
-                return false;
-
-            std::cout << "[AssetBrowser] Asset moved to recycle bin: " << m_ModalTargetPath.string() << std::endl;
             CancelModal();
+            ClearSelection();
             Refresh(true);
             return true;
         }
@@ -493,33 +659,42 @@ namespace CCEngine
             m_ModalMode = ModalMode::CreateFolder;
             m_ModalText = MakeUniquePath(m_CurrentDirectory, "New Folder", "").filename().string();
             m_ModalTargetPath.clear();
+            m_ModalTargetPaths.clear();
         }
 
         void AssetBrowserPanel::BeginRenameSelected()
         {
-            if (m_SelectedIndex < 0 || m_SelectedIndex >= (int)m_ViewEntries.size())
+            auto selected = GetSelectedEntries();
+            if (selected.size() != 1)
                 return;
 
-            const auto& entry = m_ViewEntries[m_SelectedIndex];
+            const auto& entry = selected.front();
             if (entry.DisplayName == "..")
                 return;
 
             m_ContextMenuVisible = false;
             m_ModalMode = ModalMode::Rename;
             m_ModalTargetPath = entry.Path;
+            m_ModalTargetPaths.clear();
             m_ModalText = entry.Path.filename().string();
         }
 
         void AssetBrowserPanel::BeginDeleteSelected()
         {
-            if (m_SelectedIndex < 0 || m_SelectedIndex >= (int)m_ViewEntries.size())
+            auto selected = GetSelectedEntries();
+            if (selected.empty())
                 return;
 
-            const auto& entry = m_ViewEntries[m_SelectedIndex];
             m_ContextMenuVisible = false;
             m_ModalMode = ModalMode::ConfirmDelete;
-            m_ModalTargetPath = entry.Path;
-            m_ModalText = entry.DisplayName;
+            m_ModalTargetPath.clear();
+            m_ModalTargetPaths.clear();
+            for (const AssetEntry& entry : selected)
+                m_ModalTargetPaths.push_back(entry.Path);
+
+            m_ModalText = selected.size() == 1
+                ? selected.front().DisplayName
+                : std::to_string(selected.size()) + " assets selected";
         }
 
         void AssetBrowserPanel::CancelModal()
@@ -527,6 +702,7 @@ namespace CCEngine
             m_ModalMode = ModalMode::None;
             m_ModalText.clear();
             m_ModalTargetPath.clear();
+            m_ModalTargetPaths.clear();
         }
 
         bool AssetBrowserPanel::ConfirmNameModal()
@@ -689,6 +865,39 @@ namespace CCEngine
             return index;
         }
 
+        bool AssetBrowserPanel::GetEntryBounds(int index, float& x, float& y, float& w, float& h) const
+        {
+            if (index < 0 || index >= (int)m_ViewEntries.size())
+                return false;
+
+            float contentX = m_CalculatedPos.x + m_TreeWidth + 14.0f;
+            float contentY = m_CalculatedPos.y + m_ContentTop + 10.0f;
+
+            if (m_IconSizeStep == 0)
+            {
+                x = contentX;
+                y = contentY + (float)index * (m_RowHeight + m_RowGap) - m_ScrollState.ScrollY;
+                w = (std::max)(1.0f, m_CalculatedSize.x - m_TreeWidth - 40.0f);
+                h = m_RowHeight;
+                return true;
+            }
+
+            const float iconSizes[5] = { 18.0f, 32.0f, 48.0f, 72.0f, 96.0f };
+            float iconSize = iconSizes[(std::clamp)(m_IconSizeStep, 0, 4)];
+            float cellW = iconSize + 58.0f;
+            float cellH = iconSize + 42.0f;
+            float viewW = (std::max)(1.0f, m_CalculatedSize.x - m_TreeWidth - 34.0f);
+            int columns = (std::max)(1, (int)(viewW / cellW));
+
+            int col = index % columns;
+            int row = index / columns;
+            x = contentX + (float)col * cellW;
+            y = contentY + (float)row * cellH - m_ScrollState.ScrollY;
+            w = cellW - 8.0f;
+            h = cellH - 4.0f;
+            return true;
+        }
+
         int AssetBrowserPanel::GetTreeIndexAt(float mouseX, float mouseY) const
         {
             if (!IsTreePoint(mouseX, mouseY))
@@ -792,7 +1001,7 @@ namespace CCEngine
 
             m_SearchQuery = query;
             ApplyFilter();
-            m_SelectedIndex = -1;
+            ClearSelection();
             m_HoveredIndex = -1;
             m_LastClickedIndex = -1;
             m_ScrollState.ScrollY = 0.0f;
@@ -830,6 +1039,132 @@ namespace CCEngine
                     m_ViewEntries.push_back(entry);
                 }
             }
+        }
+
+        bool AssetBrowserPanel::IsEntrySelected(int index) const
+        {
+            return m_SelectedIndices.find(index) != m_SelectedIndices.end();
+        }
+
+        void AssetBrowserPanel::ClearSelection()
+        {
+            m_SelectedIndices.clear();
+            m_SelectedIndex = -1;
+            m_AnchorSelectedIndex = -1;
+        }
+
+        void AssetBrowserPanel::SelectSingle(int index)
+        {
+            m_SelectedIndices.clear();
+            if (index >= 0 && index < (int)m_ViewEntries.size())
+            {
+                m_SelectedIndices.insert(index);
+                m_SelectedIndex = index;
+                m_AnchorSelectedIndex = index;
+                return;
+            }
+
+            m_SelectedIndex = -1;
+            m_AnchorSelectedIndex = -1;
+        }
+
+        void AssetBrowserPanel::ToggleSelection(int index)
+        {
+            if (index < 0 || index >= (int)m_ViewEntries.size())
+                return;
+
+            // Ctrl 선택은 기존 선택을 유지하면서 해당 항목만 켜고 끈다.
+            // 마지막 포커스 항목은 우클릭/더블클릭 기준으로 계속 사용한다.
+            if (IsEntrySelected(index))
+                m_SelectedIndices.erase(index);
+            else
+                m_SelectedIndices.insert(index);
+
+            m_SelectedIndex = index;
+            if (m_AnchorSelectedIndex < 0)
+                m_AnchorSelectedIndex = index;
+        }
+
+        void AssetBrowserPanel::SelectRange(int index)
+        {
+            if (index < 0 || index >= (int)m_ViewEntries.size())
+                return;
+
+            if (m_AnchorSelectedIndex < 0 || m_AnchorSelectedIndex >= (int)m_ViewEntries.size())
+                m_AnchorSelectedIndex = index;
+
+            m_SelectedIndices.clear();
+            int begin = (std::min)(m_AnchorSelectedIndex, index);
+            int end = (std::max)(m_AnchorSelectedIndex, index);
+            for (int i = begin; i <= end; ++i)
+            {
+                if (m_ViewEntries[i].DisplayName != "..")
+                    m_SelectedIndices.insert(i);
+            }
+
+            m_SelectedIndex = index;
+        }
+
+        void AssetBrowserPanel::UpdateSelectionBox(float mouseX, float mouseY)
+        {
+            m_SelectionBoxCurrentX = mouseX;
+            m_SelectionBoxCurrentY = mouseY;
+
+            float left = (std::min)(m_SelectionBoxStartX, m_SelectionBoxCurrentX);
+            float right = (std::max)(m_SelectionBoxStartX, m_SelectionBoxCurrentX);
+            float top = (std::min)(m_SelectionBoxStartY, m_SelectionBoxCurrentY);
+            float bottom = (std::max)(m_SelectionBoxStartY, m_SelectionBoxCurrentY);
+
+            if (m_SelectionBoxAdditive)
+                m_SelectedIndices = m_SelectionBeforeBox;
+            else
+                m_SelectedIndices.clear();
+
+            for (int i = 0; i < (int)m_ViewEntries.size(); ++i)
+            {
+                if (m_ViewEntries[i].DisplayName == "..")
+                    continue;
+
+                float x = 0.0f;
+                float y = 0.0f;
+                float w = 0.0f;
+                float h = 0.0f;
+                if (!GetEntryBounds(i, x, y, w, h))
+                    continue;
+
+                bool intersects = x <= right && x + w >= left && y <= bottom && y + h >= top;
+                if (intersects)
+                {
+                    m_SelectedIndices.insert(i);
+                    m_SelectedIndex = i;
+                    if (m_AnchorSelectedIndex < 0)
+                        m_AnchorSelectedIndex = i;
+                }
+            }
+
+            if (m_SelectedIndices.empty() && !m_SelectionBoxAdditive)
+                m_SelectedIndex = -1;
+        }
+
+        std::vector<AssetBrowserPanel::AssetEntry> AssetBrowserPanel::GetSelectedEntries() const
+        {
+            std::vector<AssetEntry> entries;
+            std::vector<int> indices(m_SelectedIndices.begin(), m_SelectedIndices.end());
+            std::sort(indices.begin(), indices.end());
+
+            for (int index : indices)
+            {
+                if (index < 0 || index >= (int)m_ViewEntries.size())
+                    continue;
+
+                const AssetEntry& entry = m_ViewEntries[index];
+                if (entry.DisplayName == ".." || entry.Type == AssetType::Unknown)
+                    continue;
+
+                entries.push_back(entry);
+            }
+
+            return entries;
         }
 
         std::filesystem::path AssetBrowserPanel::MakeUniquePath(const std::filesystem::path& directory, const std::string& baseName, const std::string& extension) const
@@ -980,6 +1315,24 @@ namespace CCEngine
 
             Refresh(true);
             return true;
+        }
+
+        bool AssetBrowserPanel::MoveSelectedEntriesToDirectory(const std::filesystem::path& targetDirectory)
+        {
+            std::vector<AssetEntry> selected = GetSelectedEntries();
+            if (selected.empty())
+                return false;
+
+            bool movedAny = false;
+            for (const AssetEntry& entry : selected)
+            {
+                if (MoveEntryToDirectory(entry, targetDirectory))
+                    movedAny = true;
+            }
+
+            if (movedAny)
+                ClearSelection();
+            return movedAny;
         }
 
         void AssetBrowserPanel::StepIconSize(int direction)
@@ -1135,6 +1488,10 @@ namespace CCEngine
                     iconColor = { 0.54f, 0.40f, 0.58f, 1.0f };
                     label = "TEX";
                     break;
+                case AssetType::Script:
+                    iconColor = { 0.28f, 0.48f, 0.72f, 1.0f };
+                    label = "C#";
+                    break;
                 default:
                     break;
             }
@@ -1264,42 +1621,47 @@ namespace CCEngine
             UIRenderer::DrawRectFilled(contentX, treeY, contentW, treeH, { 0.095f, 0.095f, 0.10f, 1.0f });
 
             float treeItemY = treeY + 6.0f - m_TreeScrollState.ScrollY;
-            for (size_t i = 0; i < m_TreeEntries.size(); ++i)
             {
-                float currentY = treeItemY + (float)i * 22.0f;
-                if (currentY + 22.0f < treeY || currentY > treeY + treeH)
-                    continue;
-
-                bool current = std::filesystem::equivalent(m_TreeEntries[i].Path, m_CurrentDirectory, ec);
-                ec.clear();
-                bool hovered = Widget::IsCurrentRenderWindowMouseActive() &&
-                    !Widget::IsMouseInteractionActive() &&
-                    mouseX >= treeX && mouseX <= treeX + m_TreeWidth &&
-                    mouseY >= currentY && mouseY <= currentY + 22.0f &&
-                    !IsMouseBlockedByWidgetAbove(mouseX, mouseY);
-
-                if (current)
-                    UIRenderer::DrawRectFilled(treeX + 2.0f, currentY, m_TreeWidth - 16.0f, 22.0f, { 0.18f, 0.30f, 0.42f, 1.0f });
-                else if (hovered)
-                    UIRenderer::DrawRectFilled(treeX + 2.0f, currentY, m_TreeWidth - 16.0f, 22.0f, { 0.20f, 0.20f, 0.21f, 1.0f });
-
-                float indent = 10.0f + (float)m_TreeEntries[i].Depth * 14.0f;
-                if (m_TreeEntries[i].HasChildren)
+                // 트리 목록은 직접 그리는 영역이라 창 클립만으로는 잘리지 않는다.
+                // 스크롤되는 항목은 트리 본문 안에서만 보이도록 별도 클립을 건다.
+                ScopedUIClip treeClip(treeX, treeY, (std::max)(0.0f, m_TreeWidth - 12.0f), treeH);
+                for (size_t i = 0; i < m_TreeEntries.size(); ++i)
                 {
-                    bool expanded = m_ExpandedTreeFolders.find(GetTreeKey(m_TreeEntries[i].Path)) != m_ExpandedTreeFolders.end();
-                    UIRenderer::DrawString(expanded ? "v" : ">", treeX + indent, currentY + 17.0f, { 0.68f, 0.68f, 0.68f, 1.0f });
+                    float currentY = treeItemY + (float)i * 22.0f;
+                    if (currentY + 22.0f < treeY || currentY > treeY + treeH)
+                        continue;
+
+                    bool current = std::filesystem::equivalent(m_TreeEntries[i].Path, m_CurrentDirectory, ec);
+                    ec.clear();
+                    bool hovered = Widget::IsCurrentRenderWindowMouseActive() &&
+                        !Widget::IsMouseInteractionActive() &&
+                        mouseX >= treeX && mouseX <= treeX + m_TreeWidth &&
+                        mouseY >= currentY && mouseY <= currentY + 22.0f &&
+                        !IsMouseBlockedByWidgetAbove(mouseX, mouseY);
+
+                    if (current)
+                        UIRenderer::DrawRectFilled(treeX + 2.0f, currentY, m_TreeWidth - 16.0f, 22.0f, { 0.18f, 0.30f, 0.42f, 1.0f });
+                    else if (hovered)
+                        UIRenderer::DrawRectFilled(treeX + 2.0f, currentY, m_TreeWidth - 16.0f, 22.0f, { 0.20f, 0.20f, 0.21f, 1.0f });
+
+                    float indent = 10.0f + (float)m_TreeEntries[i].Depth * 14.0f;
+                    if (m_TreeEntries[i].HasChildren)
+                    {
+                        bool expanded = m_ExpandedTreeFolders.find(GetTreeKey(m_TreeEntries[i].Path)) != m_ExpandedTreeFolders.end();
+                        UIRenderer::DrawString(expanded ? "v" : ">", treeX + indent, currentY + 17.0f, { 0.68f, 0.68f, 0.68f, 1.0f });
+                    }
+
+                    UIRenderer::DrawRectFilled(treeX + indent + 14.0f, currentY + 6.0f, 11.0f, 9.0f, { 0.70f, 0.70f, 0.70f, 1.0f });
+
+                    std::string treeLabel = m_TreeEntries[i].DisplayName;
+                    float labelX = treeX + indent + 30.0f;
+                    float availableW = (std::max)(12.0f, (treeX + m_TreeWidth - 16.0f) - labelX);
+                    size_t maxChars = (size_t)(availableW / 7.0f);
+                    if (maxChars > 3 && treeLabel.size() > maxChars)
+                        treeLabel = treeLabel.substr(0, maxChars - 3) + "...";
+
+                    UIRenderer::DrawString(treeLabel, labelX, currentY + 17.0f, { 0.82f, 0.82f, 0.82f, 1.0f });
                 }
-
-                UIRenderer::DrawRectFilled(treeX + indent + 14.0f, currentY + 6.0f, 11.0f, 9.0f, { 0.70f, 0.70f, 0.70f, 1.0f });
-
-                std::string treeLabel = m_TreeEntries[i].DisplayName;
-                float labelX = treeX + indent + 30.0f;
-                float availableW = (std::max)(12.0f, (treeX + m_TreeWidth - 16.0f) - labelX);
-                size_t maxChars = (size_t)(availableW / 7.0f);
-                if (maxChars > 3 && treeLabel.size() > maxChars)
-                    treeLabel = treeLabel.substr(0, maxChars - 3) + "...";
-
-                UIRenderer::DrawString(treeLabel, labelX, currentY + 17.0f, { 0.82f, 0.82f, 0.82f, 1.0f });
             }
 
             if (m_TreeScrollState.GetMaxScroll() > 0.0f)
@@ -1315,6 +1677,10 @@ namespace CCEngine
             float startX = contentX + 8.0f;
             float startY = treeY + 10.0f - m_ScrollState.ScrollY;
 
+            {
+                // 오른쪽 파일 목록도 직접 렌더링한다.
+                // 큰 아이콘 모드에서 위아래로 넘친 부분은 본문 밖으로 그리지 않는다.
+                ScopedUIClip contentClip(contentX, treeY, (std::max)(0.0f, contentW - 16.0f), treeH);
                 if (m_IconSizeStep == 0)
                 {
                     // 0단계는 예전 리스트 모드다. 많은 파일 이름을 빠르게 훑을 때 쓴다.
@@ -1334,7 +1700,7 @@ namespace CCEngine
                         m_HoveredIndex = (int)i;
 
                     DirectX::XMFLOAT4 rowColor = { 0.13f, 0.13f, 0.14f, 1.0f };
-                    if ((int)i == m_SelectedIndex) rowColor = { 0.18f, 0.30f, 0.42f, 1.0f };
+                    if (IsEntrySelected((int)i)) rowColor = { 0.18f, 0.30f, 0.42f, 1.0f };
                     else if (hovered) rowColor = { 0.20f, 0.20f, 0.21f, 1.0f };
 
                     UIRenderer::DrawRectFilled(startX, currentY, rowWidth, m_RowHeight, rowColor);
@@ -1369,7 +1735,7 @@ namespace CCEngine
                     if (hovered)
                         m_HoveredIndex = (int)i;
 
-                    if ((int)i == m_SelectedIndex)
+                    if (IsEntrySelected((int)i))
                         UIRenderer::DrawRectFilled(cellX, cellY, cellW - 8.0f, cellH - 4.0f, { 0.18f, 0.30f, 0.42f, 1.0f });
                     else if (hovered)
                         UIRenderer::DrawRectFilled(cellX, cellY, cellW - 8.0f, cellH - 4.0f, { 0.18f, 0.18f, 0.19f, 1.0f });
@@ -1386,13 +1752,31 @@ namespace CCEngine
                 }
             }
 
-            if (m_ViewEntries.empty())
-                UIRenderer::DrawString(m_SearchQuery.empty() ? "No supported assets found." : "No assets match search.", contentX + 12.0f, treeY + 28.0f, { 0.65f, 0.65f, 0.65f, 1.0f });
+                if (m_ViewEntries.empty())
+                    UIRenderer::DrawString(m_SearchQuery.empty() ? "No supported assets found." : "No assets match search.", contentX + 12.0f, treeY + 28.0f, { 0.65f, 0.65f, 0.65f, 1.0f });
+
+                if (m_IsDraggingSelectionBox)
+                {
+                    float left = (std::min)(m_SelectionBoxStartX, m_SelectionBoxCurrentX);
+                    float right = (std::max)(m_SelectionBoxStartX, m_SelectionBoxCurrentX);
+                    float top = (std::min)(m_SelectionBoxStartY, m_SelectionBoxCurrentY);
+                    float bottom = (std::max)(m_SelectionBoxStartY, m_SelectionBoxCurrentY);
+
+                    // 빈 공간 드래그 선택은 상용 에디터에서 자주 쓰는 선택 방식이다.
+                    // 반투명 면과 외곽선을 같이 그려서 선택 범위를 바로 알 수 있게 한다.
+                    UIRenderer::DrawRectFilled(left, top, right - left, bottom - top, { 0.20f, 0.42f, 0.70f, 0.22f });
+                    UIRenderer::DrawRect({ left, top }, { right - left, bottom - top }, { 0.35f, 0.58f, 0.86f, 0.85f });
+                }
+            }
 
             if (m_IsDraggingAsset && m_DragEntryIndex >= 0 && m_DragEntryIndex < (int)m_ViewEntries.size())
             {
+                size_t dragCount = GetSelectedEntries().size();
+                std::string dragLabel = dragCount > 1
+                    ? std::to_string(dragCount) + " assets"
+                    : m_ViewEntries[m_DragEntryIndex].DisplayName;
                 UIRenderer::DrawRectFilled(mouseX + 12.0f, mouseY + 12.0f, 130.0f, 24.0f, { 0.10f, 0.10f, 0.11f, 0.9f });
-                UIRenderer::DrawString(m_ViewEntries[m_DragEntryIndex].DisplayName, mouseX + 18.0f, mouseY + 30.0f, { 0.9f, 0.9f, 0.9f, 1.0f });
+                UIRenderer::DrawString(dragLabel, mouseX + 18.0f, mouseY + 30.0f, { 0.9f, 0.9f, 0.9f, 1.0f });
             }
 
             if (m_ScrollState.GetMaxScroll() > 0.0f)
@@ -1467,6 +1851,16 @@ namespace CCEngine
         {
             if (!m_IsVisible)
                 return false;
+
+            if (e.GetEventType() == EventType::FileDrop)
+            {
+                auto& dropEvent = static_cast<FileDropEvent&>(e);
+                if (ImportExternalPaths(dropEvent.GetPaths(), dropEvent.GetX(), dropEvent.GetY()))
+                {
+                    e.Handled = true;
+                    return true;
+                }
+            }
 
             if (m_ContextMenuVisible && Widget::IsMouseInteractionActive())
                 m_ContextMenuVisible = false;
@@ -1737,6 +2131,7 @@ namespace CCEngine
 
                 if (me.GetButton() == 0 && IsTreePoint(me.GetX(), me.GetY()))
                 {
+                    ClearSelection();
                     int index = GetTreeIndexAt(me.GetX(), me.GetY());
                     if (index >= 0 && index < (int)m_TreeEntries.size())
                     {
@@ -1769,26 +2164,52 @@ namespace CCEngine
 
                     if (index >= 0 && index < (int)m_ViewEntries.size())
                     {
+                        m_IsMouseDownOnEmptyContent = false;
+                        m_IsDraggingSelectionBox = false;
                         auto now = std::chrono::steady_clock::now();
                         bool isDoubleClick = m_LastClickedIndex == index &&
                             (now - m_LastClickTime) < std::chrono::milliseconds(450);
+                        bool ctrl = IsKeyHeld(VK_CONTROL);
+                        bool shift = IsKeyHeld(VK_SHIFT);
 
-                        m_SelectedIndex = index;
-                        if (isDoubleClick)
+                        if (shift)
+                            SelectRange(index);
+                        else if (ctrl)
+                            ToggleSelection(index);
+                        else if (!IsEntrySelected(index))
+                            SelectSingle(index);
+                        else
+                            m_SelectedIndex = index;
+
+                        if (isDoubleClick && !ctrl && !shift)
                         {
                             ActivateEntry(m_ViewEntries[index]);
                             m_IsMouseDownOnEntry = false;
                         }
                         else
                         {
-                            m_IsMouseDownOnEntry = true;
-                            m_DragEntryIndex = index;
+                            m_IsMouseDownOnEntry = IsEntrySelected(index);
+                            m_DragEntryIndex = m_IsMouseDownOnEntry ? index : -1;
                             m_DragStartX = me.GetX();
                             m_DragStartY = me.GetY();
                         }
 
                         m_LastClickedIndex = index;
                         m_LastClickTime = now;
+                    }
+                    else
+                    {
+                        bool additive = IsKeyHeld(VK_CONTROL) || IsKeyHeld(VK_SHIFT);
+                        m_IsMouseDownOnEmptyContent = true;
+                        m_IsDraggingSelectionBox = false;
+                        m_SelectionBoxAdditive = additive;
+                        m_SelectionBeforeBox = m_SelectedIndices;
+                        m_SelectionBoxStartX = me.GetX();
+                        m_SelectionBoxStartY = me.GetY();
+                        m_SelectionBoxCurrentX = me.GetX();
+                        m_SelectionBoxCurrentY = me.GetY();
+                        if (!additive)
+                            ClearSelection();
                     }
 
                     e.Handled = true;
@@ -1801,17 +2222,22 @@ namespace CCEngine
                     m_ContextMenuItems.clear();
                     if (index >= 0 && index < (int)m_ViewEntries.size())
                     {
-                        m_SelectedIndex = index;
+                        if (!IsEntrySelected(index))
+                            SelectSingle(index);
+                        else
+                            m_SelectedIndex = index;
+
                         const auto& entry = m_ViewEntries[index];
                         if (entry.DisplayName != ".." && entry.Type != AssetType::Unknown)
                         {
-                            m_ContextMenuItems.push_back("Rename");
+                            if (GetSelectedEntries().size() == 1)
+                                m_ContextMenuItems.push_back("Rename");
                             m_ContextMenuItems.push_back("Delete");
                         }
                     }
                     else
                     {
-                        m_SelectedIndex = -1;
+                        ClearSelection();
                         m_ContextMenuItems.push_back("Create Folder");
                     }
 
@@ -1877,6 +2303,23 @@ namespace CCEngine
                 return true;
             }
 
+            if (e.GetEventType() == EventType::MouseMoved && m_IsMouseDownOnEmptyContent)
+            {
+                auto& me = static_cast<MouseMovedEvent&>(e);
+                float dx = me.GetX() - m_SelectionBoxStartX;
+                float dy = me.GetY() - m_SelectionBoxStartY;
+
+                if (!m_IsDraggingSelectionBox && (dx * dx + dy * dy) > 16.0f)
+                    m_IsDraggingSelectionBox = true;
+
+                if (m_IsDraggingSelectionBox)
+                {
+                    UpdateSelectionBox(me.GetX(), me.GetY());
+                    e.Handled = true;
+                    return true;
+                }
+            }
+
             if (e.GetEventType() == EventType::MouseMoved && m_IsMouseDownOnEntry && m_DragEntryIndex >= 0)
             {
                 auto& me = static_cast<MouseMovedEvent&>(e);
@@ -1919,27 +2362,49 @@ namespace CCEngine
                     return true;
                 }
 
+                if (me.GetButton() == 0 && m_IsMouseDownOnEmptyContent)
+                {
+                    if (m_IsDraggingSelectionBox)
+                        UpdateSelectionBox(me.GetX(), me.GetY());
+                    else if (!m_SelectionBoxAdditive)
+                        ClearSelection();
+
+                    m_IsMouseDownOnEmptyContent = false;
+                    m_IsDraggingSelectionBox = false;
+                    m_SelectionBeforeBox.clear();
+                    e.Handled = true;
+                    return true;
+                }
+
                 if (me.GetButton() == 0 && m_IsMouseDownOnEntry)
                 {
                     if (m_IsDraggingAsset && m_DragEntryIndex >= 0 && m_DragEntryIndex < (int)m_ViewEntries.size())
                     {
                         const auto& entry = m_ViewEntries[m_DragEntryIndex];
+                        std::vector<AssetEntry> selected = GetSelectedEntries();
+                        if (selected.empty())
+                            selected.push_back(entry);
+
                         bool movedInsideBrowser = false;
 
                         int treeIndex = GetTreeIndexAt(me.GetX(), me.GetY());
                         if (treeIndex >= 0 && treeIndex < (int)m_TreeEntries.size())
-                            movedInsideBrowser = MoveEntryToDirectory(entry, m_TreeEntries[treeIndex].Path);
+                            movedInsideBrowser = MoveSelectedEntriesToDirectory(m_TreeEntries[treeIndex].Path);
 
                         if (!movedInsideBrowser)
                         {
                             int targetIndex = GetEntryIndexAt(me.GetX(), me.GetY());
                             if (targetIndex >= 0 && targetIndex < (int)m_ViewEntries.size() && m_ViewEntries[targetIndex].Type == AssetType::Folder)
-                                movedInsideBrowser = MoveEntryToDirectory(entry, m_ViewEntries[targetIndex].Path);
+                                movedInsideBrowser = MoveSelectedEntriesToDirectory(m_ViewEntries[targetIndex].Path);
                         }
 
-                        if (!movedInsideBrowser && entry.Type != AssetType::Folder && m_OnAssetDropped)
+                        if (!movedInsideBrowser && m_OnAssetDropped)
                         {
-                            m_OnAssetDropped(entry.Path.string(), GetTypeKey(entry.Type), me.GetX(), me.GetY());
+                            for (const AssetEntry& selectedEntry : selected)
+                            {
+                                if (selectedEntry.Type != AssetType::Folder)
+                                    m_OnAssetDropped(selectedEntry.Path.string(), GetTypeKey(selectedEntry.Type), me.GetX(), me.GetY());
+                            }
                         }
                     }
 

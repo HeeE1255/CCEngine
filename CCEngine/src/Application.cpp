@@ -66,7 +66,8 @@ namespace CCEngine
                 type == EventType::MouseButtonReleased ||
                 type == EventType::MouseScrolled ||
                 type == EventType::KeyPressed ||
-                type == EventType::TextInput;
+                type == EventType::TextInput ||
+                type == EventType::FileDrop;
         }
     }
 

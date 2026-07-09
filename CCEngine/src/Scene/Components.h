@@ -81,6 +81,14 @@ namespace CCEngine
         }
     };
 
+    struct ScriptComponent
+    {
+        // 파일 경로가 아니라 전체 클래스명을 저장한다. 네임스페이스가 바뀌지 않으면 파일 이동과 무관하게 찾을 수 있다.
+        std::string ClassName = "Game.MoveUp";
+        bool Enabled = true;
+        bool RuntimeInstanceCreated = false;
+    };
+
     // 2D 강체 컴포넌트 (물리적인 몸체)
     struct Rigidbody2DComponent
     {

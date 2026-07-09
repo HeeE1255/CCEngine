@@ -29,7 +29,9 @@ namespace
         if (ec)
             return;
 
-        if (std::filesystem::exists(current / "assets", ec) && !ec)
+        // assets 폴더만으로 프로젝트를 판정하면 솔루션 루트의 임시 폴더를 잘못 선택할 수 있다.
+        if (std::filesystem::exists(current / "project.ccproject", ec) && !ec &&
+            std::filesystem::exists(current / "assets", ec) && !ec)
             return;
 
         // 에디터 리소스는 Sandbox/assets를 기준으로 둔다.
@@ -44,7 +46,8 @@ namespace
         for (const auto& candidate : candidates)
         {
             ec.clear();
-            if (std::filesystem::exists(candidate / "assets", ec) && !ec)
+            if (std::filesystem::exists(candidate / "project.ccproject", ec) && !ec &&
+                std::filesystem::exists(candidate / "assets", ec) && !ec)
             {
                 std::filesystem::current_path(candidate, ec);
                 return;

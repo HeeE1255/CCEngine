@@ -9,8 +9,16 @@
 #include "UI/TextInput.h"
 #include "Scene/Components.h"
 #include "Renderer/MeshFactory.h"
+#include "Core/AssetDatabase.h"
+#include "Core/ConsoleLog.h"
+#include "Scripting/ScriptCompiler.h"
+#include "Utils/PlatformUtils.h"
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
+#include <fstream>
+#include <regex>
+#include <set>
 #include <vector>
 
 namespace CCEngine
@@ -40,6 +48,11 @@ namespace CCEngine
             m_AddComponentMenu = nullptr;
             m_ComponentSearchInput = nullptr;
             m_ComponentButtons.clear();
+            m_PreviousComponentPage = nullptr;
+            m_ComponentPageLabel = nullptr;
+            m_NextComponentPage = nullptr;
+            m_ComponentFilter.clear();
+            m_ComponentPage = 0;
 
             if (!m_SelectedEntity) return;
 
@@ -75,7 +88,11 @@ namespace CCEngine
             m_ComponentSearchInput->SetAnchorMax(1.0f, 0.0f);
             m_ComponentSearchInput->SetOffsetMin(6.0f, 6.0f);
             m_ComponentSearchInput->SetOffsetMax(-6.0f, 32.0f);
-            m_ComponentSearchInput->SetOnTextChanged([this](const std::string& query) { FilterAddComponentMenu(query); });
+            m_ComponentSearchInput->SetOnTextChanged([this](const std::string& query)
+                {
+                    m_ComponentPage = 0;
+                    FilterAddComponentMenu(query);
+                });
             m_AddComponentMenu->AddChild(m_ComponentSearchInput);
 
             auto addCandidate = [this](const std::string& name, AddComponentType type, bool alreadyExists)
@@ -93,6 +110,29 @@ namespace CCEngine
             addCandidate("Sprite Renderer", AddComponentType::SpriteRenderer, m_SelectedEntity.HasComponent<SpriteRendererComponent>());
             addCandidate("Rigidbody 2D", AddComponentType::Rigidbody2D, m_SelectedEntity.HasComponent<Rigidbody2DComponent>());
             addCandidate("Box Collider 2D", AddComponentType::BoxCollider2D, m_SelectedEntity.HasComponent<BoxCollider2DComponent>());
+            addCandidate("New C# Script...", AddComponentType::Script, m_SelectedEntity.HasComponent<ScriptComponent>());
+
+            if (!m_SelectedEntity.HasComponent<ScriptComponent>())
+            {
+                for (const std::string& className : DiscoverScriptClasses())
+                {
+                    auto button = new UI::Button("Attach" + className, className);
+                    button->SetOnClick([this, className]() { AttachExistingScript(className); });
+                    m_AddComponentMenu->AddChild(button);
+                    m_ComponentButtons.emplace_back(button, "C# Script " + className);
+                }
+            }
+
+            m_PreviousComponentPage = new UI::Button("PreviousComponentPage", "<");
+            m_PreviousComponentPage->SetOnClick([this]() { ChangeComponentPage(-1); });
+            m_AddComponentMenu->AddChild(m_PreviousComponentPage);
+
+            m_ComponentPageLabel = new UI::Button("ComponentPageLabel", "1 / 1");
+            m_AddComponentMenu->AddChild(m_ComponentPageLabel);
+
+            m_NextComponentPage = new UI::Button("NextComponentPage", ">");
+            m_NextComponentPage->SetOnClick([this]() { ChangeComponentPage(1); });
+            m_AddComponentMenu->AddChild(m_NextComponentPage);
             FilterAddComponentMenu("");
         }
 
@@ -110,9 +150,21 @@ namespace CCEngine
                     case AddComponentType::SpriteRenderer: return "Sprite Renderer";
                     case AddComponentType::Rigidbody2D: return "Rigidbody 2D";
                     case AddComponentType::BoxCollider2D: return "Box Collider 2D";
+                    case AddComponentType::Script: return "C# Script";
                     default: return "Component";
                 }
             };
+
+            if (type == AddComponentType::Script)
+            {
+                m_AddComponentMenu->SetVisible(false);
+                if (CreateAndAttachScript())
+                {
+                    CommitStructureChange();
+                    RequestRebuild();
+                }
+                return;
+            }
 
             // 컴포넌트 추가도 Undo/Redo 대상이라 변경 전후를 에디터 레이어에 알려준다.
             BeginStructureChange(std::string("Add ") + componentName(type));
@@ -144,11 +196,163 @@ namespace CCEngine
                 case AddComponentType::SpriteRenderer: m_SelectedEntity.AddComponent<SpriteRendererComponent>(); break;
                 case AddComponentType::Rigidbody2D: m_SelectedEntity.AddComponent<Rigidbody2DComponent>(); break;
                 case AddComponentType::BoxCollider2D: m_SelectedEntity.AddComponent<BoxCollider2DComponent>(); break;
+                case AddComponentType::Script: break;
             }
 
             m_AddComponentMenu->SetVisible(false);
             CommitStructureChange();
             RequestRebuild();
+        }
+
+        bool InspectorPanel::CreateAndAttachScript()
+        {
+            if (!m_SelectedEntity || m_SelectedEntity.GetScene()->GetState() != SceneState::Edit)
+            {
+                ConsoleLog::Warning("Stop Play Mode before creating a C# script.");
+                return false;
+            }
+
+            const auto scriptsDirectory = std::filesystem::current_path() / "assets" / "Scripts" / "Game";
+            std::error_code ec;
+            std::filesystem::create_directories(scriptsDirectory, ec);
+            if (ec)
+            {
+                ConsoleLog::Error("Failed to create the script directory: " + scriptsDirectory.string());
+                return false;
+            }
+
+            const std::string initialDirectory = scriptsDirectory.string();
+            std::string filepath = PlatformUtils::SaveFile(
+                "C# Script (*.cs)\0*.cs\0",
+                initialDirectory.c_str());
+            if (filepath.empty())
+                return false;
+
+            std::filesystem::path scriptPath = std::filesystem::absolute(filepath).lexically_normal();
+            std::filesystem::path assetsRoot = std::filesystem::absolute(
+                std::filesystem::current_path() / "assets").lexically_normal();
+            std::filesystem::path relative = std::filesystem::relative(scriptPath, assetsRoot, ec);
+            if (ec || relative.empty() || relative.begin()->string() == "..")
+            {
+                ConsoleLog::Error("C# scripts must be saved inside the project assets folder.");
+                return false;
+            }
+
+            std::string className = scriptPath.stem().string();
+            className.erase(
+                std::remove_if(className.begin(), className.end(),
+                    [](unsigned char c) { return !std::isalnum(c) && c != '_'; }),
+                className.end());
+            if (className.empty())
+                className = "NewScript";
+            if (std::isdigit(static_cast<unsigned char>(className.front())))
+                className.insert(className.begin(), '_');
+
+            std::ofstream output(scriptPath, std::ios::trunc);
+            if (!output.is_open())
+            {
+                ConsoleLog::Error("Failed to create C# script: " + scriptPath.string());
+                return false;
+            }
+
+            output <<
+                "using CCEngine;\n\n"
+                "namespace Game\n"
+                "{\n"
+                "    public sealed class " << className << " : GameScript\n"
+                "    {\n"
+                "        protected override void OnCreate()\n"
+                "        {\n"
+                "            // Play가 시작되어 이 스크립트가 생성될 때 한 번 호출됩니다.\n"
+                "        }\n\n"
+                "        protected override void OnUpdate(float deltaTime)\n"
+                "        {\n"
+                "            // Play 중 매 프레임 호출되며 deltaTime은 이전 프레임부터 흐른 시간입니다.\n"
+                "        }\n\n"
+                "        protected override void OnDestroy()\n"
+                "        {\n"
+                "            // Play가 끝나거나 스크립트 인스턴스가 제거될 때 한 번 호출됩니다.\n"
+                "        }\n"
+                "    }\n"
+                "}\n";
+            output.close();
+
+            BeginStructureChange("Add C# Script");
+            auto& script = m_SelectedEntity.AddComponent<ScriptComponent>();
+            script.ClassName = "Game." + className;
+            script.Enabled = true;
+            script.RuntimeInstanceCreated = false;
+
+            AssetDatabase::EnsureMetaFile(scriptPath);
+            AssetDatabase::MarkDirty(assetsRoot);
+            ScriptCompiler::RequestCompile();
+            ConsoleLog::Info("C# script created and attached: " + scriptPath.string());
+            return true;
+        }
+
+        void InspectorPanel::AttachExistingScript(const std::string& className)
+        {
+            if (!m_SelectedEntity || m_SelectedEntity.HasComponent<ScriptComponent>())
+                return;
+            if (m_SelectedEntity.GetScene()->GetState() != SceneState::Edit)
+            {
+                ConsoleLog::Warning("Stop Play Mode before attaching a C# script.");
+                return;
+            }
+
+            BeginStructureChange("Add C# Script");
+            auto& script = m_SelectedEntity.AddComponent<ScriptComponent>();
+            script.ClassName = className;
+            script.Enabled = true;
+            script.RuntimeInstanceCreated = false;
+            CommitStructureChange();
+
+            m_AddComponentMenu->SetVisible(false);
+            ScriptCompiler::RequestCompile();
+            ConsoleLog::Info("C# script attached: " + className);
+            RequestRebuild();
+        }
+
+        std::vector<std::string> InspectorPanel::DiscoverScriptClasses() const
+        {
+            std::set<std::string> classes;
+            const auto gameScripts = std::filesystem::current_path() / "assets" / "Scripts" / "Game";
+            std::error_code ec;
+            if (!std::filesystem::exists(gameScripts, ec))
+                return {};
+
+            // 주석 안의 class 문구를 후보로 오인하지 않도록 검색 전에 주석을 걷어낸다.
+            const std::regex blockComment(R"(/\*[\s\S]*?\*/)");
+            const std::regex lineComment(R"(//[^\r\n]*)");
+            const std::regex namespacePattern(R"(\bnamespace\s+([A-Za-z_][A-Za-z0-9_.]*))");
+            const std::regex classPattern(
+                R"(\bclass\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*[^{;\r\n]*\bGameScript\b)");
+
+            for (const auto& entry : std::filesystem::recursive_directory_iterator(gameScripts, ec))
+            {
+                if (ec)
+                    break;
+                if (!entry.is_regular_file() || entry.path().extension() != ".cs")
+                    continue;
+
+                std::ifstream input(entry.path(), std::ios::binary);
+                std::string source((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+                source = std::regex_replace(source, blockComment, " ");
+                source = std::regex_replace(source, lineComment, " ");
+
+                std::string scriptNamespace;
+                std::smatch namespaceMatch;
+                if (std::regex_search(source, namespaceMatch, namespacePattern))
+                    scriptNamespace = namespaceMatch[1].str();
+
+                for (std::sregex_iterator it(source.begin(), source.end(), classPattern), end; it != end; ++it)
+                {
+                    std::string className = (*it)[1].str();
+                    classes.insert(scriptNamespace.empty() ? className : scriptNamespace + "." + className);
+                }
+            }
+
+            return { classes.begin(), classes.end() };
         }
 
         void InspectorPanel::BeginStructureChange(const std::string& label)
@@ -167,27 +371,78 @@ namespace CCEngine
 
         void InspectorPanel::FilterAddComponentMenu(const std::string& query)
         {
+            m_ComponentFilter = query;
             std::string lowerQuery = query;
             std::transform(lowerQuery.begin(), lowerQuery.end(), lowerQuery.begin(),
                 [](unsigned char c) { return (char)std::tolower(c); });
 
-            float currentY = 38.0f;
+            std::vector<Button*> matches;
             for (auto& [button, name] : m_ComponentButtons)
             {
                 std::string lowerName = name;
                 std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(),
                     [](unsigned char c) { return (char)std::tolower(c); });
                 bool visible = lowerQuery.empty() || lowerName.find(lowerQuery) != std::string::npos;
-                button->SetVisible(visible);
-                if (!visible) continue;
+                button->SetVisible(false);
+                if (visible)
+                    matches.push_back(button);
+            }
+
+            const size_t pageCount = (std::max<size_t>)(1, (matches.size() + ComponentPageSize - 1) / ComponentPageSize);
+            m_ComponentPage = (std::min)(m_ComponentPage, pageCount - 1);
+            const size_t first = m_ComponentPage * ComponentPageSize;
+            const size_t last = (std::min)(first + ComponentPageSize, matches.size());
+
+            float currentY = 38.0f;
+            for (size_t index = first; index < last; ++index)
+            {
+                Button* button = matches[index];
+                button->SetVisible(true);
                 button->SetAnchorMin(0.0f, 0.0f);
                 button->SetAnchorMax(1.0f, 0.0f);
                 button->SetOffsetMin(6.0f, currentY);
                 button->SetOffsetMax(-6.0f, currentY + 26.0f);
                 currentY += 28.0f;
             }
+
+            const bool showPager = pageCount > 1;
+            if (m_PreviousComponentPage && m_ComponentPageLabel && m_NextComponentPage)
+            {
+                m_PreviousComponentPage->SetVisible(showPager);
+                m_ComponentPageLabel->SetVisible(showPager);
+                m_NextComponentPage->SetVisible(showPager);
+                if (showPager)
+                {
+                    m_PreviousComponentPage->SetAnchorMin(0.0f, 0.0f);
+                    m_PreviousComponentPage->SetAnchorMax(0.0f, 0.0f);
+                    m_PreviousComponentPage->SetOffsetMin(6.0f, currentY);
+                    m_PreviousComponentPage->SetOffsetMax(42.0f, currentY + 26.0f);
+
+                    m_ComponentPageLabel->SetAnchorMin(0.0f, 0.0f);
+                    m_ComponentPageLabel->SetAnchorMax(1.0f, 0.0f);
+                    m_ComponentPageLabel->SetOffsetMin(46.0f, currentY);
+                    m_ComponentPageLabel->SetOffsetMax(-46.0f, currentY + 26.0f);
+                    m_ComponentPageLabel->SetText(
+                        std::to_string(m_ComponentPage + 1) + " / " + std::to_string(pageCount));
+
+                    m_NextComponentPage->SetAnchorMin(1.0f, 0.0f);
+                    m_NextComponentPage->SetAnchorMax(1.0f, 0.0f);
+                    m_NextComponentPage->SetOffsetMin(-42.0f, currentY);
+                    m_NextComponentPage->SetOffsetMax(-6.0f, currentY + 26.0f);
+                    currentY += 30.0f;
+                }
+            }
             if (m_AddComponentMenu)
                 m_AddComponentMenu->SetSize(m_AddComponentMenu->GetSize().x, currentY + 6.0f);
+        }
+
+        void InspectorPanel::ChangeComponentPage(int direction)
+        {
+            if (direction < 0 && m_ComponentPage > 0)
+                --m_ComponentPage;
+            else if (direction > 0)
+                ++m_ComponentPage;
+            FilterAddComponentMenu(m_ComponentFilter);
         }
 
         void InspectorPanel::OnUpdate(float deltaTime)

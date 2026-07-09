@@ -3,6 +3,7 @@
 #include "Scene/Entity.h"
 #include "Renderer/Renderer2D.h"
 #include "Renderer/Renderer3D.h"
+#include "Scripting/ScriptEngine.h"
 #include <box2d/box2d.h>
 #include <algorithm>
 #include <functional>
@@ -101,6 +102,13 @@ namespace CCEngine
                 dstNsc.InstantiateScript = srcNsc.InstantiateScript;
                 dstNsc.DestroyScript = srcNsc.DestroyScript;
             }
+
+            if (srcEntity.HasComponent<ScriptComponent>())
+            {
+                auto script = srcEntity.GetComponent<ScriptComponent>();
+                script.RuntimeInstanceCreated = false;
+                dstEntity.AddComponent<ScriptComponent>(script);
+            }
         }
     }
 
@@ -128,6 +136,9 @@ namespace CCEngine
         entt::entity handle = (entt::entity)entity;
         if (handle == entt::null || !m_Registry.valid(handle))
             return;
+
+        if (m_State == SceneState::Play && m_Registry.all_of<ScriptComponent>(handle))
+            ScriptEngine::DestroyInstance(static_cast<uint32_t>(handle));
 
         if (m_Registry.all_of<RelationshipComponent>(handle))
         {
@@ -357,6 +368,13 @@ namespace CCEngine
                     dstNsc.InstantiateScript = srcNsc.InstantiateScript;
                     dstNsc.DestroyScript = srcNsc.DestroyScript;
                 }
+
+                if (srcEntity.HasComponent<ScriptComponent>())
+                {
+                    auto script = srcEntity.GetComponent<ScriptComponent>();
+                    script.RuntimeInstanceCreated = false;
+                    dstEntity.AddComponent<ScriptComponent>(script);
+                }
             });
 
         newScene->GetRegistry().view<RelationshipComponent>().each([&](auto dstHandle, auto& rel)
@@ -451,6 +469,17 @@ namespace CCEngine
                 bc2d.RuntimeShapeId = b2CreatePolygonShape(rb2d.RuntimeBodyId, &shapeDef, &box);
             }
         }
+
+        if (ScriptEngine::Start(this))
+        {
+            auto scriptView = m_Registry.view<ScriptComponent>();
+            for (auto entityID : scriptView)
+            {
+                auto& script = scriptView.get<ScriptComponent>(entityID);
+                script.RuntimeInstanceCreated = script.Enabled && !script.ClassName.empty() &&
+                    ScriptEngine::CreateInstance(static_cast<uint32_t>(entityID), script.ClassName.c_str());
+            }
+        }
     }
 
     // ====================================================================
@@ -458,6 +487,13 @@ namespace CCEngine
     // ====================================================================
     void Scene::OnRuntimeStop()
     {
+        // 관리 객체를 먼저 정리해야 OnDestroy에서 아직 살아 있는 엔티티 컴포넌트에 접근할 수 있다.
+        ScriptEngine::Stop();
+        m_Registry.view<ScriptComponent>().each([](auto, auto& script)
+            {
+                script.RuntimeInstanceCreated = false;
+            });
+
         m_State = SceneState::Edit;
 
         if (b2World_IsValid(m_PhysicsWorldId))
@@ -508,6 +544,12 @@ namespace CCEngine
                         nsc.Instance->OnCreate();
                     }
                     nsc.Instance->OnUpdate(deltaTime);
+                });
+
+            m_Registry.view<ScriptComponent>().each([=](auto entityID, auto& script)
+                {
+                    if (script.Enabled && script.RuntimeInstanceCreated)
+                        ScriptEngine::UpdateInstance(static_cast<uint32_t>(entityID), deltaTime);
                 });
         } 
 

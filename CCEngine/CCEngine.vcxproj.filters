@@ -37,6 +37,9 @@
     <Filter Include="src\Scene">
       <UniqueIdentifier>{0A06D2B3-7670-862A-BFAE-37D02B58647F}</UniqueIdentifier>
     </Filter>
+    <Filter Include="src\Scripting">
+      <UniqueIdentifier>{6FBC2D98-DB7C-A9CE-A4B7-F24B1037EEAA}</UniqueIdentifier>
+    </Filter>
     <Filter Include="src\UI">
       <UniqueIdentifier>{3A4B661C-26ED-90F2-0FA8-A446FBE81743}</UniqueIdentifier>
     </Filter>
@@ -60,25 +63,25 @@
     <ClInclude Include="src\Core.h">
       <Filter>src</Filter>
     </ClInclude>
+    <ClInclude Include="src\Core\AssetDatabase.h">
+      <Filter>src\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Core\ConsoleLog.h">
+      <Filter>src\Core</Filter>
+    </ClInclude>
     <ClInclude Include="src\Core\Layer.h">
       <Filter>src\Core</Filter>
     </ClInclude>
     <ClInclude Include="src\Core\LayerStack.h">
       <Filter>src\Core</Filter>
     </ClInclude>
-    <ClInclude Include="src\Core\ConsoleLog.h">
-      <Filter>src\Core</Filter>
-    </ClInclude>
-    <ClInclude Include="src\Core\AssetDatabase.h">
-      <Filter>src\Core</Filter>
-    </ClInclude>
-    <ClInclude Include="src\Core\ProjectSettings.h">
-      <Filter>src\Core</Filter>
-    </ClInclude>
     <ClInclude Include="src\Core\Memory.h">
       <Filter>src\Core</Filter>
     </ClInclude>
     <ClInclude Include="src\Core\MemoryMacro.h">
+      <Filter>src\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Core\ProjectSettings.h">
       <Filter>src\Core</Filter>
     </ClInclude>
     <ClInclude Include="src\Core\Window.h">
@@ -93,10 +96,19 @@
     <ClInclude Include="src\Editor\EditorUndoManager.h">
       <Filter>src\Editor</Filter>
     </ClInclude>
+    <ClInclude Include="src\Editor\GizmoSystem.h">
+      <Filter>src\Editor</Filter>
+    </ClInclude>
     <ClInclude Include="src\EntryPoint.h">
       <Filter>src</Filter>
     </ClInclude>
+    <ClInclude Include="src\Events\ApplicationEvent.h">
+      <Filter>src\Events</Filter>
+    </ClInclude>
     <ClInclude Include="src\Events\Event.h">
+      <Filter>src\Events</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Events\KeyEvent.h">
       <Filter>src\Events</Filter>
     </ClInclude>
     <ClInclude Include="src\Events\MouseEvent.h">
@@ -177,6 +189,9 @@
     <ClInclude Include="src\Renderer\RendererAPI.h">
       <Filter>src\Renderer</Filter>
     </ClInclude>
+    <ClInclude Include="src\Renderer\RendererHandle.h">
+      <Filter>src\Renderer</Filter>
+    </ClInclude>
     <ClInclude Include="src\Renderer\Shader.h">
       <Filter>src\Renderer</Filter>
     </ClInclude>
@@ -204,28 +219,31 @@
     <ClInclude Include="src\Scene\ScriptableEntity.h">
       <Filter>src\Scene</Filter>
     </ClInclude>
+    <ClInclude Include="src\Scripting\ScriptCompiler.h">
+      <Filter>src\Scripting</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Scripting\ScriptEngine.h">
+      <Filter>src\Scripting</Filter>
+    </ClInclude>
+    <ClInclude Include="src\UI\AssetBrowserPanel.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
     <ClInclude Include="src\UI\Button.h">
       <Filter>src\UI</Filter>
     </ClInclude>
     <ClInclude Include="src\UI\ConsolePanel.h">
       <Filter>src\UI</Filter>
     </ClInclude>
-    <ClInclude Include="src\UI\KeyBindingInput.h">
-      <Filter>src\UI</Filter>
-    </ClInclude>
-    <ClInclude Include="src\UI\KeyBindingPickerPanel.h">
-      <Filter>src\UI</Filter>
-    </ClInclude>
-    <ClInclude Include="src\UI\ProjectSettingsPanel.h">
-      <Filter>src\UI</Filter>
-    </ClInclude>
-    <ClInclude Include="src\UI\TextInput.h">
-      <Filter>src\UI</Filter>
-    </ClInclude>
-    <ClInclude Include="src\UI\AssetBrowserPanel.h">
+    <ClInclude Include="src\UI\DockManager.h">
       <Filter>src\UI</Filter>
     </ClInclude>
     <ClInclude Include="src\UI\DragFloat.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
+    <ClInclude Include="src\UI\DragFloat3.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
+    <ClInclude Include="src\UI\DragFloat4.h">
       <Filter>src\UI</Filter>
     </ClInclude>
     <ClInclude Include="src\UI\EditorRootUI.h">
@@ -240,10 +258,31 @@
     <ClInclude Include="src\UI\ImageWidget.h">
       <Filter>src\UI</Filter>
     </ClInclude>
+    <ClInclude Include="src\UI\InspectorItem.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
     <ClInclude Include="src\UI\InspectorPanel.h">
       <Filter>src\UI</Filter>
     </ClInclude>
+    <ClInclude Include="src\UI\InspectorRegistry.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
+    <ClInclude Include="src\UI\InspectorUtils.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
+    <ClInclude Include="src\UI\KeyBindingInput.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
+    <ClInclude Include="src\UI\KeyBindingPickerPanel.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
     <ClInclude Include="src\UI\Panel.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
+    <ClInclude Include="src\UI\ProjectSettingsPanel.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
+    <ClInclude Include="src\UI\TextInput.h">
       <Filter>src\UI</Filter>
     </ClInclude>
     <ClInclude Include="src\UI\VBoxContainer.h">
@@ -267,30 +306,6 @@
     <ClInclude Include="vendor\stb_truetype\stb_truetype.h">
       <Filter>vendor\stb_truetype</Filter>
     </ClInclude>
-    <ClInclude Include="src\UI\InspectorItem.h">
-      <Filter>src\UI</Filter>
-    </ClInclude>
-    <ClInclude Include="src\UI\DragFloat3.h">
-      <Filter>src\UI</Filter>
-    </ClInclude>
-    <ClInclude Include="src\UI\DragFloat4.h">
-      <Filter>src\UI</Filter>
-    </ClInclude>
-    <ClInclude Include="src\UI\DockManager.h">
-      <Filter>src\UI</Filter>
-    </ClInclude>
-    <ClInclude Include="src\UI\InspectorRegistry.h">
-      <Filter>src\UI</Filter>
-    </ClInclude>
-    <ClInclude Include="src\UI\InspectorUtils.h">
-      <Filter>src\UI</Filter>
-    </ClInclude>
-    <ClInclude Include="src\Editor\GizmoSystem.h">
-      <Filter>src\Editor</Filter>
-    </ClInclude>
-    <ClInclude Include="src\Events\ApplicationEvent.h">
-      <Filter>src\Events</Filter>
-    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\Animation\Animator.cpp">
@@ -299,22 +314,22 @@
     <ClCompile Include="src\Application.cpp">
       <Filter>src</Filter>
     </ClCompile>
+    <ClCompile Include="src\Core\AssetDatabase.cpp">
+      <Filter>src\Core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Core\ConsoleLog.cpp">
+      <Filter>src\Core</Filter>
+    </ClCompile>
     <ClCompile Include="src\Core\Layer.cpp">
       <Filter>src\Core</Filter>
     </ClCompile>
     <ClCompile Include="src\Core\LayerStack.cpp">
       <Filter>src\Core</Filter>
     </ClCompile>
-    <ClCompile Include="src\Core\ConsoleLog.cpp">
-      <Filter>src\Core</Filter>
-    </ClCompile>
-    <ClCompile Include="src\Core\AssetDatabase.cpp">
+    <ClCompile Include="src\Core\Memory.cpp">
       <Filter>src\Core</Filter>
     </ClCompile>
     <ClCompile Include="src\Core\ProjectSettings.cpp">
-      <Filter>src\Core</Filter>
-    </ClCompile>
-    <ClCompile Include="src\Core\Memory.cpp">
       <Filter>src\Core</Filter>
     </ClCompile>
     <ClCompile Include="src\Core\Window.cpp">
@@ -327,6 +342,9 @@
       <Filter>src\Editor</Filter>
     </ClCompile>
     <ClCompile Include="src\Editor\EditorUndoManager.cpp">
+      <Filter>src\Editor</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Editor\GizmoSystem.cpp">
       <Filter>src\Editor</Filter>
     </ClCompile>
     <ClCompile Include="src\Platform\DirectX11\DX11Buffer.cpp">
@@ -422,6 +440,12 @@
     <ClCompile Include="src\Scene\SceneSerializer.cpp">
       <Filter>src\Scene</Filter>
     </ClCompile>
+    <ClCompile Include="src\Scripting\ScriptCompiler.cpp">
+      <Filter>src\Scripting</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Scripting\ScriptEngine.cpp">
+      <Filter>src\Scripting</Filter>
+    </ClCompile>
     <ClCompile Include="src\UI\AssetBrowserPanel.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
@@ -431,19 +455,16 @@
     <ClCompile Include="src\UI\ConsolePanel.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
-    <ClCompile Include="src\UI\KeyBindingInput.cpp">
-      <Filter>src\UI</Filter>
-    </ClCompile>
-    <ClCompile Include="src\UI\KeyBindingPickerPanel.cpp">
-      <Filter>src\UI</Filter>
-    </ClCompile>
-    <ClCompile Include="src\UI\ProjectSettingsPanel.cpp">
-      <Filter>src\UI</Filter>
-    </ClCompile>
-    <ClCompile Include="src\UI\TextInput.cpp">
+    <ClCompile Include="src\UI\DockManager.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
     <ClCompile Include="src\UI\DragFloat.cpp">
+      <Filter>src\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UI\DragFloat3.cpp">
+      <Filter>src\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UI\DragFloat4.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
     <ClCompile Include="src\UI\EditorRootUI.cpp">
@@ -458,10 +479,28 @@
     <ClCompile Include="src\UI\ImageWidget.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
+    <ClCompile Include="src\UI\InspectorItem.cpp">
+      <Filter>src\UI</Filter>
+    </ClCompile>
     <ClCompile Include="src\UI\InspectorPanel.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
+    <ClCompile Include="src\UI\InspectorUtils.cpp">
+      <Filter>src\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UI\KeyBindingInput.cpp">
+      <Filter>src\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UI\KeyBindingPickerPanel.cpp">
+      <Filter>src\UI</Filter>
+    </ClCompile>
     <ClCompile Include="src\UI\Panel.cpp">
+      <Filter>src\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UI\ProjectSettingsPanel.cpp">
+      <Filter>src\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UI\TextInput.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
     <ClCompile Include="src\UI\VBoxContainer.cpp">
@@ -481,24 +520,6 @@
     </ClCompile>
     <ClCompile Include="vendor\stb_truetype\stb_truetype.cpp">
       <Filter>vendor\stb_truetype</Filter>
-    </ClCompile>
-    <ClCompile Include="src\UI\DragFloat3.cpp">
-      <Filter>src\UI</Filter>
-    </ClCompile>
-    <ClCompile Include="src\UI\DragFloat4.cpp">
-      <Filter>src\UI</Filter>
-    </ClCompile>
-    <ClCompile Include="src\UI\InspectorItem.cpp">
-      <Filter>src\UI</Filter>
-    </ClCompile>
-    <ClCompile Include="src\UI\InspectorUtils.cpp">
-      <Filter>src\UI</Filter>
-    </ClCompile>
-    <ClCompile Include="src\UI\DockManager.cpp">
-      <Filter>src\UI</Filter>
-    </ClCompile>
-    <ClCompile Include="src\Editor\GizmoSystem.cpp">
-      <Filter>src\Editor</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>

@@ -146,6 +146,13 @@ namespace CCEngine
                 entityData["BoxCollider2DComponent"]["Friction"] = collider.Friction;
                 entityData["BoxCollider2DComponent"]["Restitution"] = collider.Restitution;
             }
+
+            if (entity.HasComponent<ScriptComponent>())
+            {
+                const auto& script = entity.GetComponent<ScriptComponent>();
+                entityData["ScriptComponent"]["ClassName"] = script.ClassName;
+                entityData["ScriptComponent"]["Enabled"] = script.Enabled;
+            }
         }
 
         void ApplyEntityComponents(Entity entity, const nlohmann::json& entityData)
@@ -271,6 +278,17 @@ namespace CCEngine
                 collider.Density = colliderData["Density"].get<float>();
                 collider.Friction = colliderData["Friction"].get<float>();
                 collider.Restitution = colliderData["Restitution"].get<float>();
+            }
+
+            if (entityData.contains("ScriptComponent"))
+            {
+                const auto& scriptData = entityData["ScriptComponent"];
+                auto& script = entity.HasComponent<ScriptComponent>() ?
+                    entity.GetComponent<ScriptComponent>() : entity.AddComponent<ScriptComponent>();
+                script.ClassName = scriptData.value("ClassName", "");
+                script.Enabled = scriptData.value("Enabled", true);
+                // 관리 객체는 Play 시작 때 새로 만든다. 이전 실행의 핸들은 파일에 저장하지 않는다.
+                script.RuntimeInstanceCreated = false;
             }
         }
 

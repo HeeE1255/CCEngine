@@ -5,6 +5,7 @@
 #include "Utils/PlatformUtils.h"
 #include "UI/Button.h"
 #include "UI/InspectorPanel.h"
+#include "UI/TextInput.h"
 #include <iostream>
 #include <cmath>
 #include <type_traits>
@@ -385,6 +386,36 @@ namespace CCEngine {
                         [entity]() mutable { return entity.GetComponent<BoxCollider2DComponent>().Restitution; },
                         [entity](float v) mutable { entity.GetComponent<BoxCollider2DComponent>().Restitution = v; });
                     AddRemoveComponentButton<BoxCollider2DComponent>(parent, item, entity, "BoxCollider2D");
+                });
+
+            UI::InspectorRegistry::RegisterComponent<ScriptComponent>(
+                [](UI::Widget* parent, CCEngine::Entity entity, ScriptComponent& script)
+                {
+                    auto item = new UI::InspectorItem("ScriptItem", "C# Script");
+                    item->SetAnchorMin(0.0f, 0.0f);
+                    item->SetAnchorMax(1.0f, 0.0f);
+                    parent->AddChild(item);
+
+                    auto className = new UI::TextInput("ScriptClassName", "Namespace.ClassName");
+                    className->SetText(script.ClassName, false);
+                    className->SetOnTextChanged([entity](const std::string& value) mutable
+                        {
+                            if (entity && entity.HasComponent<ScriptComponent>())
+                                entity.GetComponent<ScriptComponent>().ClassName = value;
+                        });
+                    item->AddChild(className);
+
+                    auto enabled = new UI::Button("ScriptEnabled", script.Enabled ? "Enabled" : "Disabled");
+                    enabled->SetOnClick([entity, enabled]() mutable
+                        {
+                            if (!entity || !entity.HasComponent<ScriptComponent>())
+                                return;
+                            auto& component = entity.GetComponent<ScriptComponent>();
+                            component.Enabled = !component.Enabled;
+                            enabled->SetText(component.Enabled ? "Enabled" : "Disabled");
+                        });
+                    item->AddChild(enabled);
+                    AddRemoveComponentButton<ScriptComponent>(parent, item, entity, "Script");
                 });
         }
 

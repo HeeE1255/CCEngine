@@ -17,7 +17,18 @@
 mono_crash.*
 
 # 에셋폴더 전체
-assets/
+/assets/
+/Sandbox/assets/
+!/Sandbox/assets/
+/Sandbox/assets/*
+!/Sandbox/assets/Scripts/
+/Sandbox/assets/Scripts/Build/*
+!/Sandbox/assets/Scripts/Build/CCEngine.ScriptCore.runtimeconfig.json
+!/Sandbox/assets/Scripts/BuildScripts.ps1
+!/Sandbox/assets/Scripts/ScriptCore/
+!/Sandbox/assets/Scripts/ScriptCore/**
+!/Sandbox/assets/Scripts/Game/
+!/Sandbox/assets/Scripts/Game/**
 
 # Build results
 [Dd]ebug/

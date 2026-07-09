@@ -6,9 +6,11 @@
 #include "Events/MouseEvent.h"
 #include "Events/KeyEvent.h"
 #include <iostream>
+#include <shellapi.h>
 #include <windows.h>
 #include <windowsx.h>
 #include <utility>
+#include <vector>
 //#include "imgui.h"
 
 //extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -403,6 +405,54 @@ namespace CCEngine
 		}
 		break;
 
+		case WM_DROPFILES:
+		{
+			ActivateWindowInput(window);
+			if (!window || !IsWindowInputEnabled(window))
+			{
+				DragFinish(reinterpret_cast<HDROP>(wParam));
+				return 0;
+			}
+
+			HDROP dropHandle = reinterpret_cast<HDROP>(wParam);
+			POINT dropPoint = { 0, 0 };
+			DragQueryPoint(dropHandle, &dropPoint);
+
+			std::vector<std::filesystem::path> droppedPaths;
+			UINT fileCount = DragQueryFileW(dropHandle, 0xFFFFFFFF, nullptr, 0);
+			droppedPaths.reserve(fileCount);
+
+			for (UINT i = 0; i < fileCount; ++i)
+			{
+				UINT length = DragQueryFileW(dropHandle, i, nullptr, 0);
+				if (length == 0)
+					continue;
+
+				std::wstring pathText(length + 1, L'\0');
+				DragQueryFileW(dropHandle, i, pathText.data(), length + 1);
+				pathText.resize(length);
+				droppedPaths.emplace_back(pathText);
+			}
+
+			DragFinish(dropHandle);
+
+			if (!droppedPaths.empty())
+			{
+				CCEngine::FileDropEvent e(std::move(droppedPaths), (float)dropPoint.x, (float)dropPoint.y);
+				bool isMainWindow = (CCEngine::Application::Get() &&
+					window == &(CCEngine::Application::Get()->GetWindow()));
+
+				if (isMainWindow)
+					CCEngine::Application::Get()->OnEvent(e);
+
+				if (!e.Handled && window->GetRootUI())
+					window->GetRootUI()->OnEvent(e);
+			}
+
+			return 0;
+		}
+		break;
+
 		case WM_NCCALCSIZE:
 		{
 			// wParam이 TRUE일 때 0을 반환하면, OS가 기본적으로 그리는 창 테두리 영역을 무시하고
@@ -493,6 +543,7 @@ namespace CCEngine
 			CW_USEDEFAULT, CW_USEDEFAULT, m_Data.Width, m_Data.Height,
 			nullptr, nullptr, wc.hInstance, this
 		);
+		DragAcceptFiles(m_Window, TRUE);
 		ShowWindow(m_Window, SW_SHOW);
 
 		m_Context = GraphicsContext::Create(m_Window);
@@ -509,6 +560,7 @@ namespace CCEngine
 
 		if (m_Window)
 		{
+			DragAcceptFiles(m_Window, FALSE);
 			DestroyWindow(m_Window);
 			m_Window = nullptr;
 		}
