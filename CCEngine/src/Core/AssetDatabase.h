@@ -4,6 +4,7 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace CCEngine
 {
@@ -26,6 +27,27 @@ namespace CCEngine
         uint32_t Version = 1;
     };
 
+    struct AssetReferenceIssue
+    {
+        std::filesystem::path SourceFile;
+        std::string JsonLocation;
+        std::string ReferenceKind;
+        std::string Guid;
+        std::string StoredPath;
+        std::string ResolvedPath;
+        std::string Message;
+        bool Repaired = false;
+    };
+
+    struct AssetReferenceValidationReport
+    {
+        uint32_t FilesScanned = 0;
+        uint32_t ReferencesChecked = 0;
+        uint32_t RepairedReferences = 0;
+        uint32_t MissingReferences = 0;
+        std::vector<AssetReferenceIssue> Issues;
+    };
+
     class CC_API AssetDatabase
     {
     public:
@@ -45,6 +67,7 @@ namespace CCEngine
         static bool DeleteAsset(const std::filesystem::path& assetPath);
         static bool RecycleAsset(const std::filesystem::path& assetPath);
         static bool DeleteMetaFile(const std::filesystem::path& assetPath);
+        static AssetReferenceValidationReport ValidateProjectReferences(const std::filesystem::path& rootDirectory = "assets", bool repairFiles = true);
 
         static std::string AssetKindToString(AssetKind kind);
         static AssetKind AssetKindFromString(const std::string& text);

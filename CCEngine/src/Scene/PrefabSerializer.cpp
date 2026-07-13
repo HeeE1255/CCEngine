@@ -183,6 +183,9 @@ namespace CCEngine
                 const auto& script = entity.GetComponent<ScriptComponent>();
                 entityData["ScriptComponent"]["ClassName"] = script.ClassName;
                 entityData["ScriptComponent"]["Enabled"] = script.Enabled;
+                entityData["ScriptComponent"]["Fields"] = nlohmann::json::object();
+                for (const auto& [name, value] : script.FieldOverrides)
+                    entityData["ScriptComponent"]["Fields"][name] = value;
             }
         }
 
@@ -321,6 +324,12 @@ namespace CCEngine
                     entity.GetComponent<ScriptComponent>() : entity.AddComponent<ScriptComponent>();
                 script.ClassName = scriptData.value("ClassName", "");
                 script.Enabled = scriptData.value("Enabled", true);
+                script.FieldOverrides.clear();
+                if (scriptData.contains("Fields") && scriptData["Fields"].is_object())
+                {
+                    for (auto it = scriptData["Fields"].begin(); it != scriptData["Fields"].end(); ++it)
+                        script.FieldOverrides[it.key()] = it.value().get<std::string>();
+                }
                 script.RuntimeInstanceCreated = false;
             }
         }

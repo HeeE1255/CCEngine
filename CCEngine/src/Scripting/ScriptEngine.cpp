@@ -3,11 +3,14 @@
 #include "Scene/Components.h"
 #include "Scene/Entity.h"
 #include "Scene/Scene.h"
+#include "Scripting/ScriptMetadata.h"
+#include "json.hpp"
 
 #include <Windows.h>
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -23,7 +26,7 @@ namespace CCEngine
 
         using ManagedInitializeFn = int(__cdecl*)(void*, void*, void*, const wchar_t*);
         using ManagedShutdownFn = void(__cdecl*)();
-        using ManagedCreateFn = int(__cdecl*)(uint32_t, const char*);
+        using ManagedCreateFn = int(__cdecl*)(uint32_t, const char*, const char*);
         using ManagedDestroyFn = void(__cdecl*)(uint32_t);
         using ManagedUpdateFn = void(__cdecl*)(uint32_t, float);
 
@@ -122,6 +125,73 @@ namespace CCEngine
         {
             if (message)
                 ConsoleLog::Info(std::string("[C#] ") + message);
+        }
+
+        std::vector<float> ParseFloatList(const std::string& text)
+        {
+            std::vector<float> values;
+            std::string token;
+            std::stringstream stream(text);
+            while (std::getline(stream, token, ','))
+            {
+                try { values.push_back(std::stof(token)); }
+                catch (...) { values.push_back(0.0f); }
+            }
+            return values;
+        }
+
+        nlohmann::json BuildFieldOverrideJson(const ScriptComponent& script)
+        {
+            nlohmann::json fields = nlohmann::json::object();
+            const ScriptClassInfo* classInfo = ScriptMetadata::FindClass(script.ClassName);
+            if (!classInfo)
+                return fields;
+
+            for (const auto& field : classInfo->Fields)
+            {
+                auto overrideIt = script.FieldOverrides.find(field.Name);
+                if (overrideIt == script.FieldOverrides.end())
+                    continue;
+
+                const std::string& value = overrideIt->second;
+                try
+                {
+                    // 저장 값은 문자열이지만, C#에 넘길 때는 원래 필드 타입으로 되돌린다.
+                    switch (field.Type)
+                    {
+                    case ScriptFieldType::Float:
+                        fields[field.Name] = std::stof(value);
+                        break;
+                    case ScriptFieldType::Int:
+                        fields[field.Name] = std::stoi(value);
+                        break;
+                    case ScriptFieldType::Bool:
+                        fields[field.Name] = (value == "true" || value == "1" || value == "True");
+                        break;
+                    case ScriptFieldType::String:
+                        fields[field.Name] = value;
+                        break;
+                    case ScriptFieldType::Vector3:
+                    {
+                        auto values = ParseFloatList(value);
+                        fields[field.Name] = {
+                            { "X", values.size() > 0 ? values[0] : 0.0f },
+                            { "Y", values.size() > 1 ? values[1] : 0.0f },
+                            { "Z", values.size() > 2 ? values[2] : 0.0f }
+                        };
+                        break;
+                    }
+                    default:
+                        break;
+                    }
+                }
+                catch (...)
+                {
+                    ConsoleLog::Warning("Invalid script field value: " + script.ClassName + "." + field.Name);
+                }
+            }
+
+            return fields;
         }
 
         bool LoadRuntime()
@@ -237,9 +307,13 @@ namespace CCEngine
         s_Data.ActiveScene = nullptr;
     }
 
-    bool ScriptEngine::CreateInstance(uint32_t entityID, const char* className)
+    bool ScriptEngine::CreateInstance(uint32_t entityID, const ScriptComponent& script)
     {
-        return s_Data.Running && className && s_Data.Create(entityID, className) == 0;
+        if (!s_Data.Running || script.ClassName.empty())
+            return false;
+
+        const std::string fieldsJson = BuildFieldOverrideJson(script).dump();
+        return s_Data.Create(entityID, script.ClassName.c_str(), fieldsJson.c_str()) == 0;
     }
 
     void ScriptEngine::DestroyInstance(uint32_t entityID)

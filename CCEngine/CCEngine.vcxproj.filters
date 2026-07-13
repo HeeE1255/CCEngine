@@ -225,7 +225,13 @@
     <ClInclude Include="src\Scripting\ScriptEngine.h">
       <Filter>src\Scripting</Filter>
     </ClInclude>
+    <ClInclude Include="src\Scripting\ScriptMetadata.h">
+      <Filter>src\Scripting</Filter>
+    </ClInclude>
     <ClInclude Include="src\UI\AssetBrowserPanel.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
+    <ClInclude Include="src\UI\AssetReferenceValidatorPanel.h">
       <Filter>src\UI</Filter>
     </ClInclude>
     <ClInclude Include="src\UI\Button.h">
@@ -280,6 +286,9 @@
       <Filter>src\UI</Filter>
     </ClInclude>
     <ClInclude Include="src\UI\ProjectSettingsPanel.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
+    <ClInclude Include="src\UI\ScriptFieldWidget.h">
       <Filter>src\UI</Filter>
     </ClInclude>
     <ClInclude Include="src\UI\TextInput.h">
@@ -446,7 +455,13 @@
     <ClCompile Include="src\Scripting\ScriptEngine.cpp">
       <Filter>src\Scripting</Filter>
     </ClCompile>
+    <ClCompile Include="src\Scripting\ScriptMetadata.cpp">
+      <Filter>src\Scripting</Filter>
+    </ClCompile>
     <ClCompile Include="src\UI\AssetBrowserPanel.cpp">
+      <Filter>src\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UI\AssetReferenceValidatorPanel.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
     <ClCompile Include="src\UI\Button.cpp">
@@ -498,6 +513,9 @@
       <Filter>src\UI</Filter>
     </ClCompile>
     <ClCompile Include="src\UI\ProjectSettingsPanel.cpp">
+      <Filter>src\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UI\ScriptFieldWidget.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
     <ClCompile Include="src\UI\TextInput.cpp">

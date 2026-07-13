@@ -2,12 +2,16 @@
 #include "UI/InspectorRegistry.h"
 #include "Scene/Components.h"
 #include "Core/AssetDatabase.h"
+#include "Scripting/ScriptMetadata.h"
 #include "Utils/PlatformUtils.h"
 #include "UI/Button.h"
 #include "UI/InspectorPanel.h"
+#include "UI/ScriptFieldWidget.h"
 #include "UI/TextInput.h"
 #include <iostream>
 #include <cmath>
+#include <filesystem>
+#include <sstream>
 #include <type_traits>
 
 namespace CCEngine {
@@ -110,6 +114,48 @@ namespace CCEngine {
                         }
                     });
                 item->AddChild(button);
+            }
+
+            std::string GetScriptFieldValue(const ScriptComponent& script, const ScriptFieldInfo& field)
+            {
+                auto it = script.FieldOverrides.find(field.Name);
+                if (it != script.FieldOverrides.end())
+                    return it->second;
+                return field.DefaultValue;
+            }
+
+            float ToFloat(const std::string& value, float fallback = 0.0f)
+            {
+                try { return std::stof(value); }
+                catch (...) { return fallback; }
+            }
+
+            int ToInt(const std::string& value, int fallback = 0)
+            {
+                try { return std::stoi(value); }
+                catch (...) { return fallback; }
+            }
+
+            DirectX::XMFLOAT3 ToFloat3(const std::string& value)
+            {
+                DirectX::XMFLOAT3 result = { 0.0f, 0.0f, 0.0f };
+                std::stringstream stream(value);
+                std::string token;
+                if (std::getline(stream, token, ',')) result.x = ToFloat(token);
+                if (std::getline(stream, token, ',')) result.y = ToFloat(token);
+                if (std::getline(stream, token, ',')) result.z = ToFloat(token);
+                return result;
+            }
+
+            std::string FromFloat3(const DirectX::XMFLOAT3& value)
+            {
+                return std::to_string(value.x) + "," + std::to_string(value.y) + "," + std::to_string(value.z);
+            }
+
+            void SetScriptFieldValue(Entity entity, const ScriptFieldInfo& field, const std::string& value)
+            {
+                if (entity && entity.HasComponent<ScriptComponent>())
+                    entity.GetComponent<ScriptComponent>().FieldOverrides[field.Name] = value;
             }
         }
 
@@ -227,11 +273,15 @@ namespace CCEngine {
                         [entity]() mutable { return entity.GetComponent<MeshComponent>().BaseColor; },
                         [entity](DirectX::XMFLOAT4 v) mutable { entity.GetComponent<MeshComponent>().BaseColor = v; });
 
-                    // 2. 텍스처 로드 버튼 (기존 코드 유지)
-                    auto btnTexture = new UI::Button("BtnChangeTexture", "Load Diffuse Texture...");
+                    std::filesystem::path currentTexturePath(mesh.AlbedoPath);
+                    std::string textureButtonText = currentTexturePath.empty()
+                        ? "Albedo Texture: (none)"
+                        : "Albedo Texture: " + currentTexturePath.filename().string();
+
+                    auto btnTexture = new UI::Button("BtnChangeTexture", textureButtonText);
                     btnTexture->SetAnchorMin(0.0f, 0.0f); btnTexture->SetAnchorMax(1.0f, 0.0f);
                     btnTexture->SetOffsetMin(15.0f, 0.0f); btnTexture->SetOffsetMax(-10.0f, 28.0f);
-                    btnTexture->SetOnClick([entity]() mutable
+                    btnTexture->SetOnClick([entity, btnTexture]() mutable
                         {
                             std::string filepath = PlatformUtils::OpenFile("PNG Image (*.png)\0*.png\0JPG Image (*.jpg)\0*.jpg\0");
                             if (!filepath.empty())
@@ -243,6 +293,7 @@ namespace CCEngine {
                                 // 파일 참조는 GUID와 경로를 같이 남겨 구버전 파일도 읽을 수 있게 한다.
                                 mesh.AlbedoPath = filepath;
                                 mesh.AlbedoAssetGuid = AssetDatabase::GetGuidFromPath(filepath);
+                                btnTexture->SetText("Albedo Texture: " + std::filesystem::path(filepath).filename().string());
                                 std::cout << "Texture Applied to Mesh: " << filepath << std::endl;
                             }
                         });
@@ -415,6 +466,83 @@ namespace CCEngine {
                             enabled->SetText(component.Enabled ? "Enabled" : "Disabled");
                         });
                     item->AddChild(enabled);
+
+                    const ScriptClassInfo* classInfo = ScriptMetadata::FindClass(script.ClassName);
+                    if (classInfo)
+                    {
+                        for (const ScriptFieldInfo& field : classInfo->Fields)
+                        {
+                            const std::string widgetName = "ScriptField_" + field.Name;
+                            switch (field.Type)
+                            {
+                            case ScriptFieldType::Int:
+                            case ScriptFieldType::String:
+                            case ScriptFieldType::Float:
+                            {
+                                auto fieldWidget = new UI::ScriptFieldWidget(widgetName, field,
+                                    [entity, field]() mutable
+                                    {
+                                        if (!entity || !entity.HasComponent<ScriptComponent>())
+                                            return std::string{};
+                                        return GetScriptFieldValue(entity.GetComponent<ScriptComponent>(), field);
+                                    },
+                                    [entity, field](const std::string& value) mutable
+                                    {
+                                        SetScriptFieldValue(entity, field, value);
+                                    });
+                                item->AddChild(fieldWidget);
+                                break;
+                            }
+                            case ScriptFieldType::Bool:
+                            {
+                                bool currentValue = GetScriptFieldValue(script, field) == "true" ||
+                                    GetScriptFieldValue(script, field) == "True" ||
+                                    GetScriptFieldValue(script, field) == "1";
+                                auto toggle = new UI::Button(widgetName, field.Name + ": " + (currentValue ? "On" : "Off"));
+                                toggle->SetActive(currentValue);
+                                toggle->SetOnClick([entity, field, toggle]() mutable
+                                    {
+                                        if (field.Display == ScriptFieldDisplay::ReadOnly || field.ReadOnly)
+                                            return;
+                                        if (!entity || !entity.HasComponent<ScriptComponent>())
+                                            return;
+                                        auto& component = entity.GetComponent<ScriptComponent>();
+                                        bool oldValue = GetScriptFieldValue(component, field) == "true" ||
+                                            GetScriptFieldValue(component, field) == "True" ||
+                                            GetScriptFieldValue(component, field) == "1";
+                                        bool newValue = !oldValue;
+                                        component.FieldOverrides[field.Name] = newValue ? "true" : "false";
+                                        toggle->SetText(field.Name + ": " + (newValue ? "On" : "Off"));
+                                        toggle->SetActive(newValue);
+                                    });
+                                item->AddChild(toggle);
+                                break;
+                            }
+                            case ScriptFieldType::Vector3:
+                                UI::InspectorUtils::AddDragFloat3(item, widgetName, field.Name,
+                                    [entity, field]() mutable
+                                    {
+                                        if (!entity || !entity.HasComponent<ScriptComponent>())
+                                            return DirectX::XMFLOAT3{ 0.0f, 0.0f, 0.0f };
+                                        return ToFloat3(GetScriptFieldValue(entity.GetComponent<ScriptComponent>(), field));
+                                    },
+                                    [entity, field](DirectX::XMFLOAT3 value) mutable
+                                    {
+                                        if (entity && entity.HasComponent<ScriptComponent>())
+                                            entity.GetComponent<ScriptComponent>().FieldOverrides[field.Name] = FromFloat3(value);
+                                    });
+                                break;
+                            default:
+                                break;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        auto missing = new UI::Button("ScriptMetadataMissing", "Build scripts to show fields");
+                        item->AddChild(missing);
+                    }
+
                     AddRemoveComponentButton<ScriptComponent>(parent, item, entity, "Script");
                 });
         }

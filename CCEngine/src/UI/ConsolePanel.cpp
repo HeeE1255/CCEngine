@@ -17,8 +17,18 @@ namespace CCEngine::UI
     {
         WindowPanel::UpdateLayout(parentPos, parentSize);
 
-        m_ScrollState.ContentHeight = (float)ConsoleLog::GetEntries().size() * m_RowHeight;
+        const size_t entryCount = ConsoleLog::GetEntries().size();
+        const bool hasNewEntries = entryCount != m_LastEntryCount;
+
+        m_ScrollState.ContentHeight = (float)entryCount * m_RowHeight;
         m_ScrollState.ViewportHeight = (std::max)(0.0f, m_CalculatedSize.y - m_ContentTop);
+        if (hasNewEntries)
+        {
+            // 새 로그가 들어오면 최근 항목이 보이도록 아래쪽에 붙인다.
+            // 검증/컴파일 로그처럼 즉시 확인해야 하는 메시지를 놓치지 않기 위한 처리다.
+            m_ScrollState.ScrollY = m_ScrollState.GetMaxScroll();
+            m_LastEntryCount = entryCount;
+        }
     }
 
     void ConsolePanel::OnRender()

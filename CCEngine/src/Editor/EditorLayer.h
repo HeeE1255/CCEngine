@@ -22,6 +22,7 @@
 #include "UI/ImageWidget.h"
 #include "UI/Button.h"
 #include "UI/AssetBrowserPanel.h"
+#include "UI/AssetReferenceValidatorPanel.h"
 #include "UI/ConsolePanel.h"
 #include "UI/ProjectSettingsPanel.h"
 #include "UI/WindowPanel.h"
@@ -30,6 +31,8 @@
 #include "UI/InspectorPanel.h"
 #include "UI/KeyBindingInput.h"
 #include "GizmoSystem.h"
+
+#include <chrono>
 
 namespace CCEngine {
 
@@ -57,7 +60,9 @@ namespace CCEngine {
         void InstantiatePrefab();
         void InstantiatePrefab(const std::string& filepath);
         void ImportModelAsset(const std::string& filepath);
-        void HandleAssetDropped(const std::string& filepath, const std::string& assetType);
+        void HandleAssetDropped(const std::string& filepath, const std::string& assetType, float mouseX, float mouseY);
+        bool ApplyTextureAssetToEntity(Entity entity, const std::string& filepath);
+        Entity PickSceneEntityAt(float mouseX, float mouseY) const;
         void ShowObjectContextMenu(float x, float y, bool allowDelete);
         void ShowMeshObjectSubmenu();
         void HideObjectContextMenu();
@@ -76,8 +81,11 @@ namespace CCEngine {
         void OpenProjectStartScene();
         void SaveProjectSettings();
         void ApplyProjectGameResolution();
+        void ValidateAssetReferences();
+        void QueueAssetReferenceValidation();
         void OpenEditorWindow(int windowKind);
         void OpenProjectSettingsWindow();
+        void OpenAssetReferenceValidatorWindow();
         void OpenKeyBindingPickerWindow(UI::KeyBindingInput* targetInput);
         void BringEditorOverlaysToFront();
 
@@ -90,6 +98,9 @@ namespace CCEngine {
 
         EditorUndoManager m_UndoManager;
         bool m_HistoryPanelDirty = false;
+        std::string m_LastHistoryPanelSignature;
+        bool m_PendingAssetReferenceValidation = false;
+        std::chrono::steady_clock::time_point m_AssetReferenceValidationRequestedAt = {};
 
         Scene* m_ActiveScene = nullptr;
         Scene* m_EditorScene = nullptr;
@@ -143,6 +154,7 @@ namespace CCEngine {
         UI::WindowPanel* m_HistoryPanel = nullptr;
         UI::ConsolePanel* m_ConsolePanel = nullptr;
         UI::ProjectSettingsPanel* m_ProjectSettingsPanel = nullptr;
+        UI::AssetReferenceValidatorPanel* m_AssetReferenceValidatorPanel = nullptr;
         UI::Panel* m_HistoryContentPanel = nullptr;
         UI::VBoxContainer* m_HierarchyContainer = nullptr;
 

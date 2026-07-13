@@ -1,0 +1,237 @@
+{"kind":"deck","id":"pr/uy3c2q","name":"Deck"}
+{"kind":"layout","layoutId":"3f166d63-f2da-4307-ab43-3c776fc44425","name":"Master","type":"master"}
+{"kind":"layout","layoutId":"fcba0bd0-131d-492e-9124-e5d924ec715c","name":"Title Slide","type":"title"}
+{"kind":"slide","id":"sl/k7s622","slide":1,"title":"CCEngine","textShapes":7}
+{"kind":"textbox","id":"sh/re1w7mp0","slide":1,"text":"CCEngine","textPreview":"CCEngine","textChars":8,"textLines":1,"bbox":[48,42,300,42]}
+{"kind":"textbox","id":"sh/kzupwb2h","slide":1,"text":"C# 스크립트\n작성 가이드","textPreview":"C# 스크립트 | 작성 가이드","textChars":14,"textLines":2,"bbox":[48,178,720,190]}
+{"kind":"textbox","id":"sh/9knih4by","slide":1,"text":"엔진에서 스크립트를 만들고, 컴포넌트로 붙이고, 인스펙터 필드까지 노출하는 기본 사용법","textPreview":"엔진에서 스크립트를 만들고, 컴포넌트로 붙이고, 인스펙터 필드까지 노출하는 기본 사용법","textChars":48,"textLines":1,"bbox":[52,396,760,72]}
+{"kind":"shape","id":"sh/25kb6xkf","slide":1,"bbox":[840,108,360,450]}
+{"kind":"textbox","id":"sh/rqd4vmtw","slide":1,"text":"Guide Scope","textPreview":"Guide Scope","textChars":11,"textLines":1,"bbox":[884,152,240,30]}
+{"kind":"textbox","id":"sh/kb6xkf6d","slide":1,"text":"- 스크립트 파일 위치\n- GameScript 생명주기\n- public field와 인스펙터\n- 자동 컴파일과 테스트\n- 문제 해결 체크리스트","textPreview":"- 스크립트 파일 위치 | - GameScript 생명주기 | - public field와 인스펙터 | - 자동 컴파일과 테스트 | - 문제 해결 체크리스트","textChars":79,"textLines":5,"bbox":[884,208,250,220]}
+{"kind":"textbox","id":"sh/9w3m94fu","slide":1,"text":"D:\\CCEngine","textPreview":"D:\\CCEngine","textChars":11,"textLines":1,"bbox":[884,488,220,26]}
+{"kind":"textbox","id":"sh/2hwfyxob","slide":1,"text":"CCEngine Script Authoring Guide · 01","textPreview":"CCEngine Script Authoring Guide · 01","textChars":36,"textLines":1,"bbox":[48,674,420,24]}
+{"kind":"notes","id":"nt/k7s622","slide":1,"text":""}
+{"kind":"slide","id":"sl/lfbb98","slide":2,"title":"목차","textShapes":21}
+{"kind":"textbox","id":"sh/fa9w3m94","slide":2,"text":"목차","textPreview":"목차","textChars":2,"textLines":1,"bbox":[48,32,360,28]}
+{"kind":"textbox","id":"sh/8v6psfil","slide":2,"text":"처음 배울 때는 파일 흐름부터 잡으면 된다","textPreview":"처음 배울 때는 파일 흐름부터 잡으면 된다","textChars":23,"textLines":1,"bbox":[48,70,860,76]}
+{"kind":"shape","id":"sh/xczed8v6","slide":2,"bbox":[48,152,1184,2]}
+{"kind":"textbox","id":"sh/qd4vmtwr","slide":2,"text":"1","textPreview":"1","textChars":1,"textLines":1,"bbox":[70,188,42,36]}
+{"kind":"textbox","id":"sh/fyxobm58","slide":2,"text":"작성 위치","textPreview":"작성 위치","textChars":5,"textLines":1,"bbox":[138,186,230,34]}
+{"kind":"textbox","id":"sh/8jqh0fep","slide":2,"text":"Scripts/Game 아래에 게임 스크립트를 둔다.","textPreview":"Scripts/Game 아래에 게임 스크립트를 둔다.","textChars":29,"textLines":1,"bbox":[390,190,680,34]}
+{"kind":"shape","id":"sh/x4nap4r6","slide":2,"bbox":[70,236,1040,2]}
+{"kind":"textbox","id":"sh/q1orytsv","slide":2,"text":"2","textPreview":"2","textChars":1,"textLines":1,"bbox":[70,256,42,36]}
+{"kind":"textbox","id":"sh/fmlkjm1c","slide":2,"text":"기본 구조","textPreview":"기본 구조","textChars":5,"textLines":1,"bbox":[138,254,230,34]}
+{"kind":"textbox","id":"sh/jqh0fepk","slide":2,"text":"GameScript를 상속하고 OnCreate, OnUpdate, OnDestroy를 사용한다.","textPreview":"GameScript를 상속하고 OnCreate, OnUpdate, OnDestroy를 사용한다.","textChars":53,"textLines":1,"bbox":[390,258,680,34]}
+{"kind":"shape","id":"sh/q5o7qpg3","slide":2,"bbox":[70,304,1040,2]}
+{"kind":"textbox","id":"sh/1w7mp0bi","slide":2,"text":"3","textPreview":"3","textChars":1,"textLines":1,"bbox":[70,324,42,36]}
+{"kind":"textbox","id":"sh/8bat47y1","slide":2,"text":"컴포넌트 연결","textPreview":"컴포넌트 연결","textChars":7,"textLines":1,"bbox":[138,322,230,34]}
+{"kind":"textbox","id":"sh/j2t83itg","slide":2,"text":"Add Component에서 기존 스크립트 또는 새 스크립트를 선택한다.","textPreview":"Add Component에서 기존 스크립트 또는 새 스크립트를 선택한다.","textChars":40,"textLines":1,"bbox":[390,326,680,34]}
+{"kind":"shape","id":"sh/qh0fepkz","slide":2,"bbox":[70,372,1040,2]}
+{"kind":"textbox","id":"sh/18jqh0fe","slide":2,"text":"4","textPreview":"4","textChars":1,"textLines":1,"bbox":[70,392,42,36]}
+{"kind":"textbox","id":"sh/8nqxs72x","slide":2,"text":"인스펙터 노출","textPreview":"인스펙터 노출","textChars":7,"textLines":1,"bbox":[138,390,230,34]}
+{"kind":"textbox","id":"sh/j6tovaho","slide":2,"text":"public field와 속성으로 입력 UI를 결정한다.","textPreview":"public field와 속성으로 입력 UI를 결정한다.","textChars":31,"textLines":1,"bbox":[390,394,680,34]}
+{"kind":"shape","id":"sh/ulwval87","slide":2,"bbox":[70,440,1040,2]}
+{"kind":"textbox","id":"sh/ed8v6psf","slide":2,"text":"5","textPreview":"5","textChars":1,"textLines":1,"bbox":[70,460,42,36]}
+{"kind":"textbox","id":"sh/7y1kre1w","slide":2,"text":"테스트와 저장","textPreview":"테스트와 저장","textChars":7,"textLines":1,"bbox":[138,458,230,34]}
+{"kind":"textbox","id":"sh/wjudg7ad","slide":2,"text":"Play, 자동 컴파일, 씬/프리팹 저장을 확인한다.","textPreview":"Play, 자동 컴파일, 씬/프리팹 저장을 확인한다.","textChars":29,"textLines":1,"bbox":[390,462,680,34]}
+{"kind":"shape","id":"sh/p4r65wju","slide":2,"bbox":[70,508,1040,2]}
+{"kind":"textbox","id":"sh/i5sneloj","slide":2,"text":"6","textPreview":"6","textChars":1,"textLines":1,"bbox":[70,528,42,36]}
+{"kind":"textbox","id":"sh/7qpg3ex0","slide":2,"text":"문제 해결","textPreview":"문제 해결","textChars":5,"textLines":1,"bbox":[138,526,230,34]}
+{"kind":"textbox","id":"sh/0bi9s36h","slide":2,"text":"누락, 컴파일 실패, 필드 미반영을 순서대로 확인한다.","textPreview":"누락, 컴파일 실패, 필드 미반영을 순서대로 확인한다.","textChars":30,"textLines":1,"bbox":[390,530,680,34]}
+{"kind":"shape","id":"sh/pwb2hwfy","slide":2,"bbox":[70,576,1040,2]}
+{"kind":"textbox","id":"sh/itgfmlkj","slide":2,"text":"CCEngine Script Authoring Guide · 02","textPreview":"CCEngine Script Authoring Guide · 02","textChars":36,"textLines":1,"bbox":[48,674,420,24]}
+{"kind":"notes","id":"nt/lfbb98","slide":2,"text":""}
+{"kind":"slide","id":"sl/io4wq1","slide":3,"title":"구조","textShapes":17}
+{"kind":"textbox","id":"sh/7qpg3ex0","slide":3,"text":"구조","textPreview":"구조","textChars":2,"textLines":1,"bbox":[48,32,360,28]}
+{"kind":"textbox","id":"sh/0bi9s36h","slide":3,"text":"스크립트는 C# 파일에서 DLL과 manifest로 변환된다","textPreview":"스크립트는 C# 파일에서 DLL과 manifest로 변환된다","textChars":33,"textLines":1,"bbox":[48,70,860,76]}
+{"kind":"shape","id":"sh/pwb2hwfy","slide":3,"bbox":[48,152,1184,2]}
+{"kind":"shape","id":"sh/ed8v6psf","slide":3,"bbox":[64,214,255,170]}
+{"kind":"textbox","id":"sh/7y1kre1w","slide":3,"text":"1","textPreview":"1","textChars":1,"textLines":1,"bbox":[82,232,44,44]}
+{"kind":"textbox","id":"sh/wjudg7ad","slide":3,"text":"C# 소스","textPreview":"C# 소스","textChars":5,"textLines":1,"bbox":[142,234,159,30]}
+{"kind":"textbox","id":"sh/p4r65wju","slide":3,"text":"assets/Scripts/Game/*.cs에 게임 로직을 작성한다.","textPreview":"assets/Scripts/Game/*.cs에 게임 로직을 작성한다.","textChars":38,"textLines":1,"bbox":[142,278,159,90]}
+{"kind":"shape","id":"sh/ih4byhgn","slide":3,"bbox":[354,214,255,170]}
+{"kind":"textbox","id":"sh/72x4nap4","slide":3,"text":"2","textPreview":"2","textChars":1,"textLines":1,"bbox":[372,232,44,44]}
+{"kind":"textbox","id":"sh/zqtcj6to","slide":3,"text":"BuildScripts.ps1","textPreview":"BuildScripts.ps1","textChars":16,"textLines":1,"bbox":[432,234,159,30]}
+{"kind":"textbox","id":"sh/65wjudg7","slide":3,"text":"ScriptCore와 GameScripts.dll을 컴파일하고 manifest를 만든다.","textPreview":"ScriptCore와 GameScripts.dll을 컴파일하고 manifest를 만든다.","textChars":49,"textLines":1,"bbox":[432,278,159,90]}
+{"kind":"shape","id":"sh/hwfyxobm","slide":3,"bbox":[644,214,255,170]}
+{"kind":"textbox","id":"sh/obm58z25","slide":3,"text":"3","textPreview":"3","textChars":1,"textLines":1,"bbox":[662,232,44,44]}
+{"kind":"textbox","id":"sh/zed8v6ps","slide":3,"text":"ScriptMetadata","textPreview":"ScriptMetadata","textChars":14,"textLines":1,"bbox":[722,234,159,30]}
+{"kind":"textbox","id":"sh/6xkf6dcb","slide":3,"text":"manifest를 읽어 Add Component 목록과 public field 목록을 구성한다.","textPreview":"manifest를 읽어 Add Component 목록과 public field 목록을 구성한다.","textChars":53,"textLines":1,"bbox":[722,278,159,90]}
+{"kind":"shape","id":"sh/hk3q5o7q","slide":3,"bbox":[934,214,255,170]}
+{"kind":"textbox","id":"sh/oza1gvy9","slide":3,"text":"4","textPreview":"4","textChars":1,"textLines":1,"bbox":[952,232,44,44]}
+{"kind":"textbox","id":"sh/z61032ls","slide":3,"text":"ScriptEngine","textPreview":"ScriptEngine","textChars":12,"textLines":1,"bbox":[1012,234,159,30]}
+{"kind":"textbox","id":"sh/al87ed8b","slide":3,"text":"Play 중 C# 인스턴스를 만들고 OnUpdate를 호출한다.","textPreview":"Play 중 C# 인스턴스를 만들고 OnUpdate를 호출한다.","textChars":35,"textLines":1,"bbox":[1012,278,159,90]}
+{"kind":"textbox","id":"sh/ih4byhgn","slide":3,"text":"현재 자동 감지는 .cs 변경을 발견하면 짧게 기다린 뒤 재컴파일하고, 성공하면 인스펙터를 다시 만든다.","textPreview":"현재 자동 감지는 .cs 변경을 발견하면 짧게 기다린 뒤 재컴파일하고, 성공하면 인스펙터를 다시 만든다.","textChars":58,"textLines":1,"bbox":[88,448,1040,58]}
+{"kind":"textbox","id":"sh/72x4nap4","slide":3,"text":"- manifest는 실제 컴파일된 DLL을 읽어서 만든다. 소스 파싱 결과와 어긋나지 않는다.\n- 인스펙터는 manifest의 ClassName, Field, Editor 정보를 기준으로 UI를 만든다.\n- Play 중 실행되는 값은 ScriptComponent의 FieldOverrides가 C# 인스턴스에 적용된 결과다.","textPreview":"- manifest는 실제 컴파일된 DLL을 읽어서 만든다. 소스 파싱 결과와 어긋나지 않는다. | - 인스펙터는 manifest의 ClassName, Field, Editor 정보를 기준으로 UI를 만든다. | - Play 중 실행되는 값은 S...","textChars":182,"textLines":3,"bbox":[92,530,1020,88]}
+{"kind":"textbox","id":"sh/0nuxc3yl","slide":3,"text":"CCEngine Script Authoring Guide · 03","textPreview":"CCEngine Script Authoring Guide · 03","textChars":36,"textLines":1,"bbox":[48,674,420,24]}
+{"kind":"notes","id":"nt/io4wq1","slide":3,"text":""}
+{"kind":"slide","id":"sl/17yrqz","slide":4,"title":"파일 구조","textShapes":8}
+{"kind":"textbox","id":"sh/mp0bi9s3","slide":4,"text":"파일 구조","textPreview":"파일 구조","textChars":5,"textLines":1,"bbox":[48,32,360,28]}
+{"kind":"textbox","id":"sh/tgfmlkjm","slide":4,"text":"게임 스크립트는 Game 폴더에 두는 것이 기본 규칙이다","textPreview":"게임 스크립트는 Game 폴더에 두는 것이 기본 규칙이다","textChars":31,"textLines":1,"bbox":[48,70,860,76]}
+{"kind":"shape","id":"sh/4vmtwra5","slide":4,"bbox":[48,152,1184,2]}
+{"kind":"shape","id":"sh/bm58z25k","slide":4,"bbox":[72,196,512,356]}
+{"kind":"textbox","id":"sh/m1cfa9w3","slide":4,"text":"Sandbox/assets/Scripts\n├─ ScriptCore/\n│  └─ ScriptCore.cs\n├─ Game/\n│  ├─ CubeMove.cs\n│  └─ MyNewScript.cs\n├─ Build/\n│  ├─ CCEngine.ScriptCore.dll\n│  ├─ GameScripts.dll\n│  └─ GameScripts.manifest.json\n└─ BuildScripts.ps1","textPreview":"Sandbox/assets/Scripts | ├─ ScriptCore/ | │  └─ ScriptCore.cs | ├─ Game/ | │  ├─ CubeMove.cs | │  └─ MyNewScript.cs | ├─ Build/ | │  ├─ C...","textChars":219,"textLines":11,"bbox":[94,214,468,320]}
+{"kind":"textbox","id":"sh/tsvu9kni","slide":4,"text":"작성 규칙","textPreview":"작성 규칙","textChars":5,"textLines":1,"bbox":[650,198,220,34]}
+{"kind":"textbox","id":"sh/47y1kre1","slide":4,"text":"- 직접 작성하는 스크립트는 Game 폴더에 둔다.\n- 클래스는 public 또는 public sealed class로 선언한다.\n- 반드시 CCEngine.GameScript를 상속한다.\n- namespace Game을 쓰면 Add Component에서 Game.ClassName으로 잡힌다.\n- ScriptCore는 엔진 API 영역이므로 일반 게임 로직을 넣지 않는다.","textPreview":"- 직접 작성하는 스크립트는 Game 폴더에 둔다. | - 클래스는 public 또는 public sealed class로 선언한다. | - 반드시 CCEngine.GameScript를 상속한다. | - namespace Game을 쓰면 Add ...","textChars":209,"textLines":5,"bbox":[650,250,500,230]}
+{"kind":"shape","id":"sh/bq1oryts","slide":4,"bbox":[650,518,230,34]}
+{"kind":"textbox","id":"sh/m58z25kb","slide":4,"text":"권장: Game.PlayerMove","textPreview":"권장: Game.PlayerMove","textChars":19,"textLines":1,"bbox":[662,525,206,22]}
+{"kind":"shape","id":"sh/o7qpg3ex","slide":4,"bbox":[904,518,290,34]}
+{"kind":"textbox","id":"sh/dsji5sne","slide":4,"text":"비권장: ScriptCore에 게임 코드 추가","textPreview":"비권장: ScriptCore에 게임 코드 추가","textChars":25,"textLines":1,"bbox":[916,525,266,22]}
+{"kind":"textbox","id":"sh/61032lsz","slide":4,"text":"CCEngine Script Authoring Guide · 04","textPreview":"CCEngine Script Authoring Guide · 04","textChars":36,"textLines":1,"bbox":[48,674,420,24]}
+{"kind":"notes","id":"nt/17yrqz","slide":4,"text":""}
+{"kind":"slide","id":"sl/296h98","slide":5,"title":"작성 시작","textShapes":15}
+{"kind":"textbox","id":"sh/wjudg7ad","slide":5,"text":"작성 시작","textPreview":"작성 시작","textChars":5,"textLines":1,"bbox":[48,32,360,28]}
+{"kind":"textbox","id":"sh/7y1kre1w","slide":5,"text":"새 스크립트는 Add Component에서 만들거나 파일로 직접 추가한다","textPreview":"새 스크립트는 Add Component에서 만들거나 파일로 직접 추가한다","textChars":40,"textLines":1,"bbox":[48,70,860,76]}
+{"kind":"shape","id":"sh/ed8v6psf","slide":5,"bbox":[48,152,1184,2]}
+{"kind":"shape","id":"sh/pwb2hwfy","slide":5,"bbox":[72,204,340,160]}
+{"kind":"textbox","id":"sh/0bi9s36h","slide":5,"text":"1","textPreview":"1","textChars":1,"textLines":1,"bbox":[90,222,44,44]}
+{"kind":"textbox","id":"sh/7qpg3ex0","slide":5,"text":"오브젝트 선택","textPreview":"오브젝트 선택","textChars":7,"textLines":1,"bbox":[150,224,244,30]}
+{"kind":"textbox","id":"sh/i5sneloj","slide":5,"text":"하이어라키에서 스크립트를 붙일 게임 오브젝트를 선택한다.","textPreview":"하이어라키에서 스크립트를 붙일 게임 오브젝트를 선택한다.","textChars":31,"textLines":1,"bbox":[150,268,244,80]}
+{"kind":"shape","id":"sh/pkzupwb2","slide":5,"bbox":[470,204,340,160]}
+{"kind":"textbox","id":"sh/0z61032l","slide":5,"text":"2","textPreview":"2","textChars":1,"textLines":1,"bbox":[488,222,44,44]}
+{"kind":"textbox","id":"sh/qpg3ex0n","slide":5,"text":"Add Component","textPreview":"Add Component","textChars":13,"textLines":1,"bbox":[548,224,244,30]}
+{"kind":"textbox","id":"sh/fa9w3m94","slide":5,"text":"Inspector의 Add Component에서 New C# Script를 선택하거나 기존 스크립트를 고른다.","textPreview":"Inspector의 Add Component에서 New C# Script를 선택하거나 기존 스크립트를 고른다.","textChars":61,"textLines":1,"bbox":[548,268,244,80]}
+{"kind":"shape","id":"sh/8v6psfil","slide":5,"bbox":[868,204,340,160]}
+{"kind":"textbox","id":"sh/xczed8v6","slide":5,"text":"3","textPreview":"3","textChars":1,"textLines":1,"bbox":[886,222,44,44]}
+{"kind":"textbox","id":"sh/qd4vmtwr","slide":5,"text":"자동 컴파일 확인","textPreview":"자동 컴파일 확인","textChars":9,"textLines":1,"bbox":[946,224,244,30]}
+{"kind":"textbox","id":"sh/fyxobm58","slide":5,"text":"파일 저장 후 콘솔의 컴파일 성공 로그와 인스펙터 필드 갱신을 확인한다.","textPreview":"파일 저장 후 콘솔의 컴파일 성공 로그와 인스펙터 필드 갱신을 확인한다.","textChars":40,"textLines":1,"bbox":[946,268,244,80]}
+{"kind":"shape","id":"sh/8jqh0fep","slide":5,"bbox":[118,432,1042,96]}
+{"kind":"textbox","id":"sh/x4nap4r6","slide":5,"text":"상용 엔진식 사용 흐름","textPreview":"상용 엔진식 사용 흐름","textChars":12,"textLines":1,"bbox":[148,452,240,26]}
+{"kind":"textbox","id":"sh/q1orytsv","slide":5,"text":"에디터에서 스크립트 생성 → 템플릿 코드 작성 → 저장 → 자동 빌드 → Add Component 목록과 인스펙터 필드 갱신","textPreview":"에디터에서 스크립트 생성 → 템플릿 코드 작성 → 저장 → 자동 빌드 → Add Component 목록과 인스펙터 필드 갱신","textChars":69,"textLines":1,"bbox":[148,490,940,28]}
+{"kind":"textbox","id":"sh/fmlkjm1c","slide":5,"text":"이미 존재하는 스크립트는 Add Component 목록에서 검색하거나 페이지 이동으로 선택한다.","textPreview":"이미 존재하는 스크립트는 Add Component 목록에서 검색하거나 페이지 이동으로 선택한다.","textChars":53,"textLines":1,"bbox":[148,552,870,30]}
+{"kind":"textbox","id":"sh/r2p8nqxs","slide":5,"text":"CCEngine Script Authoring Guide · 05","textPreview":"CCEngine Script Authoring Guide · 05","textChars":36,"textLines":1,"bbox":[48,674,420,24]}
+{"kind":"notes","id":"nt/296h98","slide":5,"text":""}
+{"kind":"slide","id":"sl/t2vqbh","slide":6,"title":"기본 예제","textShapes":8}
+{"kind":"textbox","id":"sh/l87ed8ba","slide":6,"text":"기본 예제","textPreview":"기본 예제","textChars":5,"textLines":1,"bbox":[48,32,360,28]}
+{"kind":"textbox","id":"sh/ahoza1gv","slide":6,"text":"가장 작은 스크립트는 GameScript 상속과 OnUpdate만으로 충분하다","textPreview":"가장 작은 스크립트는 GameScript 상속과 OnUpdate만으로 충분하다","textChars":43,"textLines":1,"bbox":[48,70,860,76]}
+{"kind":"shape","id":"sh/32lszqtc","slide":6,"bbox":[48,152,1184,2]}
+{"kind":"shape","id":"sh/szqtcj6t","slide":6,"bbox":[66,196,610,404]}
+{"kind":"textbox","id":"sh/lkjm1cfa","slide":6,"text":"using CCEngine;\n\nnamespace Game\n{\n    public sealed class MoveUp : GameScript\n    {\n        public float Speed = 1.0f;\n\n        protected override void OnUpdate(float deltaTime)\n        {\n            Translation += new Vector3(0.0f, Speed * deltaTime, 0.0f);\n        }\n    }\n}","textPreview":"using CCEngine; |  | namespace Game | { |     public sealed class MoveUp : GameScript |     { |         public float Speed = 1.0f; |  |  ...","textChars":276,"textLines":14,"bbox":[88,214,566,368]}
+{"kind":"textbox","id":"sh/at47y1kr","slide":6,"text":"핵심 포인트","textPreview":"핵심 포인트","textChars":6,"textLines":1,"bbox":[728,198,260,34]}
+{"kind":"textbox","id":"sh/3ex0nuxc","slide":6,"text":"- Translation은 현재 엔티티의 Transform Position과 연결된다.\n- deltaTime을 곱해야 프레임률이 달라도 같은 속도로 움직인다.\n- public float Speed는 인스펙터에 노출된다.\n- Play를 누르면 엔진이 C# 인스턴스를 만들고 OnUpdate를 호출한다.","textPreview":"- Translation은 현재 엔티티의 Transform Position과 연결된다. | - deltaTime을 곱해야 프레임률이 달라도 같은 속도로 움직인다. | - public float Speed는 인스펙터에 노출된다. | - Play를 ...","textChars":167,"textLines":4,"bbox":[728,250,430,220]}
+{"kind":"shape","id":"sh/w3m94fu1","slide":6,"bbox":[728,514,430,72]}
+{"kind":"textbox","id":"sh/loj2t83i","slide":6,"text":"테스트 결과","textPreview":"테스트 결과","textChars":6,"textLines":1,"bbox":[752,528,120,24]}
+{"kind":"textbox","id":"sh/9knih4by","slide":6,"text":"Speed 값을 바꾸면 Play 중 큐브가 위로 움직이는 속도가 달라져야 한다.","textPreview":"Speed 값을 바꾸면 Play 중 큐브가 위로 움직이는 속도가 달라져야 한다.","textChars":44,"textLines":1,"bbox":[752,556,360,24]}
+{"kind":"textbox","id":"sh/kzupwb2h","slide":6,"text":"CCEngine Script Authoring Guide · 06","textPreview":"CCEngine Script Authoring Guide · 06","textChars":36,"textLines":1,"bbox":[48,674,420,24]}
+{"kind":"notes","id":"nt/t2vqbh","slide":6,"text":""}
+{"kind":"slide","id":"sl/drbtvl","slide":7,"title":"생명주기","textShapes":16}
+{"kind":"textbox","id":"sh/w3m94fu1","slide":7,"text":"생명주기","textPreview":"생명주기","textChars":4,"textLines":1,"bbox":[48,32,360,28]}
+{"kind":"textbox","id":"sh/3itgfmlk","slide":7,"text":"생명주기는 생성, 매 프레임, 제거 순서로 생각한다","textPreview":"생명주기는 생성, 매 프레임, 제거 순서로 생각한다","textChars":28,"textLines":1,"bbox":[48,70,860,76]}
+{"kind":"shape","id":"sh/ex0nuxc3","slide":7,"bbox":[48,152,1184,2]}
+{"kind":"shape","id":"sh/lwval87e","slide":7,"bbox":[72,206,340,310]}
+{"kind":"textbox","id":"sh/wb2hwfyx","slide":7,"text":"OnCreate","textPreview":"OnCreate","textChars":8,"textLines":1,"bbox":[100,234,260,38]}
+{"kind":"textbox","id":"sh/3q5o7qpg","slide":7,"text":"Play가 시작되어 스크립트 인스턴스가 만들어질 때 한 번 호출된다.","textPreview":"Play가 시작되어 스크립트 인스턴스가 만들어질 때 한 번 호출된다.","textChars":38,"textLines":1,"bbox":[100,296,282,78]}
+{"kind":"shape","id":"sh/e9cvixcz","slide":7,"bbox":[100,394,284,2]}
+{"kind":"textbox","id":"sh/l87ed8ba","slide":7,"text":"주 사용처","textPreview":"주 사용처","textChars":5,"textLines":1,"bbox":[100,418,110,24]}
+{"kind":"textbox","id":"sh/sneloj2t","slide":7,"text":"초기 위치 저장, 참조 준비, 시작 로그","textPreview":"초기 위치 저장, 참조 준비, 시작 로그","textChars":22,"textLines":1,"bbox":[100,452,282,44]}
+{"kind":"shape","id":"sh/qd4vmtwr","slide":7,"bbox":[464,206,340,310]}
+{"kind":"textbox","id":"sh/fyxobm58","slide":7,"text":"OnUpdate","textPreview":"OnUpdate","textChars":8,"textLines":1,"bbox":[492,234,260,38]}
+{"kind":"textbox","id":"sh/8jqh0fep","slide":7,"text":"Play 중 매 프레임 호출된다. deltaTime으로 시간 기반 이동을 만든다.","textPreview":"Play 중 매 프레임 호출된다. deltaTime으로 시간 기반 이동을 만든다.","textChars":45,"textLines":1,"bbox":[492,296,282,78]}
+{"kind":"shape","id":"sh/x4nap4r6","slide":7,"bbox":[492,394,284,2]}
+{"kind":"textbox","id":"sh/qpg3ex0n","slide":7,"text":"주 사용처","textPreview":"주 사용처","textChars":5,"textLines":1,"bbox":[492,418,110,24]}
+{"kind":"textbox","id":"sh/fa9w3m94","slide":7,"text":"이동, 회전, 입력 처리, 조건 검사","textPreview":"이동, 회전, 입력 처리, 조건 검사","textChars":20,"textLines":1,"bbox":[492,452,282,44]}
+{"kind":"shape","id":"sh/8v6psfil","slide":7,"bbox":[856,206,340,310]}
+{"kind":"textbox","id":"sh/xczed8v6","slide":7,"text":"OnDestroy","textPreview":"OnDestroy","textChars":9,"textLines":1,"bbox":[884,234,260,38]}
+{"kind":"textbox","id":"sh/qtcj6tov","slide":7,"text":"Play가 끝나거나 스크립트 인스턴스가 제거될 때 한 번 호출된다.","textPreview":"Play가 끝나거나 스크립트 인스턴스가 제거될 때 한 번 호출된다.","textChars":37,"textLines":1,"bbox":[884,296,282,78]}
+{"kind":"shape","id":"sh/je9cvixc","slide":7,"bbox":[884,394,284,2]}
+{"kind":"textbox","id":"sh/rqd4vmtw","slide":7,"text":"주 사용처","textPreview":"주 사용처","textChars":5,"textLines":1,"bbox":[884,418,110,24]}
+{"kind":"textbox","id":"sh/25kb6xkf","slide":7,"text":"정리 로그, 임시 상태 해제","textPreview":"정리 로그, 임시 상태 해제","textChars":15,"textLines":1,"bbox":[884,452,282,44]}
+{"kind":"textbox","id":"sh/9w3m94fu","slide":7,"text":"현재 API는 Transform Translation과 Log를 중심으로 시작되어 있다. 필요 API는 ScriptCore에 안전하게 추가해 확장한다.","textPreview":"현재 API는 Transform Translation과 Log를 중심으로 시작되어 있다. 필요 API는 ScriptCore에 안전하게 추가해 확장한다.","textChars":84,"textLines":1,"bbox":[96,560,1000,48]}
+{"kind":"textbox","id":"sh/kb6xkf6d","slide":7,"text":"CCEngine Script Authoring Guide · 07","textPreview":"CCEngine Script Authoring Guide · 07","textChars":36,"textLines":1,"bbox":[48,674,420,24]}
+{"kind":"notes","id":"nt/drbtvl","slide":7,"text":""}
+{"kind":"slide","id":"sl/75mffi","slide":8,"title":"인스펙터 노출","textShapes":8}
+{"kind":"textbox","id":"sh/0z61032l","slide":8,"text":"인스펙터 노출","textPreview":"인스펙터 노출","textChars":7,"textLines":1,"bbox":[48,32,360,28]}
+{"kind":"textbox","id":"sh/7ed8bat4","slide":8,"text":"public field는 인스펙터 입력 UI가 된다","textPreview":"public field는 인스펙터 입력 UI가 된다","textChars":28,"textLines":1,"bbox":[48,70,860,76]}
+{"kind":"shape","id":"sh/itgfmlkj","slide":8,"bbox":[48,152,1184,2]}
+{"kind":"shape","id":"sh/p8nqxs72","slide":8,"bbox":[70,194,640,424]}
+{"kind":"textbox","id":"sh/0nuxc3yl","slide":8,"text":"public float Speed = 1.0f;          // 직접 입력\n\n[Range(0.0f, 10.0f)]\npublic float Speed = 1.0f;          // 슬라이더\n\n[Drag(0.1f)]\npublic float TurnSpeed = 2.0f;      // 드래그 조절\n\n[Step(1)]\npublic int Health = 100;            // - / + 버튼\n\n[ReadOnly]\npublic float RuntimeValue = 0.0f;   // 표시 전용","textPreview":"public float Speed = 1.0f;          // 직접 입력 |  | [Range(0.0f, 10.0f)] | public float Speed = 1.0f;          // 슬라이더 |  | [Drag(0.1f)] | ...","textChars":286,"textLines":13,"bbox":[92,212,596,388]}
+{"kind":"textbox","id":"sh/72x4nap4","slide":8,"text":"필드 노출 규칙","textPreview":"필드 노출 규칙","textChars":8,"textLines":1,"bbox":[756,198,250,34]}
+{"kind":"textbox","id":"sh/ih4byhgn","slide":8,"text":"- 지원 타입: float, int, bool, string, Vector3\n- private field는 인스펙터에 노출하지 않는다.\n- 속성은 manifest에 저장되어 UI 생성 기준이 된다.\n- 씬과 프리팹은 FieldOverrides를 저장해 기본값과 다른 값만 유지한다.","textPreview":"- 지원 타입: float, int, bool, string, Vector3 | - private field는 인스펙터에 노출하지 않는다. | - 속성은 manifest에 저장되어 UI 생성 기준이 된다. | - 씬과 프리팹은 FieldOverr...","textChars":157,"textLines":4,"bbox":[756,254,410,188]}
+{"kind":"shape","id":"sh/p4r65wju","slide":8,"bbox":[756,480,410,74]}
+{"kind":"textbox","id":"sh/wjudg7ad","slide":8,"text":"주의","textPreview":"주의","textChars":2,"textLines":1,"bbox":[780,494,70,24]}
+{"kind":"textbox","id":"sh/6tovahoz","slide":8,"text":"필드 이름을 바꾸면 기존 저장값과 연결이 끊길 수 있다. 이름 변경은 의도적으로 한다.","textPreview":"필드 이름을 바꾸면 기존 저장값과 연결이 끊길 수 있다. 이름 변경은 의도적으로 한다.","textChars":48,"textLines":1,"bbox":[780,522,350,24]}
+{"kind":"textbox","id":"sh/vahoza1g","slide":8,"text":"CCEngine Script Authoring Guide · 08","textPreview":"CCEngine Script Authoring Guide · 08","textChars":36,"textLines":1,"bbox":[48,674,420,24]}
+{"kind":"notes","id":"nt/75mffi","slide":8,"text":""}
+{"kind":"slide","id":"sl/cw3pnr","slide":9,"title":"자동 반영","textShapes":12}
+{"kind":"textbox","id":"sh/tovahoza","slide":9,"text":"자동 반영","textPreview":"자동 반영","textChars":5,"textLines":1,"bbox":[48,32,360,28]}
+{"kind":"textbox","id":"sh/ixczed8v","slide":9,"text":"저장하면 자동 컴파일되고 인스펙터가 다시 그려진다","textPreview":"저장하면 자동 컴파일되고 인스펙터가 다시 그려진다","textChars":27,"textLines":1,"bbox":[48,70,860,76]}
+{"kind":"shape","id":"sh/bi9s36hc","slide":9,"bbox":[48,152,1184,2]}
+{"kind":"shape","id":"sh/0fepkzup","slide":9,"bbox":[84,198,1090,122]}
+{"kind":"textbox","id":"sh/p0bi9s36","slide":9,"text":"저장 감지","textPreview":"저장 감지","textChars":5,"textLines":1,"bbox":[120,222,160,28]}
+{"kind":"textbox","id":"sh/i9s36hcr","slide":9,"text":"ScriptCompiler가 .cs 파일 변경 시간과 파일 목록을 주기적으로 확인한다.","textPreview":"ScriptCompiler가 .cs 파일 변경 시간과 파일 목록을 주기적으로 확인한다.","textChars":48,"textLines":1,"bbox":[316,224,720,26]}
+{"kind":"textbox","id":"sh/bulwval8","slide":9,"text":"400ms 폴링","textPreview":"400ms 폴링","textChars":8,"textLines":1,"bbox":[1040,224,110,24]}
+{"kind":"shape","id":"sh/0je9cvix","slide":9,"bbox":[84,348,1090,122]}
+{"kind":"textbox","id":"sh/t47y1kre","slide":9,"text":"빌드 안정화","textPreview":"빌드 안정화","textChars":6,"textLines":1,"bbox":[120,372,160,28]}
+{"kind":"textbox","id":"sh/9s36hcrm","slide":9,"text":"파일 저장 중간 상태를 피하려고 변경 후 700ms 기다린 뒤 BuildScripts.ps1을 실행한다.","textPreview":"파일 저장 중간 상태를 피하려고 변경 후 700ms 기다린 뒤 BuildScripts.ps1을 실행한다.","textChars":58,"textLines":1,"bbox":[316,374,720,26]}
+{"kind":"textbox","id":"sh/g7adsji5","slide":9,"text":"700ms debounce","textPreview":"700ms debounce","textChars":14,"textLines":1,"bbox":[1010,374,140,24]}
+{"kind":"shape","id":"sh/rmhk3q5o","slide":9,"bbox":[84,498,1090,122]}
+{"kind":"textbox","id":"sh/y1kre1w7","slide":9,"text":"인스펙터 갱신","textPreview":"인스펙터 갱신","textChars":7,"textLines":1,"bbox":[120,522,170,28]}
+{"kind":"textbox","id":"sh/90je9cvi","slide":9,"text":"컴파일 성공 후 ScriptMetadata를 Refresh하고 모든 InspectorPanel을 Rebuild한다.","textPreview":"컴파일 성공 후 ScriptMetadata를 Refresh하고 모든 InspectorPanel을 Rebuild한다.","textChars":64,"textLines":1,"bbox":[316,524,720,26]}
+{"kind":"textbox","id":"sh/gfmlkjm1","slide":9,"text":"manifest reload","textPreview":"manifest reload","textChars":15,"textLines":1,"bbox":[1010,524,140,24]}
+{"kind":"textbox","id":"sh/rytsvu9k","slide":9,"text":"CCEngine Script Authoring Guide · 09","textPreview":"CCEngine Script Authoring Guide · 09","textChars":36,"textLines":1,"bbox":[48,674,420,24]}
+{"kind":"notes","id":"nt/cw3pnr","slide":9,"text":""}
+{"kind":"slide","id":"sl/r1vrwb","slide":10,"title":"테스트 절차","textShapes":18}
+{"kind":"textbox","id":"sh/ylc7u54z","slide":10,"text":"테스트 절차","textPreview":"테스트 절차","textChars":6,"textLines":1,"bbox":[48,32,360,28]}
+{"kind":"textbox","id":"sh/9cvixcze","slide":10,"text":"스크립트 테스트는 붙이기, 필드 조정, Play 순서로 확인한다","textPreview":"스크립트 테스트는 붙이기, 필드 조정, Play 순서로 확인한다","textChars":35,"textLines":1,"bbox":[48,70,860,76]}
+{"kind":"shape","id":"sh/gr2p8nqx","slide":10,"bbox":[48,152,1184,2]}
+{"kind":"textbox","id":"sh/nih4byhg","slide":10,"text":"1","textPreview":"1","textChars":1,"textLines":1,"bbox":[86,202,40,34]}
+{"kind":"textbox","id":"sh/yxobm58z","slide":10,"text":"큐브 선택","textPreview":"큐브 선택","textChars":5,"textLines":1,"bbox":[152,202,220,32]}
+{"kind":"textbox","id":"sh/5o7qpg3e","slide":10,"text":"하이어라키에서 테스트할 Cube를 선택한다.","textPreview":"하이어라키에서 테스트할 Cube를 선택한다.","textChars":24,"textLines":1,"bbox":[392,204,690,30]}
+{"kind":"shape","id":"sh/g3ex0nux","slide":10,"bbox":[86,252,1010,2]}
+{"kind":"textbox","id":"sh/rmhk3q5o","slide":10,"text":"2","textPreview":"2","textChars":1,"textLines":1,"bbox":[86,280,40,34]}
+{"kind":"textbox","id":"sh/y1kre1w7","slide":10,"text":"Add Component","textPreview":"Add Component","textChars":13,"textLines":1,"bbox":[152,280,220,32]}
+{"kind":"textbox","id":"sh/kjm1cfa9","slide":10,"text":"C# Script 목록에서 Game.MoveUp 또는 새 스크립트를 선택한다.","textPreview":"C# Script 목록에서 Game.MoveUp 또는 새 스크립트를 선택한다.","textChars":43,"textLines":1,"bbox":[392,282,690,30]}
+{"kind":"shape","id":"sh/94fu18jq","slide":10,"bbox":[86,330,1010,2]}
+{"kind":"textbox","id":"sh/2hwfyxob","slide":10,"text":"3","textPreview":"3","textChars":1,"textLines":1,"bbox":[86,358,40,34]}
+{"kind":"textbox","id":"sh/r2p8nqxs","slide":10,"text":"필드 조정","textPreview":"필드 조정","textChars":5,"textLines":1,"bbox":[152,358,220,32]}
+{"kind":"textbox","id":"sh/gvy90je9","slide":10,"text":"Speed, Health 같은 public field가 인스펙터에 보이는지 확인한다.","textPreview":"Speed, Health 같은 public field가 인스펙터에 보이는지 확인한다.","textChars":47,"textLines":1,"bbox":[392,360,690,30]}
+{"kind":"shape","id":"sh/9gr2p8nq","slide":10,"bbox":[86,408,1010,2]}
+{"kind":"textbox","id":"sh/2p8nqxs7","slide":10,"text":"4","textPreview":"4","textChars":1,"textLines":1,"bbox":[86,436,40,34]}
+{"kind":"textbox","id":"sh/ra5gbq1o","slide":10,"text":"Play","textPreview":"Play","textChars":4,"textLines":1,"bbox":[152,436,220,32]}
+{"kind":"textbox","id":"sh/kzupwb2h","slide":10,"text":"Play 버튼을 누르고 움직임, 로그, 콘솔 에러를 확인한다.","textPreview":"Play 버튼을 누르고 움직임, 로그, 콘솔 에러를 확인한다.","textChars":34,"textLines":1,"bbox":[392,438,690,30]}
+{"kind":"shape","id":"sh/9knih4by","slide":10,"bbox":[86,486,1010,2]}
+{"kind":"textbox","id":"sh/d8v6psfi","slide":10,"text":"5","textPreview":"5","textChars":1,"textLines":1,"bbox":[86,514,40,34]}
+{"kind":"textbox","id":"sh/onyd0z61","slide":10,"text":"저장 검증","textPreview":"저장 검증","textChars":5,"textLines":1,"bbox":[152,514,220,32]}
+{"kind":"textbox","id":"sh/z25kb6xk","slide":10,"text":"씬/프리팹 저장 후 다시 열어 ScriptComponent와 FieldOverrides가 유지되는지 본다.","textPreview":"씬/프리팹 저장 후 다시 열어 ScriptComponent와 FieldOverrides가 유지되는지 본다.","textChars":59,"textLines":1,"bbox":[392,516,690,30]}
+{"kind":"shape","id":"sh/6hcrmhk3","slide":10,"bbox":[86,564,1010,2]}
+{"kind":"textbox","id":"sh/dg7adsji","slide":10,"text":"CCEngine Script Authoring Guide · 10","textPreview":"CCEngine Script Authoring Guide · 10","textChars":36,"textLines":1,"bbox":[48,674,420,24]}
+{"kind":"notes","id":"nt/r1vrwb","slide":10,"text":""}
+{"kind":"slide","id":"sl/8jewov","slide":11,"title":"문제 해결","textShapes":18}
+{"kind":"textbox","id":"sh/7mp0bi9s","slide":11,"text":"문제 해결","textPreview":"문제 해결","textChars":5,"textLines":1,"bbox":[48,32,360,28]}
+{"kind":"textbox","id":"sh/w7mp0bi9","slide":11,"text":"문제가 생기면 콘솔, manifest, 컴포넌트 연결 순서로 좁힌다","textPreview":"문제가 생기면 콘솔, manifest, 컴포넌트 연결 순서로 좁힌다","textChars":37,"textLines":1,"bbox":[48,70,860,76]}
+{"kind":"shape","id":"sh/psfil0rq","slide":11,"bbox":[48,152,1184,2]}
+{"kind":"shape","id":"sh/epkzupwb","slide":11,"bbox":[68,194,1140,50]}
+{"kind":"textbox","id":"sh/7adsji5s","slide":11,"text":"증상","textPreview":"증상","textChars":2,"textLines":1,"bbox":[92,210,210,20]}
+{"kind":"textbox","id":"sh/wval87ed","slide":11,"text":"가능한 원인","textPreview":"가능한 원인","textChars":6,"textLines":1,"bbox":[360,210,360,20]}
+{"kind":"textbox","id":"sh/pg3ex0nu","slide":11,"text":"먼저 볼 곳","textPreview":"먼저 볼 곳","textChars":6,"textLines":1,"bbox":[828,210,250,20]}
+{"kind":"textbox","id":"sh/eloj2t83","slide":11,"text":"Add Component에 안 보임","textPreview":"Add Component에 안 보임","textChars":19,"textLines":1,"bbox":[92,252,220,44]}
+{"kind":"textbox","id":"sh/36hcrmhk","slide":11,"text":"컴파일 실패, namespace/class 이름 불일치, GameScript 미상속","textPreview":"컴파일 실패, namespace/class 이름 불일치, GameScript 미상속","textChars":46,"textLines":1,"bbox":[360,252,360,44]}
+{"kind":"textbox","id":"sh/fil0rqd4","slide":11,"text":"콘솔 로그와 GameScripts.manifest.json 확인","textPreview":"콘솔 로그와 GameScripts.manifest.json 확인","textChars":35,"textLines":1,"bbox":[828,252,290,44]}
+{"kind":"shape","id":"sh/qxs72x4n","slide":11,"bbox":[68,316,1140,2]}
+{"kind":"textbox","id":"sh/xobm58z2","slide":11,"text":"필드가 인스펙터에 안 보임","textPreview":"필드가 인스펙터에 안 보임","textChars":14,"textLines":1,"bbox":[92,334,220,44]}
+{"kind":"textbox","id":"sh/83itgfml","slide":11,"text":"private field, 지원하지 않는 타입, manifest 미갱신","textPreview":"private field, 지원하지 않는 타입, manifest 미갱신","textChars":39,"textLines":1,"bbox":[360,334,360,44]}
+{"kind":"textbox","id":"sh/fu18jqh0","slide":11,"text":"public field와 지원 타입 확인 후 저장","textPreview":"public field와 지원 타입 확인 후 저장","textChars":27,"textLines":1,"bbox":[828,334,290,44]}
+{"kind":"shape","id":"sh/m94fu18j","slide":11,"bbox":[68,398,1140,2]}
+{"kind":"textbox","id":"sh/x0nuxc3y","slide":11,"text":"Play 중 움직이지 않음","textPreview":"Play 중 움직이지 않음","textChars":14,"textLines":1,"bbox":[92,416,220,44]}
+{"kind":"textbox","id":"sh/4fu18jqh","slide":11,"text":"ScriptComponent 비활성, 클래스 누락, OnUpdate 미구현","textPreview":"ScriptComponent 비활성, 클래스 누락, OnUpdate 미구현","textChars":41,"textLines":1,"bbox":[360,416,360,44]}
+{"kind":"textbox","id":"sh/f6dcbulw","slide":11,"text":"Enabled, ClassName, 콘솔의 missing 로그 확인","textPreview":"Enabled, ClassName, 콘솔의 missing 로그 확인","textChars":37,"textLines":1,"bbox":[828,416,290,44]}
+{"kind":"shape","id":"sh/mlkjm1cf","slide":11,"bbox":[68,480,1140,2]}
+{"kind":"textbox","id":"sh/upwb2hwf","slide":11,"text":"값이 저장되지 않음","textPreview":"값이 저장되지 않음","textChars":10,"textLines":1,"bbox":[92,498,220,44]}
+{"kind":"textbox","id":"sh/nap4r65w","slide":11,"text":"FieldOverrides 직렬화 누락 또는 필드명 변경","textPreview":"FieldOverrides 직렬화 누락 또는 필드명 변경","textChars":31,"textLines":1,"bbox":[360,498,360,44]}
+{"kind":"textbox","id":"sh/cvixczed","slide":11,"text":"씬/프리팹 JSON의 ScriptComponent 확인","textPreview":"씬/프리팹 JSON의 ScriptComponent 확인","textChars":30,"textLines":1,"bbox":[828,498,290,44]}
+{"kind":"shape","id":"sh/5gbq1ory","slide":11,"bbox":[68,562,1140,2]}
+{"kind":"textbox","id":"sh/udg7adsj","slide":11,"text":"CCEngine Script Authoring Guide · 11","textPreview":"CCEngine Script Authoring Guide · 11","textChars":36,"textLines":1,"bbox":[48,674,420,24]}
+{"kind":"notes","id":"nt/8jewov","slide":11,"text":""}
+{"kind":"slide","id":"sl/mydbfk","slide":12,"title":"작성 원칙","textShapes":8}
+{"kind":"textbox","id":"sh/3ylc7u54","slide":12,"text":"작성 원칙","textPreview":"작성 원칙","textChars":5,"textLines":1,"bbox":[48,32,360,28]}
+{"kind":"textbox","id":"sh/sji5snel","slide":12,"text":"스크립트는 작게 시작하고 엔진 API 확장은 분리한다","textPreview":"스크립트는 작게 시작하고 엔진 API 확장은 분리한다","textChars":29,"textLines":1,"bbox":[48,70,860,76]}
+{"kind":"shape","id":"sh/h4byhgn2","slide":12,"bbox":[48,152,1184,2]}
+{"kind":"shape","id":"sh/a5gbq1or","slide":12,"bbox":[74,196,506,374]}
+{"kind":"textbox","id":"sh/3m94fu18","slide":12,"text":"권장","textPreview":"권장","textChars":2,"textLines":1,"bbox":[108,226,160,34]}
+{"kind":"textbox","id":"sh/s72x4nap","slide":12,"text":"- 한 스크립트는 하나의 책임만 가진다.\n- 프레임 독립 처리는 deltaTime을 사용한다.\n- 튜닝 값은 public field로 노출한다.\n- 엔진 API가 필요하면 ScriptCore에 작게 추가한다.\n- 컴파일 에러는 콘솔에서 즉시 확인한다.","textPreview":"- 한 스크립트는 하나의 책임만 가진다. | - 프레임 독립 처리는 deltaTime을 사용한다. | - 튜닝 값은 public field로 노출한다. | - 엔진 API가 필요하면 ScriptCore에 작게 추가한다. | - 컴파일 에러는 콘솔...","textChars":140,"textLines":5,"bbox":[108,286,400,200]}
+{"kind":"shape","id":"sh/lszqtcj6","slide":12,"bbox":[700,196,506,374]}
+{"kind":"textbox","id":"sh/a1gvy90j","slide":12,"text":"주의","textPreview":"주의","textChars":2,"textLines":1,"bbox":[734,226,160,34]}
+{"kind":"textbox","id":"sh/zidonyd0","slide":12,"text":"- ScriptCore에 게임별 로직을 넣지 않는다.\n- 필드 이름 변경은 저장 데이터에 영향을 준다.\n- Play 중 완전한 런타임 핫 리로드는 아직 아니다.\n- 지원하지 않는 타입은 인스펙터에 표시되지 않는다.\n- 컴파일 실패 상태에서 테스트를 계속하지 않는다.","textPreview":"- ScriptCore에 게임별 로직을 넣지 않는다. | - 필드 이름 변경은 저장 데이터에 영향을 준다. | - Play 중 완전한 런타임 핫 리로드는 아직 아니다. | - 지원하지 않는 타입은 인스펙터에 표시되지 않는다. | - 컴파일 실패 ...","textChars":148,"textLines":5,"bbox":[734,286,400,200]}
+{"kind":"textbox","id":"sh/re1w7mp0","slide":12,"text":"다음 확장 후보: 입력 API, 엔티티 검색, 컴포넌트 접근, 물리 이벤트, 에셋 참조 필드","textPreview":"다음 확장 후보: 입력 API, 엔티티 검색, 컴포넌트 접근, 물리 이벤트, 에셋 참조 필드","textChars":51,"textLines":1,"bbox":[118,606,980,32]}
+{"kind":"textbox","id":"sh/2t83itgf","slide":12,"text":"CCEngine Script Authoring Guide · 12","textPreview":"CCEngine Script Authoring Guide · 12","textChars":36,"textLines":1,"bbox":[48,674,420,24]}
+{"kind":"notes","id":"nt/mydbfk","slide":12,"text":""}

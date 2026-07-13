@@ -1,6 +1,7 @@
 #pragma once
 
 #include "UI/WindowPanel.h"
+#include <cstddef>
 
 namespace CCEngine::UI
 {
@@ -15,6 +16,7 @@ namespace CCEngine::UI
 
     private:
         ScrollState m_ScrollState;
+        size_t m_LastEntryCount = 0;
         float m_ContentTop = 28.0f;
         float m_RowHeight = 22.0f;
     };

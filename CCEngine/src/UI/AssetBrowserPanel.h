@@ -12,6 +12,7 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace CCEngine
@@ -37,6 +38,11 @@ namespace CCEngine
             void SetOnModelSelected(std::function<void(const std::string&)> callback) { m_OnModelSelected = callback; }
             void SetOnSceneSelected(std::function<void(const std::string&)> callback) { m_OnSceneSelected = callback; }
             void SetOnAssetDropped(std::function<void(const std::string&, const std::string&, float, float)> callback) { m_OnAssetDropped = callback; }
+            void SetOnAssetDatabaseChanged(std::function<void()> callback) { m_OnAssetDatabaseChanged = std::move(callback); }
+            void SetOnAssetHistoryChanged(std::function<void()> callback) { m_OnAssetHistoryChanged = std::move(callback); }
+            std::vector<std::string> GetAssetHistoryLabels() const;
+            size_t GetAppliedAssetHistoryCount() const { return m_AssetUndoStack.size(); }
+            bool SeekAssetHistory(size_t targetAppliedCount);
 
             virtual void UpdateLayout(const DirectX::XMFLOAT2& parentPos, const DirectX::XMFLOAT2& parentSize) override;
             virtual void OnRender() override;
@@ -110,6 +116,9 @@ namespace CCEngine
             bool MoveEntryToDirectory(const AssetEntry& entry, const std::filesystem::path& targetDirectory);
             bool MoveSelectedEntriesToDirectory(const std::filesystem::path& targetDirectory);
             void StepIconSize(int direction);
+            void NotifyAssetDatabaseChanged();
+            bool UndoAssetOperation();
+            bool RedoAssetOperation();
             Texture2D* GetTexturePreview(const AssetEntry& entry);
             void DrawAssetPreview(const AssetEntry& entry, float x, float y, float size);
             void DrawFallbackAssetIcon(const AssetEntry& entry, float x, float y, float size);
@@ -136,6 +145,40 @@ namespace CCEngine
                 std::vector<uint32_t> Pixels;
                 std::unique_ptr<Texture2D> Texture;
             };
+
+            enum class AssetUndoKind
+            {
+                CreateFolder = 0,
+                Rename,
+                Move,
+                RecycleDelete
+            };
+
+            struct AssetUndoItem
+            {
+                std::filesystem::path FromPath;
+                std::filesystem::path ToPath;
+                std::filesystem::path BackupPath;
+                std::filesystem::path BackupMetaPath;
+                AssetType Type = AssetType::Unknown;
+                bool IsDirectory = false;
+            };
+
+            struct AssetUndoCommand
+            {
+                AssetUndoKind Kind = AssetUndoKind::Move;
+                std::string Label;
+                std::vector<AssetUndoItem> Items;
+            };
+
+            void PushAssetUndoCommand(const AssetUndoCommand& command);
+            bool ApplyAssetUndoCommand(const AssetUndoCommand& command, bool undo);
+            bool MoveAssetBundleForUndo(const std::filesystem::path& from, const std::filesystem::path& to, bool isDirectory);
+            bool CopyAssetBundleForDeleteUndo(const std::filesystem::path& source, AssetUndoItem& item);
+            bool RestoreDeletedAssetFromBackup(const AssetUndoItem& item);
+            void RefreshAfterAssetUndo(const std::filesystem::path& preferredDirectory);
+            std::filesystem::path MakeAssetUndoBackupPath(const std::filesystem::path& source) const;
+            std::string FormatAssetUndoLabel(const AssetUndoCommand& command) const;
 
         private:
             std::filesystem::path m_RootDirectory;
@@ -216,6 +259,12 @@ namespace CCEngine
             std::function<void(const std::string&)> m_OnModelSelected = nullptr;
             std::function<void(const std::string&)> m_OnSceneSelected = nullptr;
             std::function<void(const std::string&, const std::string&, float, float)> m_OnAssetDropped = nullptr;
+            std::function<void()> m_OnAssetDatabaseChanged = nullptr;
+            std::function<void()> m_OnAssetHistoryChanged = nullptr;
+
+            std::vector<AssetUndoCommand> m_AssetUndoStack;
+            std::vector<AssetUndoCommand> m_AssetRedoStack;
+            static constexpr size_t s_MaxAssetUndoCommands = 100;
         };
     }
 }

@@ -8,7 +8,7 @@ namespace CCEngine
     {
     public:
         static void RequestCompile();
-        static void Update();
+        static bool Update();
         static bool IsCompiling();
     };
 }

@@ -477,7 +477,7 @@ namespace CCEngine
             {
                 auto& script = scriptView.get<ScriptComponent>(entityID);
                 script.RuntimeInstanceCreated = script.Enabled && !script.ClassName.empty() &&
-                    ScriptEngine::CreateInstance(static_cast<uint32_t>(entityID), script.ClassName.c_str());
+                    ScriptEngine::CreateInstance(static_cast<uint32_t>(entityID), script);
             }
         }
     }

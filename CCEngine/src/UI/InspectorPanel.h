@@ -31,6 +31,7 @@ namespace CCEngine
             }
             void BeginStructureChange(const std::string& label);
             void CommitStructureChange();
+            bool IsAlbedoTextureSlotPoint(float mouseX, float mouseY) const;
 
             virtual void OnRender() override;
             virtual void OnUpdate(float deltaTime) override;

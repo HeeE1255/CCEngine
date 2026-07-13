@@ -1,6 +1,7 @@
 #include "InspectorPanel.h"
 #include "InspectorRegistry.h"
 #include "Renderer/RenderCommand.h"
+#include "Renderer/Texture.h"
 #include "Renderer/UIRenderer.h"
 #include "Renderer/Renderer2D.h"
 #include "Application.h"
@@ -12,6 +13,7 @@
 #include "Core/AssetDatabase.h"
 #include "Core/ConsoleLog.h"
 #include "Scripting/ScriptCompiler.h"
+#include "Scripting/ScriptMetadata.h"
 #include "Utils/PlatformUtils.h"
 #include <algorithm>
 #include <cctype>
@@ -25,6 +27,25 @@ namespace CCEngine
 {
     namespace UI
     {
+        namespace
+        {
+            Widget* FindVisibleDescendantByName(Widget* widget, const std::string& name)
+            {
+                if (!widget || !widget->IsVisible())
+                    return nullptr;
+
+                if (widget->GetName() == name)
+                    return widget;
+
+                for (Widget* child : widget->GetChildren())
+                {
+                    if (Widget* found = FindVisibleDescendantByName(child, name))
+                        return found;
+                }
+
+                return nullptr;
+            }
+        }
 
         InspectorPanel::InspectorPanel(const std::string& name, const std::string& title)
             : WindowPanel(name, title)
@@ -261,6 +282,8 @@ namespace CCEngine
                 "{\n"
                 "    public sealed class " << className << " : GameScript\n"
                 "    {\n"
+                "        // [Range(0.0f, 10.0f)]처럼 붙이면 인스펙터 표시 방식이 바뀝니다.\n"
+                "        public float Speed = 1.0f;\n\n"
                 "        protected override void OnCreate()\n"
                 "        {\n"
                 "            // Play가 시작되어 이 스크립트가 생성될 때 한 번 호출됩니다.\n"
@@ -315,44 +338,10 @@ namespace CCEngine
 
         std::vector<std::string> InspectorPanel::DiscoverScriptClasses() const
         {
-            std::set<std::string> classes;
-            const auto gameScripts = std::filesystem::current_path() / "assets" / "Scripts" / "Game";
-            std::error_code ec;
-            if (!std::filesystem::exists(gameScripts, ec))
-                return {};
-
-            // 주석 안의 class 문구를 후보로 오인하지 않도록 검색 전에 주석을 걷어낸다.
-            const std::regex blockComment(R"(/\*[\s\S]*?\*/)");
-            const std::regex lineComment(R"(//[^\r\n]*)");
-            const std::regex namespacePattern(R"(\bnamespace\s+([A-Za-z_][A-Za-z0-9_.]*))");
-            const std::regex classPattern(
-                R"(\bclass\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*[^{;\r\n]*\bGameScript\b)");
-
-            for (const auto& entry : std::filesystem::recursive_directory_iterator(gameScripts, ec))
-            {
-                if (ec)
-                    break;
-                if (!entry.is_regular_file() || entry.path().extension() != ".cs")
-                    continue;
-
-                std::ifstream input(entry.path(), std::ios::binary);
-                std::string source((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-                source = std::regex_replace(source, blockComment, " ");
-                source = std::regex_replace(source, lineComment, " ");
-
-                std::string scriptNamespace;
-                std::smatch namespaceMatch;
-                if (std::regex_search(source, namespaceMatch, namespacePattern))
-                    scriptNamespace = namespaceMatch[1].str();
-
-                for (std::sregex_iterator it(source.begin(), source.end(), classPattern), end; it != end; ++it)
-                {
-                    std::string className = (*it)[1].str();
-                    classes.insert(scriptNamespace.empty() ? className : scriptNamespace + "." + className);
-                }
-            }
-
-            return { classes.begin(), classes.end() };
+            // 메뉴에는 컴파일된 DLL에서 검증된 스크립트만 보여준다.
+            // 소스 파싱은 주석, partial class, 네임스페이스 형식에 따라 쉽게 틀어진다.
+            ScriptMetadata::Refresh();
+            return ScriptMetadata::GetClassNames();
         }
 
         void InspectorPanel::BeginStructureChange(const std::string& label)
@@ -367,6 +356,18 @@ namespace CCEngine
             // 실제 컴포넌트 변경이 끝난 뒤 호출해야 Before/After 스냅샷이 나뉜다.
             if (m_CommitStructureChange)
                 m_CommitStructureChange();
+        }
+
+        bool InspectorPanel::IsAlbedoTextureSlotPoint(float mouseX, float mouseY) const
+        {
+            Entity selected = m_SelectedEntity;
+            if (!selected || !selected.HasComponent<MeshComponent>())
+                return false;
+
+            // Mesh Renderer 안의 텍스처 슬롯만 드롭 대상으로 본다.
+            // 인스펙터 빈 공간까지 허용하면 다른 항목 위에서 놓았을 때 의도치 않게 재질이 바뀐다.
+            Widget* slot = FindVisibleDescendantByName(const_cast<InspectorPanel*>(this), "BtnChangeTexture");
+            return slot && slot->IsPointInside(mouseX, mouseY);
         }
 
         void InspectorPanel::FilterAddComponentMenu(const std::string& query)

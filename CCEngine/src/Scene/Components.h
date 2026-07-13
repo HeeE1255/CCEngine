@@ -85,6 +85,8 @@ namespace CCEngine
     {
         // 파일 경로가 아니라 전체 클래스명을 저장한다. 네임스페이스가 바뀌지 않으면 파일 이동과 무관하게 찾을 수 있다.
         std::string ClassName = "Game.MoveUp";
+        // 인스펙터에서 바꾼 public 필드 값만 저장한다. 스크립트 기본값은 C# 코드와 manifest가 기준이다.
+        std::unordered_map<std::string, std::string> FieldOverrides;
         bool Enabled = true;
         bool RuntimeInstanceCreated = false;
     };

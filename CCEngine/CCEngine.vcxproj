@@ -218,7 +218,9 @@
     <ClInclude Include="src\Scene\ScriptableEntity.h" />
     <ClInclude Include="src\Scripting\ScriptCompiler.h" />
     <ClInclude Include="src\Scripting\ScriptEngine.h" />
+    <ClInclude Include="src\Scripting\ScriptMetadata.h" />
     <ClInclude Include="src\UI\AssetBrowserPanel.h" />
+    <ClInclude Include="src\UI\AssetReferenceValidatorPanel.h" />
     <ClInclude Include="src\UI\Button.h" />
     <ClInclude Include="src\UI\ConsolePanel.h" />
     <ClInclude Include="src\UI\DockManager.h" />
@@ -237,6 +239,7 @@
     <ClInclude Include="src\UI\KeyBindingPickerPanel.h" />
     <ClInclude Include="src\UI\Panel.h" />
     <ClInclude Include="src\UI\ProjectSettingsPanel.h" />
+    <ClInclude Include="src\UI\ScriptFieldWidget.h" />
     <ClInclude Include="src\UI\TextInput.h" />
     <ClInclude Include="src\UI\VBoxContainer.h" />
     <ClInclude Include="src\UI\Widget.h" />
@@ -293,7 +296,9 @@
     <ClCompile Include="src\Scene\SceneSerializer.cpp" />
     <ClCompile Include="src\Scripting\ScriptCompiler.cpp" />
     <ClCompile Include="src\Scripting\ScriptEngine.cpp" />
+    <ClCompile Include="src\Scripting\ScriptMetadata.cpp" />
     <ClCompile Include="src\UI\AssetBrowserPanel.cpp" />
+    <ClCompile Include="src\UI\AssetReferenceValidatorPanel.cpp" />
     <ClCompile Include="src\UI\Button.cpp" />
     <ClCompile Include="src\UI\ConsolePanel.cpp" />
     <ClCompile Include="src\UI\DockManager.cpp" />
@@ -311,6 +316,7 @@
     <ClCompile Include="src\UI\KeyBindingPickerPanel.cpp" />
     <ClCompile Include="src\UI\Panel.cpp" />
     <ClCompile Include="src\UI\ProjectSettingsPanel.cpp" />
+    <ClCompile Include="src\UI\ScriptFieldWidget.cpp" />
     <ClCompile Include="src\UI\TextInput.cpp" />
     <ClCompile Include="src\UI\VBoxContainer.cpp" />
     <ClCompile Include="src\UI\Widget.cpp" />

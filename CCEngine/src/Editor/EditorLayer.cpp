@@ -160,6 +160,8 @@ namespace CCEngine {
         // --- 인스펙터 패널에 기본 컴포넌트 등록 ---
         UI::InspectorUtils::InitStandardComponents();
 
+        ValidateAssetReferences();
+
         std::string startScenePath = m_ProjectSettings.Data().StartScenePath;
         if (!m_ProjectSettings.Data().StartSceneGuid.empty())
         {
@@ -184,7 +186,28 @@ namespace CCEngine {
     void EditorLayer::OnUpdate(float deltaTime)
     {
         // 외부 컴파일 작업의 완료 결과는 메인 스레드에서 Console로 전달한다.
-        ScriptCompiler::Update();
+        if (ScriptCompiler::Update())
+        {
+            // 스크립트 manifest가 바뀌면 인스펙터의 public field 목록도 다시 만들어야 한다.
+            for (UI::InspectorPanel* inspector : m_InspectorPanels)
+            {
+                if (inspector)
+                    inspector->RequestRebuild();
+            }
+        }
+
+        if (m_PendingAssetReferenceValidation)
+        {
+            auto now = std::chrono::steady_clock::now();
+            if (now - m_AssetReferenceValidationRequestedAt >= std::chrono::milliseconds(350))
+            {
+                // 에셋 작업 직후에는 History와 브라우저 UI를 먼저 갱신한다.
+                // 씬/프리팹 GUID 검사는 파일 전체를 훑을 수 있으므로 짧게 미뤄 연속 작업을 한 번으로 묶는다.
+                m_PendingAssetReferenceValidation = false;
+                ValidateAssetReferences();
+            }
+        }
+
         auto& mainWindow = CCEngine::Application::Get()->GetWindow();
 
         // 1. 뷰포트 크기 계산 및 프레임버퍼 리사이즈
@@ -1042,6 +1065,19 @@ namespace CCEngine {
         ConsoleLog::Info("Default game resolution saved: " + std::to_string(width) + " x " + std::to_string(height));
     }
 
+    void EditorLayer::ValidateAssetReferences()
+    {
+        // 씬과 프리팹은 파일 경로가 아니라 GUID가 기준이다.
+        // GUID로 현재 에셋을 찾을 수 있으면 저장 파일의 낡은 경로만 고치고, 둘 다 못 찾는 경우만 Missing으로 남긴다.
+        AssetDatabase::ValidateProjectReferences(std::filesystem::current_path() / "assets", true);
+    }
+
+    void EditorLayer::QueueAssetReferenceValidation()
+    {
+        m_PendingAssetReferenceValidation = true;
+        m_AssetReferenceValidationRequestedAt = std::chrono::steady_clock::now();
+    }
+
     void EditorLayer::SaveSelectedPrefab()
     {
         if (!m_HierarchyPanel)
@@ -1175,12 +1211,116 @@ namespace CCEngine {
         }
     }
 
-    void EditorLayer::HandleAssetDropped(const std::string& filepath, const std::string& assetType)
+    bool EditorLayer::ApplyTextureAssetToEntity(Entity entity, const std::string& filepath)
+    {
+        if (!entity || !entity.HasComponent<MeshComponent>())
+            return false;
+
+        if (AssetDatabase::GetAssetKind(filepath) != AssetKind::Texture)
+            return false;
+
+        std::shared_ptr<Texture2D> texture(Texture2D::Create(filepath));
+        if (!texture)
+            return false;
+
+        m_UndoManager.BeginSceneStructureChange("Apply Texture");
+
+        auto& mesh = entity.GetComponent<MeshComponent>();
+        mesh.AlbedoMap = texture;
+        // 저장 파일에는 GPU 텍스처 포인터를 남길 수 없다.
+        // 경로와 GUID를 같이 남겨야 이름 변경/이동 후에도 같은 에셋을 다시 찾을 수 있다.
+        mesh.AlbedoPath = filepath;
+        mesh.AlbedoAssetGuid = AssetDatabase::GetGuidFromPath(filepath);
+
+        m_UndoManager.CommitSceneStructureChange();
+
+        for (UI::InspectorPanel* inspector : m_InspectorPanels)
+        {
+            if (inspector)
+                inspector->RequestRebuild();
+        }
+        MarkHistoryPanelDirty();
+        ConsoleLog::Info("Texture applied: " + filepath);
+        return true;
+    }
+
+    Entity EditorLayer::PickSceneEntityAt(float mouseX, float mouseY) const
+    {
+        if (!m_Framebuffer || !m_ActiveScene)
+            return {};
+
+        for (UI::ImageWidget* viewportWidget : m_ViewportWidgets)
+        {
+            if (!viewportWidget || !viewportWidget->IsVisible())
+                continue;
+
+            auto vpPos = viewportWidget->GetCalculatedPosition();
+            auto vpSize = viewportWidget->GetCalculatedSize();
+            if (vpSize.x <= 0.0f || vpSize.y <= 0.0f)
+                continue;
+
+            const bool insideViewport =
+                mouseX >= vpPos.x && mouseX <= vpPos.x + vpSize.x &&
+                mouseY >= vpPos.y && mouseY <= vpPos.y + vpSize.y;
+            if (!insideViewport)
+                continue;
+
+            float localX = mouseX - vpPos.x;
+            float localY = mouseY - vpPos.y;
+            const auto& spec = m_Framebuffer->GetSpecification();
+            uint32_t pixelX = (uint32_t)((localX / vpSize.x) * (float)spec.Width);
+            uint32_t pixelY = (uint32_t)((localY / vpSize.y) * (float)spec.Height);
+            pixelX = (std::min)(pixelX, spec.Width - 1);
+            pixelY = (std::min)(pixelY, spec.Height - 1);
+
+            // 화면에 보이는 위치는 UI 좌표이고, 실제 선택은 피킹 버퍼의 엔티티 ID로 판단한다.
+            // 그래서 빈 공간이나 MeshComponent가 없는 대상은 이후 단계에서 자연스럽게 걸러진다.
+            int pixelData = m_Framebuffer->ReadPixel(pixelX, pixelY);
+            if (pixelData >= 0 && m_ActiveScene->GetRegistry().valid((entt::entity)pixelData))
+                return Entity{ (entt::entity)pixelData, m_ActiveScene };
+        }
+
+        return {};
+    }
+
+    void EditorLayer::HandleAssetDropped(const std::string& filepath, const std::string& assetType, float mouseX, float mouseY)
     {
         if (!m_HierarchyPanel)
             return;
 
-        auto [mouseX, mouseY] = CCEngine::Application::Get()->GetWindow().GetMousePosition();
+        auto [fallbackMouseX, fallbackMouseY] = CCEngine::Application::Get()->GetWindow().GetMousePosition();
+        if (mouseX <= 0.0f && mouseY <= 0.0f)
+        {
+            mouseX = fallbackMouseX;
+            mouseY = fallbackMouseY;
+        }
+
+        if (assetType == "texture")
+        {
+            for (UI::InspectorPanel* inspector : m_InspectorPanels)
+            {
+                if (!inspector || !inspector->IsVisible())
+                    continue;
+
+                if (inspector->IsAlbedoTextureSlotPoint(mouseX, mouseY))
+                {
+                    if (!ApplyTextureAssetToEntity(inspector->GetSelectedEntity(), filepath))
+                        ConsoleLog::Warning("Texture drop ignored: selected object has no Mesh Renderer.");
+                    return;
+                }
+            }
+
+            Entity target = PickSceneEntityAt(mouseX, mouseY);
+            if (target)
+            {
+                if (!ApplyTextureAssetToEntity(target, filepath))
+                    ConsoleLog::Warning("Texture drop ignored: target has no Mesh Renderer.");
+                return;
+            }
+
+            return;
+        }
+
         if (!m_HierarchyPanel->IsPointInside(mouseX, mouseY))
             return;
 
@@ -1266,12 +1406,87 @@ namespace CCEngine {
         const auto& sceneUndoStack = m_UndoManager.GetSceneUndoStack();
         const auto& sceneRedoStack = m_UndoManager.GetSceneRedoStack();
 
+        UI::AssetBrowserPanel* assetHistoryBrowser = nullptr;
+        std::vector<std::string> assetHistoryLabels;
+        for (UI::AssetBrowserPanel* browser : m_AssetBrowserPanels)
+        {
+            if (!browser)
+                continue;
+
+            std::vector<std::string> labels = browser->GetAssetHistoryLabels();
+            if (!labels.empty())
+            {
+                assetHistoryBrowser = browser;
+                assetHistoryLabels = std::move(labels);
+                break;
+            }
+        }
+
+        std::string historySignature;
+        if (assetHistoryBrowser && !assetHistoryLabels.empty())
+        {
+            historySignature = "asset:" + std::to_string(assetHistoryBrowser->GetAppliedAssetHistoryCount()) + ":";
+            for (const std::string& label : assetHistoryLabels)
+                historySignature += label + "|";
+        }
+        else if (transformUndoStack.empty() && transformRedoStack.empty() &&
+            (!sceneUndoStack.empty() || !sceneRedoStack.empty()))
+        {
+            historySignature = "scene:" + std::to_string(sceneUndoStack.size()) + ":" + std::to_string(sceneRedoStack.size()) + ":";
+            for (const auto& command : sceneUndoStack)
+                historySignature += command.Label + "|";
+            for (const auto& command : sceneRedoStack)
+                historySignature += command.Label + "|";
+        }
+        else
+        {
+            historySignature = "transform:" + std::to_string(transformUndoStack.size()) + ":" + std::to_string(transformRedoStack.size()) + ":";
+            for (const auto& command : transformUndoStack)
+                historySignature += command.EntityPath.empty() ? "Entity|" : command.EntityPath.back() + "|";
+            for (const auto& command : transformRedoStack)
+                historySignature += command.EntityPath.empty() ? "Entity|" : command.EntityPath.back() + "|";
+        }
+        historySignature += "panels:" + std::to_string(m_HistoryContentPanels.size());
+
+        if (historySignature == m_LastHistoryPanelSignature)
+            return;
+        m_LastHistoryPanelSignature = historySignature;
+
         for (UI::Panel* historyContent : m_HistoryContentPanels)
         {
             if (!historyContent)
                 continue;
 
             historyContent->ClearChildren();
+
+        if (assetHistoryBrowser && !assetHistoryLabels.empty())
+        {
+            size_t appliedCount = assetHistoryBrowser->GetAppliedAssetHistoryCount();
+            float itemHeight = 24.0f;
+
+            auto createAssetHistoryButton = [&](size_t stateIndex, const std::string& text)
+            {
+                // 에셋 히스토리는 씬 오브젝트가 아니라 디스크 파일 상태를 움직인다.
+                // 그래서 클릭 시 EditorUndoManager가 아니라 해당 AssetBrowserPanel의 스택을 탐색한다.
+                UI::Button* button = new UI::Button("HistoryItem", text);
+                button->SetAnchorMin(0.0f, 0.0f);
+                button->SetAnchorMax(1.0f, 0.0f);
+                button->SetOffsetMin(0.0f, (float)stateIndex * itemHeight);
+                button->SetOffsetMax(0.0f, ((float)stateIndex + 1.0f) * itemHeight);
+                button->SetNormalColor({ 0.14f, 0.14f, 0.15f, 1.0f });
+                button->SetHoverColor({ 0.22f, 0.22f, 0.24f, 1.0f });
+                button->SetClickColor({ 0.10f, 0.10f, 0.11f, 1.0f });
+                button->SetActive(stateIndex == appliedCount);
+                button->SetOnClick([assetHistoryBrowser, stateIndex]() { assetHistoryBrowser->SeekAssetHistory(stateIndex); });
+                historyContent->AddChild(button);
+            };
+
+            createAssetHistoryButton(0, "Asset Start");
+            for (size_t i = 0; i < assetHistoryLabels.size(); ++i)
+                createAssetHistoryButton(i + 1, std::to_string(i + 1) + ". " + assetHistoryLabels[i]);
+
+            continue;
+        }
 
         if (transformUndoStack.empty() && transformRedoStack.empty() &&
             (!sceneUndoStack.empty() || !sceneRedoStack.empty()))
@@ -1408,7 +1623,9 @@ namespace CCEngine {
             browser->SetOnPrefabSelected([this](const std::string& path) { InstantiatePrefab(path); });
             browser->SetOnModelSelected([this](const std::string& path) { ImportModelAsset(path); });
             browser->SetOnSceneSelected([this](const std::string& path) { OpenScene(path); });
-            browser->SetOnAssetDropped([this](const std::string& path, const std::string& type, float, float) { HandleAssetDropped(path, type); });
+            browser->SetOnAssetDropped([this](const std::string& path, const std::string& type, float x, float y) { HandleAssetDropped(path, type, x, y); });
+            browser->SetOnAssetDatabaseChanged([this]() { QueueAssetReferenceValidation(); });
+            browser->SetOnAssetHistoryChanged([this]() { MarkHistoryPanelDirty(); });
             m_AssetBrowserPanels.push_back(browser);
         };
 
@@ -1500,6 +1717,11 @@ namespace CCEngine {
                 OpenProjectSettingsWindow();
                 break;
             }
+            case 8:
+            {
+                OpenAssetReferenceValidatorWindow();
+                break;
+            }
             default:
                 break;
         }
@@ -1537,6 +1759,43 @@ namespace CCEngine {
         settingsWindow->SetRootUI(m_ProjectSettingsPanel);
         m_ProjectSettingsPanel->OnOpened();
         Application::Get()->SetModalInputWindow(settingsWindow);
+    }
+
+    void EditorLayer::OpenAssetReferenceValidatorWindow()
+    {
+        if (!m_AssetReferenceValidatorPanel)
+            return;
+
+        for (Window* window : Application::Get()->GetSecondaryWindows())
+        {
+            if (window && !window->ShouldClose() && window->GetRootUI() == m_AssetReferenceValidatorPanel)
+            {
+                auto [mouseX, mouseY] = Application::Get()->GetWindow().GetScreenMousePosition();
+                window->SetPosition(mouseX - 450, mouseY - 24);
+                m_AssetReferenceValidatorPanel->SetVisible(true);
+                m_AssetReferenceValidatorPanel->Validate(true);
+                Application::Get()->SetModalInputWindow(window);
+                return;
+            }
+        }
+
+        if (m_AssetReferenceValidatorPanel->GetParent())
+            m_AssetReferenceValidatorPanel->GetParent()->RemoveChild(m_AssetReferenceValidatorPanel);
+
+        Window* validatorWindow = Application::Get()->CreateSecondaryWindow("Asset Reference Validator", 900, 560);
+        // 이 창은 레이아웃 검사용 도구 창이다.
+        // 메인 편집 패널처럼 리독 대상에 넣으면 검사 중인 창 자체가 도킹 상태에 끌려가므로,
+        // 프로젝트 세팅과 같은 별도 OS 창으로만 열고 도킹 경로는 막아 둔다.
+        m_AssetReferenceValidatorPanel->SetDockingEnabled(false);
+        m_AssetReferenceValidatorPanel->SetOwnerWindow(validatorWindow);
+        m_AssetReferenceValidatorPanel->SetVisible(true);
+        m_AssetReferenceValidatorPanel->SetAnchorMin(0.0f, 0.0f);
+        m_AssetReferenceValidatorPanel->SetAnchorMax(1.0f, 1.0f);
+        m_AssetReferenceValidatorPanel->SetOffsetMin(0.0f, 0.0f);
+        m_AssetReferenceValidatorPanel->SetOffsetMax(0.0f, 0.0f);
+        validatorWindow->SetRootUI(m_AssetReferenceValidatorPanel);
+        m_AssetReferenceValidatorPanel->Validate(true);
+        Application::Get()->SetModalInputWindow(validatorWindow);
     }
 
     void EditorLayer::OpenKeyBindingPickerWindow(UI::KeyBindingInput* targetInput)
@@ -1708,7 +1967,9 @@ namespace CCEngine {
         m_AssetBrowserPanel->SetOnPrefabSelected([this](const std::string& path) { InstantiatePrefab(path); });
         m_AssetBrowserPanel->SetOnModelSelected([this](const std::string& path) { ImportModelAsset(path); });
         m_AssetBrowserPanel->SetOnSceneSelected([this](const std::string& path) { OpenScene(path); });
-        m_AssetBrowserPanel->SetOnAssetDropped([this](const std::string& path, const std::string& type, float, float) { HandleAssetDropped(path, type); });
+        m_AssetBrowserPanel->SetOnAssetDropped([this](const std::string& path, const std::string& type, float x, float y) { HandleAssetDropped(path, type, x, y); });
+        m_AssetBrowserPanel->SetOnAssetDatabaseChanged([this]() { QueueAssetReferenceValidation(); });
+        m_AssetBrowserPanel->SetOnAssetHistoryChanged([this]() { MarkHistoryPanelDirty(); });
         m_RootUI->AddChild(m_AssetBrowserPanel);
         m_AssetBrowserPanels.push_back(m_AssetBrowserPanel);
 
@@ -1782,7 +2043,7 @@ namespace CCEngine {
         m_WindowDropdownPanel->SetAnchorMin(0.0f, 0.0f);
         m_WindowDropdownPanel->SetAnchorMax(0.0f, 0.0f);
         m_WindowDropdownPanel->SetOffsetMin(120.0f, 48.0f);
-        m_WindowDropdownPanel->SetOffsetMax(320.0f, 48.0f + 200.0f);
+        m_WindowDropdownPanel->SetOffsetMax(320.0f, 48.0f + 225.0f);
         m_RootUI->AddChild(m_WindowDropdownPanel);
 
         const char* windowNames[] =
@@ -1794,10 +2055,11 @@ namespace CCEngine {
             "Asset Browser",
             "History",
             "Console",
-            "Project Settings..."
+            "Project Settings...",
+            "Asset Reference Validator"
         };
 
-        for (int i = 0; i < 8; ++i)
+        for (int i = 0; i < 9; ++i)
         {
             auto* button = new UI::Button(std::string("BtnWindowMenu") + std::to_string(i), windowNames[i]);
             button->SetAnchorMin(0.0f, 0.0f);
@@ -1824,6 +2086,17 @@ namespace CCEngine {
             [this]() { ApplyProjectGameResolution(); });
         m_ProjectSettingsPanel->SetKeyBindingPickerCallback(
             [this](UI::KeyBindingInput* targetInput) { OpenKeyBindingPickerWindow(targetInput); });
+
+        m_AssetReferenceValidatorPanel = new UI::AssetReferenceValidatorPanel("AssetReferenceValidatorPanelUI");
+        m_AssetReferenceValidatorPanel->SetVisible(false);
+        m_AssetReferenceValidatorPanel->SetBlockMouseEvents(true);
+        m_AssetReferenceValidatorPanel->SetDockingEnabled(false);
+        m_AssetReferenceValidatorPanel->SetAnchorMin(0.0f, 0.0f);
+        m_AssetReferenceValidatorPanel->SetAnchorMax(1.0f, 1.0f);
+        m_AssetReferenceValidatorPanel->SetOffsetMin(0.0f, 0.0f);
+        m_AssetReferenceValidatorPanel->SetOffsetMax(0.0f, 0.0f);
+        // 이 패널은 메인 루트에 붙이지 않는다.
+        // Window 메뉴에서 열 때 보조 창의 Root UI로 연결해야 OS 창 이동/리사이즈가 그대로 적용된다.
 
         m_ObjectContextMenuPanel = new UI::Panel("ObjectContextMenu", { 0.14f, 0.14f, 0.15f, 1.0f });
         m_ObjectContextMenuPanel->SetVisible(false);

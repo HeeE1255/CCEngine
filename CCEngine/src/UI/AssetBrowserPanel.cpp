@@ -3,6 +3,7 @@
 #include <Windows.h>
 #include <shellapi.h>
 #include "Core/AssetDatabase.h"
+#include "Core/ConsoleLog.h"
 #include "Renderer/UIRenderer.h"
 #include "Renderer/Texture.h"
 #include "Application.h"
@@ -16,6 +17,7 @@
 #include <cmath>
 #include <functional>
 #include <iostream>
+#include <sstream>
 
 namespace CCEngine
 {
@@ -341,6 +343,7 @@ namespace CCEngine
 
             std::cout << "[AssetBrowser] Imported " << importedPaths.size() << " external asset(s) into "
                 << m_CurrentDirectory.string() << std::endl;
+            NotifyAssetDatabaseChanged();
             return true;
         }
 
@@ -567,14 +570,29 @@ namespace CCEngine
                 return false;
 
             bool anyDeleted = false;
+            AssetUndoCommand undoCommand;
+            undoCommand.Kind = AssetUndoKind::RecycleDelete;
+            undoCommand.Label = m_ModalTargetPaths.size() == 1 ? "Delete Asset" : "Delete Assets";
+
             for (const auto& path : m_ModalTargetPaths)
             {
                 if (!IsPathInsideRoot(path, false))
                     continue;
 
+                std::error_code ec;
+                AssetUndoItem undoItem;
+                undoItem.FromPath = path;
+                undoItem.IsDirectory = std::filesystem::is_directory(path, ec) && !ec;
+                undoItem.Type = undoItem.IsDirectory ? AssetType::Folder : GetAssetType(path);
+                bool hasUndoBackup = CopyAssetBundleForDeleteUndo(path, undoItem);
+
                 if (AssetDatabase::RecycleAsset(path))
                 {
                     anyDeleted = true;
+                    if (hasUndoBackup)
+                        undoCommand.Items.push_back(undoItem);
+                    else
+                        ConsoleLog::Warning("Asset delete cannot be restored by Undo: " + path.string());
                     std::cout << "[AssetBrowser] Asset moved to recycle bin: " << path.string() << std::endl;
                 }
             }
@@ -582,9 +600,13 @@ namespace CCEngine
             if (!anyDeleted)
                 return false;
 
+            if (!undoCommand.Items.empty())
+                PushAssetUndoCommand(undoCommand);
+
             CancelModal();
             ClearSelection();
             Refresh(true);
+            NotifyAssetDatabaseChanged();
             return true;
         }
 
@@ -598,6 +620,12 @@ namespace CCEngine
             std::filesystem::create_directory(folderPath, ec);
             if (ec)
                 return false;
+
+            AssetUndoCommand undoCommand;
+            undoCommand.Kind = AssetUndoKind::CreateFolder;
+            undoCommand.Label = "Create Folder";
+            undoCommand.Items.push_back({ {}, folderPath, {}, {}, AssetType::Folder, true });
+            PushAssetUndoCommand(undoCommand);
 
             // 폴더 생성 뒤에는 트리 캐시를 비워야 왼쪽 폴더 목록에도 바로 나타난다.
             AssetDatabase::MarkDirty(m_RootDirectory);
@@ -625,31 +653,43 @@ namespace CCEngine
             std::error_code ec;
             bool isDirectory = std::filesystem::is_directory(m_ModalTargetPath, ec) && !ec;
             bool renamed = false;
+            std::filesystem::path sourcePath = m_ModalTargetPath;
+            std::filesystem::path targetPath;
 
             if (isDirectory)
             {
-                std::filesystem::path target = m_ModalTargetPath.parent_path() / cleanName;
-                if (std::filesystem::exists(target, ec))
+                targetPath = m_ModalTargetPath.parent_path() / cleanName;
+                if (std::filesystem::exists(targetPath, ec))
                     return false;
 
                 // 폴더 이름 변경은 하위 파일 구조를 그대로 옮기는 작업이다.
                 // 파일 에셋은 AssetDatabase가 meta를 같이 옮기지만, 폴더는 파일 시스템 rename 후 스캔을 다시 한다.
-                std::filesystem::rename(m_ModalTargetPath, target, ec);
+                std::filesystem::rename(m_ModalTargetPath, targetPath, ec);
                 renamed = !ec;
                 if (renamed)
                     AssetDatabase::MarkDirty(m_RootDirectory);
             }
             else
             {
+                targetPath = m_ModalTargetPath.parent_path() / cleanName;
+                if (targetPath.extension().empty())
+                    targetPath.replace_extension(m_ModalTargetPath.extension());
                 renamed = AssetDatabase::RenameAsset(m_ModalTargetPath, cleanName);
             }
 
             if (!renamed)
                 return false;
 
+            AssetUndoCommand undoCommand;
+            undoCommand.Kind = AssetUndoKind::Rename;
+            undoCommand.Label = "Rename Asset";
+            undoCommand.Items.push_back({ sourcePath, targetPath, {}, {}, isDirectory ? AssetType::Folder : GetAssetType(targetPath), isDirectory });
+            PushAssetUndoCommand(undoCommand);
+
             CancelModal();
             m_TreeChildCache.clear();
             Refresh(true);
+            NotifyAssetDatabaseChanged();
             return true;
         }
 
@@ -725,6 +765,12 @@ namespace CCEngine
                 std::filesystem::create_directory(folderPath, ec);
                 if (ec)
                     return false;
+
+                AssetUndoCommand undoCommand;
+                undoCommand.Kind = AssetUndoKind::CreateFolder;
+                undoCommand.Label = "Create Folder";
+                undoCommand.Items.push_back({ {}, folderPath, {}, {}, AssetType::Folder, true });
+                PushAssetUndoCommand(undoCommand);
 
                 AssetDatabase::MarkDirty(m_RootDirectory);
                 CancelModal();
@@ -1291,6 +1337,11 @@ namespace CCEngine
             if (std::filesystem::equivalent(entry.Path, destination, ec) || std::filesystem::exists(destination, ec))
                 return false;
 
+            AssetUndoCommand undoCommand;
+            undoCommand.Kind = AssetUndoKind::Move;
+            undoCommand.Label = "Move Asset";
+            undoCommand.Items.push_back({ entry.Path, destination, {}, {}, entry.Type, entry.Type == AssetType::Folder });
+
             if (entry.Type == AssetType::Folder)
             {
                 auto source = std::filesystem::weakly_canonical(entry.Path, ec);
@@ -1313,6 +1364,7 @@ namespace CCEngine
                     return false;
             }
 
+            PushAssetUndoCommand(undoCommand);
             Refresh(true);
             return true;
         }
@@ -1331,7 +1383,10 @@ namespace CCEngine
             }
 
             if (movedAny)
+            {
                 ClearSelection();
+                NotifyAssetDatabaseChanged();
+            }
             return movedAny;
         }
 
@@ -1339,6 +1394,351 @@ namespace CCEngine
         {
             m_IconSizeStep = (std::clamp)(m_IconSizeStep + direction, 0, 4);
             m_ScrollState.ScrollY = 0.0f;
+        }
+
+        void AssetBrowserPanel::NotifyAssetDatabaseChanged()
+        {
+            // 에셋 브라우저는 파일을 직접 바꾸지만, 씬/프리팹 참조 검사는 에디터가 담당한다.
+            // 콜백으로 경계를 나누면 브라우저가 에디터 내부 구현을 알 필요가 없다.
+            if (m_OnAssetDatabaseChanged)
+                m_OnAssetDatabaseChanged();
+        }
+
+        void AssetBrowserPanel::PushAssetUndoCommand(const AssetUndoCommand& command)
+        {
+            if (command.Items.empty())
+                return;
+
+            m_AssetUndoStack.push_back(command);
+            if (m_AssetUndoStack.size() > s_MaxAssetUndoCommands)
+                m_AssetUndoStack.erase(m_AssetUndoStack.begin());
+
+            m_AssetRedoStack.clear();
+            if (m_OnAssetHistoryChanged)
+                m_OnAssetHistoryChanged();
+        }
+
+        bool AssetBrowserPanel::UndoAssetOperation()
+        {
+            if (m_AssetUndoStack.empty())
+                return false;
+
+            AssetUndoCommand command = m_AssetUndoStack.back();
+            if (!ApplyAssetUndoCommand(command, true))
+                return false;
+
+            m_AssetUndoStack.pop_back();
+            m_AssetRedoStack.push_back(command);
+            ConsoleLog::Info("Asset Undo: " + command.Label);
+            if (m_OnAssetHistoryChanged)
+                m_OnAssetHistoryChanged();
+            return true;
+        }
+
+        bool AssetBrowserPanel::RedoAssetOperation()
+        {
+            if (m_AssetRedoStack.empty())
+                return false;
+
+            AssetUndoCommand command = m_AssetRedoStack.back();
+            if (!ApplyAssetUndoCommand(command, false))
+                return false;
+
+            m_AssetRedoStack.pop_back();
+            m_AssetUndoStack.push_back(command);
+            ConsoleLog::Info("Asset Redo: " + command.Label);
+            if (m_OnAssetHistoryChanged)
+                m_OnAssetHistoryChanged();
+            return true;
+        }
+
+        std::vector<std::string> AssetBrowserPanel::GetAssetHistoryLabels() const
+        {
+            std::vector<std::string> labels;
+            labels.reserve(m_AssetUndoStack.size() + m_AssetRedoStack.size());
+
+            for (const AssetUndoCommand& command : m_AssetUndoStack)
+                labels.push_back(FormatAssetUndoLabel(command));
+
+            for (auto it = m_AssetRedoStack.rbegin(); it != m_AssetRedoStack.rend(); ++it)
+                labels.push_back(FormatAssetUndoLabel(*it));
+
+            return labels;
+        }
+
+        bool AssetBrowserPanel::SeekAssetHistory(size_t targetAppliedCount)
+        {
+            const size_t totalCommands = m_AssetUndoStack.size() + m_AssetRedoStack.size();
+            targetAppliedCount = (std::min)(targetAppliedCount, totalCommands);
+
+            bool changed = false;
+            while (m_AssetUndoStack.size() > targetAppliedCount)
+            {
+                if (!UndoAssetOperation())
+                    break;
+                changed = true;
+            }
+
+            while (m_AssetUndoStack.size() < targetAppliedCount)
+            {
+                if (!RedoAssetOperation())
+                    break;
+                changed = true;
+            }
+
+            return changed;
+        }
+
+        bool AssetBrowserPanel::ApplyAssetUndoCommand(const AssetUndoCommand& command, bool undo)
+        {
+            if (command.Items.empty())
+                return false;
+
+            bool changed = false;
+            auto applyItem = [&](const AssetUndoItem& item) -> bool
+                {
+                    switch (command.Kind)
+                    {
+                        case AssetUndoKind::CreateFolder:
+                        {
+                            const std::filesystem::path& folderPath = item.ToPath;
+                            std::error_code ec;
+                            if (undo)
+                            {
+                                if (!std::filesystem::exists(folderPath, ec) || ec)
+                                    return false;
+
+                                // 생성 Undo는 빈 폴더만 제거한다.
+                                // 사용자가 그 안에 파일을 넣은 뒤라면 데이터 손실을 막기 위해 실패로 처리한다.
+                                if (!std::filesystem::is_empty(folderPath, ec) || ec)
+                                {
+                                    ConsoleLog::Warning("Create Folder Undo skipped non-empty folder: " + folderPath.string());
+                                    return false;
+                                }
+
+                                std::filesystem::remove(folderPath, ec);
+                                return !ec;
+                            }
+
+                            if (std::filesystem::exists(folderPath, ec) && !ec)
+                                return false;
+
+                            std::filesystem::create_directories(folderPath, ec);
+                            return !ec;
+                        }
+                        case AssetUndoKind::Rename:
+                        case AssetUndoKind::Move:
+                        {
+                            const std::filesystem::path& from = undo ? item.ToPath : item.FromPath;
+                            const std::filesystem::path& to = undo ? item.FromPath : item.ToPath;
+                            return MoveAssetBundleForUndo(from, to, item.IsDirectory);
+                        }
+                        case AssetUndoKind::RecycleDelete:
+                        {
+                            if (undo)
+                                return RestoreDeletedAssetFromBackup(item);
+
+                            return MoveAssetBundleForUndo(item.FromPath, item.BackupPath, item.IsDirectory);
+                        }
+                        default:
+                            return false;
+                    }
+                };
+
+            if (undo)
+            {
+                for (auto it = command.Items.rbegin(); it != command.Items.rend(); ++it)
+                    changed = applyItem(*it) || changed;
+            }
+            else
+            {
+                for (const AssetUndoItem& item : command.Items)
+                    changed = applyItem(item) || changed;
+            }
+
+            if (!changed)
+                return false;
+
+            std::filesystem::path preferredDirectory = command.Items.front().FromPath.empty()
+                ? command.Items.front().ToPath.parent_path()
+                : command.Items.front().FromPath.parent_path();
+            RefreshAfterAssetUndo(preferredDirectory);
+            return true;
+        }
+
+        bool AssetBrowserPanel::MoveAssetBundleForUndo(const std::filesystem::path& from, const std::filesystem::path& to, bool isDirectory)
+        {
+            std::error_code ec;
+            if (!std::filesystem::exists(from, ec) || ec)
+                return false;
+
+            if (std::filesystem::exists(to, ec) && !ec)
+            {
+                ConsoleLog::Warning("Asset Undo blocked by existing path: " + to.string());
+                return false;
+            }
+
+            if (!to.parent_path().empty())
+                std::filesystem::create_directories(to.parent_path(), ec);
+            if (ec)
+                return false;
+
+            // Undo/Redo는 에셋 파일과 sidecar meta를 항상 한 묶음으로 움직인다.
+            // meta가 따로 남으면 GUID는 살아 있어도 sourcePath가 어긋나 참조 검증에서 깨진다.
+            std::filesystem::rename(from, to, ec);
+            if (ec)
+                return false;
+
+            if (!isDirectory)
+            {
+                std::filesystem::path fromMeta = AssetDatabase::GetMetaPath(from);
+                std::filesystem::path toMeta = AssetDatabase::GetMetaPath(to);
+                if (std::filesystem::exists(fromMeta, ec) && !ec)
+                {
+                    std::filesystem::rename(fromMeta, toMeta, ec);
+                    if (ec)
+                    {
+                        std::error_code rollbackEc;
+                        std::filesystem::rename(to, from, rollbackEc);
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        bool AssetBrowserPanel::CopyAssetBundleForDeleteUndo(const std::filesystem::path& source, AssetUndoItem& item)
+        {
+            std::error_code ec;
+            if (!std::filesystem::exists(source, ec) || ec)
+                return false;
+
+            item.BackupPath = MakeAssetUndoBackupPath(source);
+            item.BackupMetaPath = AssetDatabase::GetMetaPath(item.BackupPath);
+            std::filesystem::create_directories(item.BackupPath.parent_path(), ec);
+            if (ec)
+                return false;
+
+            // 삭제 Undo는 OS 휴지통만 믿지 않고 엔진 내부 백업을 하나 둔다.
+            // 그래야 사용자가 Ctrl+Z를 누를 때 원래 프로젝트 경로로 즉시 복구할 수 있다.
+            if (item.IsDirectory)
+            {
+                std::filesystem::copy(
+                    source,
+                    item.BackupPath,
+                    std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing,
+                    ec);
+            }
+            else
+            {
+                std::filesystem::copy_file(source, item.BackupPath, std::filesystem::copy_options::none, ec);
+                if (!ec)
+                {
+                    std::filesystem::path sourceMeta = AssetDatabase::GetMetaPath(source);
+                    if (std::filesystem::exists(sourceMeta, ec) && !ec)
+                        std::filesystem::copy_file(sourceMeta, item.BackupMetaPath, std::filesystem::copy_options::none, ec);
+                }
+            }
+
+            if (ec)
+            {
+                std::error_code cleanupEc;
+                std::filesystem::remove_all(item.BackupPath, cleanupEc);
+                std::filesystem::remove(item.BackupMetaPath, cleanupEc);
+                ConsoleLog::Warning("Failed to prepare delete undo backup: " + source.string());
+                return false;
+            }
+
+            return true;
+        }
+
+        bool AssetBrowserPanel::RestoreDeletedAssetFromBackup(const AssetUndoItem& item)
+        {
+            std::error_code ec;
+            if (item.FromPath.empty() || item.BackupPath.empty())
+                return false;
+
+            if (std::filesystem::exists(item.FromPath, ec) && !ec)
+            {
+                ConsoleLog::Warning("Delete Undo blocked by existing path: " + item.FromPath.string());
+                return false;
+            }
+
+            if (!std::filesystem::exists(item.BackupPath, ec) || ec)
+            {
+                ConsoleLog::Warning("Delete Undo backup is missing: " + item.BackupPath.string());
+                return false;
+            }
+
+            if (!item.FromPath.parent_path().empty())
+                std::filesystem::create_directories(item.FromPath.parent_path(), ec);
+            if (ec)
+                return false;
+
+            std::filesystem::rename(item.BackupPath, item.FromPath, ec);
+            if (ec)
+                return false;
+
+            if (!item.IsDirectory && !item.BackupMetaPath.empty() && std::filesystem::exists(item.BackupMetaPath, ec) && !ec)
+            {
+                std::filesystem::path restoredMeta = AssetDatabase::GetMetaPath(item.FromPath);
+                std::filesystem::rename(item.BackupMetaPath, restoredMeta, ec);
+                if (ec)
+                    ConsoleLog::Warning("Delete Undo restored asset but failed to restore meta: " + item.FromPath.string());
+            }
+
+            return true;
+        }
+
+        void AssetBrowserPanel::RefreshAfterAssetUndo(const std::filesystem::path& preferredDirectory)
+        {
+            if (IsPathInsideRoot(preferredDirectory, true))
+                m_CurrentDirectory = preferredDirectory;
+
+            AssetDatabase::MarkDirty(m_RootDirectory);
+            m_TreeChildCache.clear();
+            Refresh(true);
+            NotifyAssetDatabaseChanged();
+        }
+
+        std::filesystem::path AssetBrowserPanel::MakeAssetUndoBackupPath(const std::filesystem::path& source) const
+        {
+            auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+            std::filesystem::path backupRoot = std::filesystem::current_path() / ".ccengine" / "AssetUndoTrash";
+
+            std::ostringstream name;
+            name << now << "_" << source.filename().string();
+            std::filesystem::path candidate = backupRoot / name.str();
+
+            int suffix = 1;
+            std::error_code ec;
+            while (std::filesystem::exists(candidate, ec) && !ec)
+            {
+                std::ostringstream retryName;
+                retryName << now << "_" << suffix++ << "_" << source.filename().string();
+                candidate = backupRoot / retryName.str();
+            }
+
+            return candidate;
+        }
+
+        std::string AssetBrowserPanel::FormatAssetUndoLabel(const AssetUndoCommand& command) const
+        {
+            std::string label = command.Label.empty() ? "Asset Operation" : command.Label;
+            if (command.Items.size() == 1)
+            {
+                const AssetUndoItem& item = command.Items.front();
+                std::filesystem::path displayPath = item.ToPath.empty() ? item.FromPath : item.ToPath;
+                if (!displayPath.empty())
+                    label += " " + displayPath.filename().string();
+            }
+            else
+            {
+                label += " (" + std::to_string(command.Items.size()) + ")";
+            }
+
+            return label;
         }
 
         Texture2D* AssetBrowserPanel::GetTexturePreview(const AssetEntry& entry)
@@ -1972,6 +2372,32 @@ namespace CCEngine
 
                 e.Handled = true;
                 return true;
+            }
+
+            if (e.GetEventType() == EventType::KeyPressed)
+            {
+                auto& ke = static_cast<KeyPressedEvent&>(e);
+                auto& window = GetOwnerWindow() ? *GetOwnerWindow() : CCEngine::Application::Get()->GetWindow();
+                auto [mouseX, mouseY] = window.GetMousePosition();
+                bool mouseInsideBrowser = IsPointInside(mouseX, mouseY);
+                bool ctrl = IsKeyHeld(VK_CONTROL);
+                bool shift = IsKeyHeld(VK_SHIFT);
+
+                // 에셋 Undo는 디스크 파일을 움직이는 작업이라 씬 Transform Undo와 분리한다.
+                // 마우스가 에셋 브라우저 안에 있을 때만 Ctrl+Z/Y를 가져가면 다른 패널의 단축키를 침범하지 않는다.
+                if (mouseInsideBrowser && ctrl && ke.GetKeyCode() == 'Z')
+                {
+                    bool handled = shift ? RedoAssetOperation() : UndoAssetOperation();
+                    e.Handled = handled;
+                    return handled;
+                }
+
+                if (mouseInsideBrowser && ctrl && ke.GetKeyCode() == 'Y')
+                {
+                    bool handled = RedoAssetOperation();
+                    e.Handled = handled;
+                    return handled;
+                }
             }
 
             if (m_SearchFocused)

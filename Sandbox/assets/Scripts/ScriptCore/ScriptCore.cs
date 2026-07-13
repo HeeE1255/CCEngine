@@ -5,9 +5,40 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Loader;
+using System.Text.Json;
 
 namespace CCEngine
 {
+    [AttributeUsage(AttributeTargets.Field)]
+    public sealed class RangeAttribute : Attribute
+    {
+        public float Min { get; }
+        public float Max { get; }
+
+        public RangeAttribute(float min, float max)
+        {
+            Min = min;
+            Max = max;
+        }
+    }
+
+    [AttributeUsage(AttributeTargets.Field)]
+    public sealed class DragAttribute : Attribute
+    {
+        public float Speed { get; }
+        public DragAttribute(float speed = 0.1f) => Speed = speed;
+    }
+
+    [AttributeUsage(AttributeTargets.Field)]
+    public sealed class StepAttribute : Attribute
+    {
+        public float Value { get; }
+        public StepAttribute(float value = 1.0f) => Value = value;
+    }
+
+    [AttributeUsage(AttributeTargets.Field)]
+    public sealed class ReadOnlyAttribute : Attribute { }
+
     [StructLayout(LayoutKind.Sequential)]
     public struct Vector3
     {
@@ -126,11 +157,12 @@ namespace CCEngine.Internal
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        public static int CreateInstance(uint entityID, nint className)
+        public static int CreateInstance(uint entityID, nint className, nint fieldJson)
         {
             try
             {
                 string? name = Marshal.PtrToStringUTF8(className);
+                string? overridesJson = Marshal.PtrToStringUTF8(fieldJson);
                 Type? type = s_GameAssembly?.GetType(name ?? string.Empty, throwOnError: false);
                 if (type == null || type.IsAbstract || !typeof(CCEngine.GameScript).IsAssignableFrom(type))
                 {
@@ -148,6 +180,7 @@ namespace CCEngine.Internal
 
                 instance.EntityID = entityID;
                 s_Instances[entityID] = instance;
+                ApplyFieldOverrides(instance, overridesJson);
                 instance.InvokeCreate();
                 return 0;
             }
@@ -190,6 +223,41 @@ namespace CCEngine.Internal
             s_GameAssembly = null;
             s_LoadContext?.Unload();
             s_LoadContext = null;
+        }
+
+        private static void ApplyFieldOverrides(CCEngine.GameScript instance, string? json)
+        {
+            if (string.IsNullOrWhiteSpace(json))
+                return;
+
+            using JsonDocument document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return;
+
+            Type type = instance.GetType();
+            foreach (JsonProperty property in document.RootElement.EnumerateObject())
+            {
+                FieldInfo? field = type.GetField(property.Name, BindingFlags.Instance | BindingFlags.Public);
+                if (field == null || field.IsInitOnly || field.IsLiteral)
+                    continue;
+
+                // 저장 파일에는 문자열로 보관하지만 실제 스크립트에는 필드 타입에 맞춰 다시 넣는다.
+                if (field.FieldType == typeof(float) && property.Value.TryGetSingle(out float floatValue))
+                    field.SetValue(instance, floatValue);
+                else if (field.FieldType == typeof(int) && property.Value.TryGetInt32(out int intValue))
+                    field.SetValue(instance, intValue);
+                else if (field.FieldType == typeof(bool) && property.Value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                    field.SetValue(instance, property.Value.GetBoolean());
+                else if (field.FieldType == typeof(string))
+                    field.SetValue(instance, property.Value.GetString() ?? string.Empty);
+                else if (field.FieldType == typeof(CCEngine.Vector3) && property.Value.ValueKind == JsonValueKind.Object)
+                {
+                    float x = property.Value.TryGetProperty("X", out JsonElement xElement) && xElement.TryGetSingle(out float xv) ? xv : 0.0f;
+                    float y = property.Value.TryGetProperty("Y", out JsonElement yElement) && yElement.TryGetSingle(out float yv) ? yv : 0.0f;
+                    float z = property.Value.TryGetProperty("Z", out JsonElement zElement) && zElement.TryGetSingle(out float zv) ? zv : 0.0f;
+                    field.SetValue(instance, new CCEngine.Vector3(x, y, z));
+                }
+            }
         }
     }
 }
