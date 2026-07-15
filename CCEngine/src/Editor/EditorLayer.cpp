@@ -27,10 +27,13 @@
 #include <cmath>
 #include <filesystem>
 #include <functional>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <algorithm>
 #include <cctype>
 #include <unordered_map>
+#include <vector>
 
 #include "Events/Event.h"
 #include "Events/MouseEvent.h"
@@ -38,6 +41,60 @@
 namespace CCEngine {
     namespace
     {
+        // 에디터 프레임 멈춤을 다시 추적할 때만 true로 바꾼다.
+        // 기본값은 꺼 둬서 평상시 콘솔 로그와 단계 기록이 프레임을 건드리지 않게 한다.
+        constexpr bool kEnableEditorHitchProfiler = false;
+
+        struct EditorHitchStage
+        {
+            const char* Name = "";
+            double Milliseconds = 0.0;
+        };
+
+        double ToMilliseconds(std::chrono::steady_clock::duration duration)
+        {
+            return std::chrono::duration<double, std::milli>(duration).count();
+        }
+
+        void AddEditorHitchStage(std::vector<EditorHitchStage>& stages, const char* name, std::chrono::steady_clock::time_point startedAt)
+        {
+            if (!kEnableEditorHitchProfiler)
+                return;
+
+            stages.push_back({ name, ToMilliseconds(std::chrono::steady_clock::now() - startedAt) });
+        }
+
+        void ReportEditorHitch(std::chrono::steady_clock::time_point frameStartedAt, const std::vector<EditorHitchStage>& stages)
+        {
+            if (!kEnableEditorHitchProfiler)
+                return;
+
+            double totalMs = ToMilliseconds(std::chrono::steady_clock::now() - frameStartedAt);
+            double worstStageMs = 0.0;
+            for (const EditorHitchStage& stage : stages)
+                worstStageMs = (std::max)(worstStageMs, stage.Milliseconds);
+
+            if (totalMs < 16.0 && worstStageMs < 6.0)
+                return;
+
+            static auto s_LastReportTime = std::chrono::steady_clock::now() - std::chrono::seconds(2);
+            auto now = std::chrono::steady_clock::now();
+            if (now - s_LastReportTime < std::chrono::seconds(1))
+                return;
+            s_LastReportTime = now;
+
+            // 에디터 히치는 대부분 특정 관리 작업이 프레임 안에 끼어들 때 생긴다.
+            // 단계별 시간을 남겨 두면 감으로 고치지 않고 병목을 바로 좁힐 수 있다.
+            std::ostringstream stream;
+            stream << "[Hitch] EditorLayer total=" << std::fixed << std::setprecision(2) << totalMs << "ms";
+            for (const EditorHitchStage& stage : stages)
+                stream << " | " << stage.Name << "=" << std::fixed << std::setprecision(2) << stage.Milliseconds << "ms";
+            stream << '\n';
+
+            OutputDebugStringA(stream.str().c_str());
+            std::cout << stream.str();
+        }
+
         std::shared_ptr<Mesh> CreateDefaultMeshForType(MeshComponent::MeshType type)
         {
             switch (type)
@@ -86,6 +143,62 @@ namespace CCEngine {
             }
 
             return candidate;
+        }
+
+        std::string ToLowerPathString(const std::filesystem::path& path)
+        {
+            std::string text = path.lexically_normal().generic_string();
+            std::transform(text.begin(), text.end(), text.begin(),
+                [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return text;
+        }
+
+        std::filesystem::path MakeAbsoluteNormalizedPath(const std::filesystem::path& path)
+        {
+            std::error_code ec;
+            std::filesystem::path absolutePath = std::filesystem::absolute(path, ec);
+            if (ec)
+                absolutePath = path;
+            return absolutePath.lexically_normal();
+        }
+
+        bool IsPathUnderDirectory(const std::filesystem::path& path, const std::filesystem::path& directory)
+        {
+            std::string pathText = ToLowerPathString(MakeAbsoluteNormalizedPath(path));
+            std::string directoryText = ToLowerPathString(MakeAbsoluteNormalizedPath(directory));
+
+            if (pathText == directoryText)
+                return true;
+            if (!directoryText.empty() && directoryText.back() != '/')
+                directoryText.push_back('/');
+
+            return pathText.rfind(directoryText, 0) == 0;
+        }
+
+        bool HasExtension(const std::filesystem::path& path, const std::string& expectedExtension)
+        {
+            std::string extension = path.extension().generic_string();
+            std::transform(extension.begin(), extension.end(), extension.begin(),
+                [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return extension == expectedExtension;
+        }
+
+        bool IsIgnoredAssetWatcherPath(const std::filesystem::path& path)
+        {
+            std::filesystem::path assetsRoot = std::filesystem::current_path() / "assets";
+            std::filesystem::path scriptBuildDirectory = assetsRoot / "Scripts" / "Build";
+
+            // meta는 AssetDatabase가 에셋을 정리하면서 직접 쓰는 sidecar 파일이다.
+            // 이것까지 다시 변경으로 처리하면 "스캔 -> meta 저장 -> 감지 -> 스캔" 루프가 생긴다.
+            if (HasExtension(path, ".meta"))
+                return true;
+
+            // 스크립트 런타임 DLL/PDB는 에디터가 만들어내는 산출물이다.
+            // 이 파일들까지 에셋 변경으로 처리하면 아무 입력이 없어도 전체 assets 스캔이 반복된다.
+            if (IsPathUnderDirectory(path, scriptBuildDirectory))
+                return true;
+
+            return false;
         }
     }
 
@@ -157,10 +270,19 @@ namespace CCEngine {
         BuildEditorUI();
         ConfigureUndoManager();
 
+        std::filesystem::path assetsRoot = std::filesystem::current_path() / "assets";
+        bool assetWatcherStarted = m_AssetFileWatcher.Start(assetsRoot);
+        for (UI::AssetBrowserPanel* browser : m_AssetBrowserPanels)
+        {
+            if (browser)
+                browser->SetExternalWatcherActive(assetWatcherStarted);
+        }
+        ConsoleLog::Info(assetWatcherStarted ? "Asset file watcher started." : "Asset file watcher unavailable. Polling fallback enabled.");
+
         // --- 인스펙터 패널에 기본 컴포넌트 등록 ---
         UI::InspectorUtils::InitStandardComponents();
 
-        ValidateAssetReferences();
+        ValidateAssetReferences(true);
 
         std::string startScenePath = m_ProjectSettings.Data().StartScenePath;
         if (!m_ProjectSettings.Data().StartSceneGuid.empty())
@@ -175,6 +297,8 @@ namespace CCEngine {
 
     void EditorLayer::OnDetach()
     {
+        m_AssetFileWatcher.Stop();
+
         if (m_EditorScene) { m_ActiveScene->OnRuntimeStop(); delete m_ActiveScene; }
         else { delete m_ActiveScene; }
 
@@ -185,6 +309,10 @@ namespace CCEngine {
 
     void EditorLayer::OnUpdate(float deltaTime)
     {
+        auto editorFrameStartedAt = std::chrono::steady_clock::now();
+        std::vector<EditorHitchStage> editorHitchStages;
+        auto editorStageStartedAt = std::chrono::steady_clock::now();
+
         // 외부 컴파일 작업의 완료 결과는 메인 스레드에서 Console로 전달한다.
         if (ScriptCompiler::Update())
         {
@@ -195,7 +323,9 @@ namespace CCEngine {
                     inspector->RequestRebuild();
             }
         }
+        AddEditorHitchStage(editorHitchStages, "ScriptCompiler", editorStageStartedAt);
 
+        editorStageStartedAt = std::chrono::steady_clock::now();
         if (m_PendingAssetReferenceValidation)
         {
             auto now = std::chrono::steady_clock::now();
@@ -204,9 +334,10 @@ namespace CCEngine {
                 // 에셋 작업 직후에는 History와 브라우저 UI를 먼저 갱신한다.
                 // 씬/프리팹 GUID 검사는 파일 전체를 훑을 수 있으므로 짧게 미뤄 연속 작업을 한 번으로 묶는다.
                 m_PendingAssetReferenceValidation = false;
-                ValidateAssetReferences();
+                ValidateAssetReferences(false);
             }
         }
+        AddEditorHitchStage(editorHitchStages, "AssetReferenceValidation", editorStageStartedAt);
 
         auto& mainWindow = CCEngine::Application::Get()->GetWindow();
 
@@ -228,6 +359,7 @@ namespace CCEngine {
             return fallback;
         };
 
+        editorStageStartedAt = std::chrono::steady_clock::now();
         if (!m_ViewportWidgets.empty())
         {
             auto vpSize = getVisibleImageSize(m_ViewportWidgets, m_ViewportSize);
@@ -256,12 +388,20 @@ namespace CCEngine {
         {
             m_GameFramebuffer->Resize((uint32_t)m_GameViewportSize.x, (uint32_t)m_GameViewportSize.y);
         }
+        AddEditorHitchStage(editorHitchStages, "ViewportResize", editorStageStartedAt);
 
         // 2. 카메라 및 로직 업데이트
+        editorStageStartedAt = std::chrono::steady_clock::now();
         m_Camera.OnUpdate(deltaTime, m_ProjectSettings.Data());
         HandleShortcuts();
+        AddEditorHitchStage(editorHitchStages, "CameraShortcuts", editorStageStartedAt);
+
+        editorStageStartedAt = std::chrono::steady_clock::now();
+        ProcessAssetFileWatcher();
+        AddEditorHitchStage(editorHitchStages, "AssetFileWatcher", editorStageStartedAt);
 
         // 선택된 엔티티가 있다면 인스펙터 패널에 전달하여 UI 갱신
+        editorStageStartedAt = std::chrono::steady_clock::now();
         if (m_HierarchyPanel && m_InspectorPanel)
         {
             Entity selected = m_HierarchyPanel->GetSelectedEntity();
@@ -271,7 +411,9 @@ namespace CCEngine {
                     inspector->SetSelectedEntity(selected);
             }
         }
+        AddEditorHitchStage(editorHitchStages, "SelectionSync", editorStageStartedAt);
 
+        editorStageStartedAt = std::chrono::steady_clock::now();
         if (m_RootUI)
         {
             BringEditorOverlaysToFront();
@@ -284,12 +426,16 @@ namespace CCEngine {
                 m_RootUI->UpdateLayout({ 0.0f, 0.0f }, { winWidth, winHeight });
             }
         }
+        AddEditorHitchStage(editorHitchStages, "RootUILayout", editorStageStartedAt);
 
+        editorStageStartedAt = std::chrono::steady_clock::now();
         if (m_HistoryPanelDirty)
             RebuildHistoryPanel();
+        AddEditorHitchStage(editorHitchStages, "HistoryRebuild", editorStageStartedAt);
         // =========================================================================
 
         // 최신 프레임버퍼 텍스처를 뷰포트 위젯에 연결
+        editorStageStartedAt = std::chrono::steady_clock::now();
         RendererHandle editorTexture = m_Framebuffer->GetColorAttachmentRendererID(0);
         for (UI::ImageWidget* viewportWidget : m_ViewportWidgets)
         {
@@ -302,8 +448,10 @@ namespace CCEngine {
             if (gameViewWidget)
                 gameViewWidget->SetTexture(gameTexture);
         }
+        AddEditorHitchStage(editorHitchStages, "ViewportTextureAssign", editorStageStartedAt);
 
         // 3. 에디터 프레임버퍼 렌더링
+        editorStageStartedAt = std::chrono::steady_clock::now();
         Renderer::SetClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         Renderer::Clear();
 
@@ -322,8 +470,10 @@ namespace CCEngine {
         m_GizmoSystem.OnRender(selectedEntity, m_Camera.GetViewMatrix(), m_Camera.GetProjectionMatrix());
 
         m_Framebuffer->Unbind();
+        AddEditorHitchStage(editorHitchStages, "EditorSceneRender", editorStageStartedAt);
 
         // 4. 게임 프레임버퍼 렌더링
+        editorStageStartedAt = std::chrono::steady_clock::now();
         m_GameFramebuffer->Bind();
         Renderer::SetClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         Renderer::Clear();
@@ -352,8 +502,71 @@ namespace CCEngine {
             }
         }
         m_GameFramebuffer->Unbind();
+        AddEditorHitchStage(editorHitchStages, "GameSceneRender", editorStageStartedAt);
 
+        editorStageStartedAt = std::chrono::steady_clock::now();
         m_UndoManager.TrackTransformUndo();
+        AddEditorHitchStage(editorHitchStages, "UndoTracking", editorStageStartedAt);
+        ReportEditorHitch(editorFrameStartedAt, editorHitchStages);
+    }
+
+    void EditorLayer::ProcessAssetFileWatcher()
+    {
+        std::vector<std::filesystem::path> changedPaths;
+        const auto now = std::chrono::steady_clock::now();
+
+        if (m_AssetFileWatcher.ConsumeDebouncedChanges(changedPaths))
+        {
+            bool collectedProjectAssetChange = false;
+            for (const auto& path : changedPaths)
+            {
+                if (IsIgnoredAssetWatcherPath(path))
+                    continue;
+
+                auto found = std::find(
+                    m_PendingAssetFileWatcherPaths.begin(),
+                    m_PendingAssetFileWatcherPaths.end(),
+                    path);
+
+                if (found == m_PendingAssetFileWatcherPaths.end())
+                    m_PendingAssetFileWatcherPaths.push_back(path);
+
+                collectedProjectAssetChange = true;
+            }
+
+            if (collectedProjectAssetChange)
+            {
+                // 외부 저장 하나는 create/write/rename 이벤트 여러 개로 들어온다.
+                // 마지막 이벤트 뒤에 한 번만 전체 DB를 맞춰야 UI가 순간적으로 멈추지 않는다.
+                m_PendingAssetFileRefresh = true;
+                m_AssetFileRefreshRequestedAt = now;
+            }
+        }
+
+        if (!m_PendingAssetFileRefresh)
+            return;
+
+        constexpr auto refreshDelay = std::chrono::milliseconds(650);
+        if (now - m_AssetFileRefreshRequestedAt < refreshDelay)
+            return;
+
+        std::filesystem::path assetsRoot = std::filesystem::current_path() / "assets";
+
+        // 파일 감시 스레드는 신호만 모으고, 실제 DB 갱신은 메인 스레드에서 한다.
+        // 렌더/UI가 쓰는 캐시를 다른 스레드에서 건드리면 재현 어려운 충돌이 생긴다.
+        AssetDatabase::MarkDirty(assetsRoot);
+        AssetDatabase::Scan(assetsRoot);
+
+        m_PendingAssetFileRefresh = false;
+        m_PendingAssetFileWatcherPaths.clear();
+
+        for (UI::AssetBrowserPanel* browser : m_AssetBrowserPanels)
+        {
+            if (browser)
+                browser->OnExternalAssetFilesChanged();
+        }
+
+        QueueAssetReferenceValidation();
     }
 
     void EditorLayer::BringEditorOverlaysToFront()
@@ -444,6 +657,7 @@ namespace CCEngine {
         if (e.GetEventType() == EventType::MouseButtonPressed)
         {
             MouseButtonPressedEvent& mouseEvent = static_cast<MouseButtonPressedEvent&>(e);
+            RememberActiveAssetBrowserFromMouse(mouseEvent.GetX(), mouseEvent.GetY());
 
             bool insideObjectMenu = m_ObjectContextMenuPanel && m_ObjectContextMenuPanel->IsVisible() &&
                 m_ObjectContextMenuPanel->IsPointInside(mouseEvent.GetX(), mouseEvent.GetY());
@@ -1065,11 +1279,20 @@ namespace CCEngine {
         ConsoleLog::Info("Default game resolution saved: " + std::to_string(width) + " x " + std::to_string(height));
     }
 
-    void EditorLayer::ValidateAssetReferences()
+    void EditorLayer::ValidateAssetReferences(bool fullScan)
     {
         // 씬과 프리팹은 파일 경로가 아니라 GUID가 기준이다.
         // GUID로 현재 에셋을 찾을 수 있으면 저장 파일의 낡은 경로만 고치고, 둘 다 못 찾는 경우만 Missing으로 남긴다.
-        AssetDatabase::ValidateProjectReferences(std::filesystem::current_path() / "assets", true);
+        std::filesystem::path assetsRoot = std::filesystem::current_path() / "assets";
+        if (fullScan)
+        {
+            AssetDatabase::ValidateProjectReferences(assetsRoot, true);
+            return;
+        }
+
+        // 자동 검증은 에셋 이동/이름변경/외부 변경 뒤에 자주 예약된다.
+        // 매번 전체 프로젝트를 훑으면 입력 중에도 멈칫하므로, 이미 스캔된 씬/프리팹 목록만 빠르게 검사한다.
+        AssetDatabase::ValidateKnownProjectReferences(assetsRoot, true, false);
     }
 
     void EditorLayer::QueueAssetReferenceValidation()
@@ -1338,6 +1561,76 @@ namespace CCEngine {
         }
     }
 
+    UI::AssetBrowserPanel* EditorLayer::FindAssetBrowserAt(float mouseX, float mouseY) const
+    {
+        for (auto it = m_AssetBrowserPanels.rbegin(); it != m_AssetBrowserPanels.rend(); ++it)
+        {
+            UI::AssetBrowserPanel* browser = *it;
+            if (!browser || !browser->IsVisible())
+                continue;
+
+            if (!browser->IsPointInside(mouseX, mouseY))
+                continue;
+
+            if (browser->IsMouseBlockedByWidgetAbove(mouseX, mouseY))
+                continue;
+
+            return browser;
+        }
+
+        return nullptr;
+    }
+
+    void EditorLayer::RememberActiveAssetBrowserFromMouse(float mouseX, float mouseY)
+    {
+        if (UI::AssetBrowserPanel* browser = FindAssetBrowserAt(mouseX, mouseY))
+        {
+            // Edit 메뉴를 누르는 순간 마우스는 메뉴 위에 있으므로, 마지막으로 직접 조작한 에셋 창을 따로 기억한다.
+            // 이 포인터는 파일 작업 Undo/Redo의 컨텍스트 역할만 하고, 실제 파일 이동은 AssetBrowserPanel 내부에서 처리한다.
+            m_ActiveAssetBrowserPanel = browser;
+        }
+    }
+
+    bool EditorLayer::TryUndoAssetOperation()
+    {
+        if (m_ActiveAssetBrowserPanel && m_ActiveAssetBrowserPanel->IsVisible() &&
+            m_ActiveAssetBrowserPanel->CanUndoAssetOperation())
+        {
+            return m_ActiveAssetBrowserPanel->RequestAssetUndo();
+        }
+
+        auto& window = CCEngine::Application::Get()->GetWindow();
+        auto [mouseX, mouseY] = window.GetMousePosition();
+        if (UI::AssetBrowserPanel* browser = FindAssetBrowserAt(mouseX, mouseY))
+        {
+            m_ActiveAssetBrowserPanel = browser;
+            if (browser->CanUndoAssetOperation())
+                return browser->RequestAssetUndo();
+        }
+
+        return false;
+    }
+
+    bool EditorLayer::TryRedoAssetOperation()
+    {
+        if (m_ActiveAssetBrowserPanel && m_ActiveAssetBrowserPanel->IsVisible() &&
+            m_ActiveAssetBrowserPanel->CanRedoAssetOperation())
+        {
+            return m_ActiveAssetBrowserPanel->RequestAssetRedo();
+        }
+
+        auto& window = CCEngine::Application::Get()->GetWindow();
+        auto [mouseX, mouseY] = window.GetMousePosition();
+        if (UI::AssetBrowserPanel* browser = FindAssetBrowserAt(mouseX, mouseY))
+        {
+            m_ActiveAssetBrowserPanel = browser;
+            if (browser->CanRedoAssetOperation())
+                return browser->RequestAssetRedo();
+        }
+
+        return false;
+    }
+
     void EditorLayer::HandleShortcuts()
     {
         bool isRightMouseDown = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
@@ -1373,12 +1666,21 @@ namespace CCEngine {
         }
         if (isCtrlPressed && isZPressedNow && !s_IsZPressedLastFrame)
         {
-            if (isShiftPressed) m_UndoManager.Redo();
-            else m_UndoManager.Undo();
+            if (isShiftPressed)
+            {
+                if (!TryRedoAssetOperation())
+                    m_UndoManager.Redo();
+            }
+            else
+            {
+                if (!TryUndoAssetOperation())
+                    m_UndoManager.Undo();
+            }
         }
         if (isCtrlPressed && isYPressedNow && !s_IsYPressedLastFrame)
         {
-            m_UndoManager.Redo();
+            if (!TryRedoAssetOperation())
+                m_UndoManager.Redo();
         }
         if (isCtrlPressed && isDPressedNow && !s_IsDPressedLastFrame)
         {
@@ -1467,7 +1769,7 @@ namespace CCEngine {
             auto createAssetHistoryButton = [&](size_t stateIndex, const std::string& text)
             {
                 // 에셋 히스토리는 씬 오브젝트가 아니라 디스크 파일 상태를 움직인다.
-                // 그래서 클릭 시 EditorUndoManager가 아니라 해당 AssetBrowserPanel의 스택을 탐색한다.
+                // 실제 스택은 공용 AssetUndoManager에 있고, 브라우저는 새로고침 컨텍스트만 제공한다.
                 UI::Button* button = new UI::Button("HistoryItem", text);
                 button->SetAnchorMin(0.0f, 0.0f);
                 button->SetAnchorMax(1.0f, 0.0f);
@@ -1620,6 +1922,8 @@ namespace CCEngine {
 
         auto configureAssetBrowser = [this](UI::AssetBrowserPanel* browser)
         {
+            browser->SetAssetUndoManager(&m_AssetUndoManager);
+            browser->SetExternalWatcherActive(m_AssetFileWatcher.IsRunning());
             browser->SetOnPrefabSelected([this](const std::string& path) { InstantiatePrefab(path); });
             browser->SetOnModelSelected([this](const std::string& path) { ImportModelAsset(path); });
             browser->SetOnSceneSelected([this](const std::string& path) { OpenScene(path); });
@@ -1964,6 +2268,8 @@ namespace CCEngine {
         m_AssetBrowserPanel->SetAnchorMax(0.8f, 1.0f);
         m_AssetBrowserPanel->SetOffsetMin(0.0f, 0.0f);
         m_AssetBrowserPanel->SetOffsetMax(0.0f, 0.0f);
+        m_AssetBrowserPanel->SetAssetUndoManager(&m_AssetUndoManager);
+        m_AssetBrowserPanel->SetExternalWatcherActive(m_AssetFileWatcher.IsRunning());
         m_AssetBrowserPanel->SetOnPrefabSelected([this](const std::string& path) { InstantiatePrefab(path); });
         m_AssetBrowserPanel->SetOnModelSelected([this](const std::string& path) { ImportModelAsset(path); });
         m_AssetBrowserPanel->SetOnSceneSelected([this](const std::string& path) { OpenScene(path); });
@@ -2219,8 +2525,18 @@ namespace CCEngine {
         m_BtnSavePrefab->SetOnClick([this]() { m_FileDropdownPanel->SetVisible(false); SaveSelectedPrefab(); });
         m_BtnInstantiatePrefab->SetOnClick([this]() { m_FileDropdownPanel->SetVisible(false); InstantiatePrefab(); });
         m_BtnExit->SetOnClick([this]() { CCEngine::Application::Get()->GetWindow().SetShouldClose(true); });
-        m_BtnEditUndo->SetOnClick([this]() { m_EditDropdownPanel->SetVisible(false); m_UndoManager.Undo(); });
-        m_BtnEditRedo->SetOnClick([this]() { m_EditDropdownPanel->SetVisible(false); m_UndoManager.Redo(); });
+        m_BtnEditUndo->SetOnClick([this]()
+            {
+                m_EditDropdownPanel->SetVisible(false);
+                if (!TryUndoAssetOperation())
+                    m_UndoManager.Undo();
+            });
+        m_BtnEditRedo->SetOnClick([this]()
+            {
+                m_EditDropdownPanel->SetVisible(false);
+                if (!TryRedoAssetOperation())
+                    m_UndoManager.Redo();
+            });
         m_BtnEditDuplicate->SetOnClick([this]() { m_EditDropdownPanel->SetVisible(false); DuplicateSelectedObject(); });
         m_BtnProjectSettings->SetOnClick([this]()
             {

@@ -172,6 +172,8 @@
     <ClInclude Include="src\Core\MemoryMacro.h" />
     <ClInclude Include="src\Core\ProjectSettings.h" />
     <ClInclude Include="src\Core\Window.h" />
+    <ClInclude Include="src\Editor\AssetFileWatcher.h" />
+    <ClInclude Include="src\Editor\AssetUndoManager.h" />
     <ClInclude Include="src\Editor\EditorCamera.h" />
     <ClInclude Include="src\Editor\EditorLayer.h" />
     <ClInclude Include="src\Editor\EditorUndoManager.h" />
@@ -259,6 +261,8 @@
     <ClCompile Include="src\Core\Memory.cpp" />
     <ClCompile Include="src\Core\ProjectSettings.cpp" />
     <ClCompile Include="src\Core\Window.cpp" />
+    <ClCompile Include="src\Editor\AssetFileWatcher.cpp" />
+    <ClCompile Include="src\Editor\AssetUndoManager.cpp" />
     <ClCompile Include="src\Editor\EditorCamera.cpp" />
     <ClCompile Include="src\Editor\EditorLayer.cpp" />
     <ClCompile Include="src\Editor\EditorUndoManager.cpp" />

@@ -4,6 +4,8 @@
 #include "Scene/Scene.h"
 #include "Renderer/Framebuffer.h"
 #include "Editor/EditorCamera.h"
+#include "Editor/AssetFileWatcher.h"
+#include "Editor/AssetUndoManager.h"
 #include "Editor/EditorUndoManager.h"
 #include "Core/ConsoleLog.h"
 #include "Core/ProjectSettings.h"
@@ -74,6 +76,10 @@ namespace CCEngine {
         void DuplicateSelectedObject();
         void HandleShortcuts();
         void ConfigureUndoManager();
+        UI::AssetBrowserPanel* FindAssetBrowserAt(float mouseX, float mouseY) const;
+        void RememberActiveAssetBrowserFromMouse(float mouseX, float mouseY);
+        bool TryUndoAssetOperation();
+        bool TryRedoAssetOperation();
         void RebuildHistoryPanel();
         void MarkHistoryPanelDirty();
         void RefreshEditorSelection(Entity selected = {});
@@ -81,8 +87,9 @@ namespace CCEngine {
         void OpenProjectStartScene();
         void SaveProjectSettings();
         void ApplyProjectGameResolution();
-        void ValidateAssetReferences();
+        void ValidateAssetReferences(bool fullScan);
         void QueueAssetReferenceValidation();
+        void ProcessAssetFileWatcher();
         void OpenEditorWindow(int windowKind);
         void OpenProjectSettingsWindow();
         void OpenAssetReferenceValidatorWindow();
@@ -97,10 +104,15 @@ namespace CCEngine {
         std::unordered_set<entt::entity> m_ExpandedNodes; // 열려있는(Expanded) 엔티티들의 ID를 기억하는 장부
 
         EditorUndoManager m_UndoManager;
+        AssetUndoManager m_AssetUndoManager;
+        AssetFileWatcher m_AssetFileWatcher;
         bool m_HistoryPanelDirty = false;
         std::string m_LastHistoryPanelSignature;
         bool m_PendingAssetReferenceValidation = false;
         std::chrono::steady_clock::time_point m_AssetReferenceValidationRequestedAt = {};
+        bool m_PendingAssetFileRefresh = false;
+        std::chrono::steady_clock::time_point m_AssetFileRefreshRequestedAt = {};
+        std::vector<std::filesystem::path> m_PendingAssetFileWatcherPaths;
 
         Scene* m_ActiveScene = nullptr;
         Scene* m_EditorScene = nullptr;
@@ -151,6 +163,7 @@ namespace CCEngine {
         UI::HierarchyPanel* m_HierarchyPanel = nullptr;
         UI::InspectorPanel* m_InspectorPanel = nullptr;
         UI::AssetBrowserPanel* m_AssetBrowserPanel = nullptr;
+        UI::AssetBrowserPanel* m_ActiveAssetBrowserPanel = nullptr;
         UI::WindowPanel* m_HistoryPanel = nullptr;
         UI::ConsolePanel* m_ConsolePanel = nullptr;
         UI::ProjectSettingsPanel* m_ProjectSettingsPanel = nullptr;

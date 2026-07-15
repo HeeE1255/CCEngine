@@ -179,6 +179,30 @@ namespace CCEngine
             return true;
         }
 
+        bool IsMetaFreshForAsset(const std::filesystem::path& assetPath, const std::filesystem::path& metaPath)
+        {
+            std::error_code ec;
+            const auto assetWriteTime = std::filesystem::last_write_time(assetPath, ec);
+            if (ec)
+                return false;
+
+            const auto metaWriteTime = std::filesystem::last_write_time(metaPath, ec);
+            if (ec)
+                return false;
+
+            return metaWriteTime >= assetWriteTime;
+        }
+
+        bool IsSameMetadata(const AssetMetadata& left, const AssetMetadata& right)
+        {
+            return left.Guid == right.Guid
+                && left.Type == right.Type
+                && NormalizeKey(left.SourcePath) == NormalizeKey(right.SourcePath)
+                && left.Importer == right.Importer
+                && left.FileHash == right.FileHash
+                && left.Version == right.Version;
+        }
+
         void RegisterMetadata(const AssetMetadata& metadata)
         {
             if (metadata.Guid.empty() || metadata.SourcePath.empty())
@@ -643,6 +667,38 @@ namespace CCEngine
 
             return true;
         }
+
+        void LogValidationReport(const AssetReferenceValidationReport& report, bool logCleanReport)
+        {
+            if (logCleanReport || report.RepairedReferences > 0 || report.MissingReferences > 0)
+            {
+                ConsoleLog::Info(
+                    "Asset reference validation: " +
+                    std::to_string(report.FilesScanned) + " files, " +
+                    std::to_string(report.ReferencesChecked) + " references, " +
+                    std::to_string(report.RepairedReferences) + " repaired, " +
+                    std::to_string(report.MissingReferences) + " missing.");
+            }
+
+            for (const AssetReferenceIssue& issue : report.Issues)
+            {
+                std::string prefix = issue.Repaired ? "Repaired asset reference: " : "Missing asset reference: ";
+                std::string detail = prefix + issue.ReferenceKind + " in " + issue.SourceFile.string();
+                if (!issue.JsonLocation.empty())
+                    detail += " at " + issue.JsonLocation;
+                if (!issue.Guid.empty())
+                    detail += " guid=" + issue.Guid;
+                if (!issue.StoredPath.empty())
+                    detail += " path=" + issue.StoredPath;
+                if (!issue.ResolvedPath.empty())
+                    detail += " -> " + issue.ResolvedPath;
+
+                if (issue.Repaired)
+                    ConsoleLog::Info(detail);
+                else
+                    ConsoleLog::Error(detail);
+            }
+        }
     }
 
     void AssetDatabase::Scan(const std::filesystem::path& rootDirectory)
@@ -860,10 +916,13 @@ namespace CCEngine
 
         AssetMetadata metadata;
         const auto metaPath = GetMetaPath(assetPath);
+        bool hasReadableMeta = false;
         if (std::filesystem::exists(metaPath, ec) && !ec)
         {
             if (!ReadMetaFile(metaPath, metadata))
                 metadata.Guid = GenerateGuid();
+            else
+                hasReadableMeta = true;
         }
         else
         {
@@ -876,16 +935,26 @@ namespace CCEngine
             metadata.Guid = GenerateGuid();
 
         // 파일을 옮겨도 meta의 GUID는 유지하고, 현재 위치만 갱신한다.
-        metadata.Type = kind;
-        metadata.SourcePath = assetPath;
-        metadata.Importer = GetImporterForKind(kind);
-        metadata.FileHash = CalculateFileHash(assetPath);
-        metadata.Version = 1;
+        AssetMetadata updatedMetadata = metadata;
+        updatedMetadata.Type = kind;
+        updatedMetadata.SourcePath = assetPath;
+        updatedMetadata.Importer = GetImporterForKind(kind);
+        updatedMetadata.Version = 1;
 
-        if (!WriteMetaFile(metadata))
-            return false;
+        // meta가 원본보다 최신이면 이전 해시를 그대로 믿는다.
+        // 큰 텍스처나 FBX를 매 스캔마다 다시 읽으면 에디터 입력이 순간적으로 멈춘다.
+        if (hasReadableMeta && !metadata.FileHash.empty() && IsMetaFreshForAsset(assetPath, metaPath))
+            updatedMetadata.FileHash = metadata.FileHash;
+        else
+            updatedMetadata.FileHash = CalculateFileHash(assetPath);
 
-        RegisterMetadata(metadata);
+        if (!hasReadableMeta || !IsSameMetadata(metadata, updatedMetadata))
+        {
+            if (!WriteMetaFile(updatedMetadata))
+                return false;
+        }
+
+        RegisterMetadata(updatedMetadata);
         return true;
     }
 
@@ -1058,31 +1127,55 @@ namespace CCEngine
             Scan(rootDirectory);
         }
 
-        ConsoleLog::Info(
-            "Asset reference validation: " +
-            std::to_string(report.FilesScanned) + " files, " +
-            std::to_string(report.ReferencesChecked) + " references, " +
-            std::to_string(report.RepairedReferences) + " repaired, " +
-            std::to_string(report.MissingReferences) + " missing.");
+        LogValidationReport(report, true);
 
-        for (const AssetReferenceIssue& issue : report.Issues)
+        return report;
+    }
+
+    AssetReferenceValidationReport AssetDatabase::ValidateKnownProjectReferences(const std::filesystem::path& rootDirectory, bool repairFiles, bool logCleanReport)
+    {
+        AssetReferenceValidationReport report;
+
+        // 자동 검증은 에디터 조작 중 자주 호출된다.
+        // 전체 assets 재귀 순회는 수동 검사에 맡기고, 여기서는 이미 AssetDatabase가 알고 있는 씬/프리팹만 확인한다.
+        ScanIfNeeded(rootDirectory);
+        AppendOrphanMetaIssues(report);
+
+        std::vector<std::filesystem::path> filesToValidate;
+        std::unordered_set<std::string> seenFiles;
+
+        auto addFile = [&](const std::filesystem::path& path)
+            {
+                if (path.empty())
+                    return;
+
+                std::error_code ec;
+                if (!std::filesystem::exists(path, ec) || ec)
+                    return;
+
+                std::string key = NormalizeKey(path);
+                if (seenFiles.insert(key).second)
+                    filesToValidate.push_back(path);
+            };
+
+        addFile(std::filesystem::current_path() / "project.ccproject");
+
+        for (const auto& [guid, metadata] : s_GuidToMetadata)
         {
-            std::string prefix = issue.Repaired ? "Repaired asset reference: " : "Missing asset reference: ";
-            std::string detail = prefix + issue.ReferenceKind + " in " + issue.SourceFile.string();
-            if (!issue.JsonLocation.empty())
-                detail += " at " + issue.JsonLocation;
-            if (!issue.Guid.empty())
-                detail += " guid=" + issue.Guid;
-            if (!issue.StoredPath.empty())
-                detail += " path=" + issue.StoredPath;
-            if (!issue.ResolvedPath.empty())
-                detail += " -> " + issue.ResolvedPath;
-
-            if (issue.Repaired)
-                ConsoleLog::Info(detail);
-            else
-                ConsoleLog::Error(detail);
+            if (metadata.Type == AssetKind::Scene || metadata.Type == AssetKind::Prefab)
+                addFile(metadata.SourcePath);
         }
+
+        for (const auto& filePath : filesToValidate)
+        {
+            if (!ValidateReferenceFile(filePath, repairFiles, report))
+                ConsoleLog::Warning("Asset reference validation skipped unreadable file: " + filePath.string());
+        }
+
+        if (repairFiles && report.RepairedReferences > 0)
+            MarkDirty(rootDirectory);
+
+        LogValidationReport(report, logCleanReport);
 
         return report;
     }

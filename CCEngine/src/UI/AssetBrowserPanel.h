@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Core.h"
+#include "Editor/AssetUndoManager.h"
 #include "UI/WindowPanel.h"
 #include <filesystem>
 #include <functional>
@@ -40,9 +41,16 @@ namespace CCEngine
             void SetOnAssetDropped(std::function<void(const std::string&, const std::string&, float, float)> callback) { m_OnAssetDropped = callback; }
             void SetOnAssetDatabaseChanged(std::function<void()> callback) { m_OnAssetDatabaseChanged = std::move(callback); }
             void SetOnAssetHistoryChanged(std::function<void()> callback) { m_OnAssetHistoryChanged = std::move(callback); }
+            void SetAssetUndoManager(AssetUndoManager* manager) { m_AssetUndoManager = manager; }
+            void SetExternalWatcherActive(bool active) { m_ExternalWatcherActive = active; }
+            void OnExternalAssetFilesChanged();
             std::vector<std::string> GetAssetHistoryLabels() const;
-            size_t GetAppliedAssetHistoryCount() const { return m_AssetUndoStack.size(); }
+            size_t GetAppliedAssetHistoryCount() const;
             bool SeekAssetHistory(size_t targetAppliedCount);
+            bool CanUndoAssetOperation() const;
+            bool CanRedoAssetOperation() const;
+            bool RequestAssetUndo();
+            bool RequestAssetRedo();
 
             virtual void UpdateLayout(const DirectX::XMFLOAT2& parentPos, const DirectX::XMFLOAT2& parentSize) override;
             virtual void OnRender() override;
@@ -57,6 +65,7 @@ namespace CCEngine
                 Scene,
                 Prefab,
                 Model,
+                FbxMesh,
                 Texture,
                 Script
             };
@@ -66,7 +75,12 @@ namespace CCEngine
                 std::filesystem::path Path;
                 std::string DisplayName;
                 AssetType Type = AssetType::Unknown;
+                std::filesystem::path SourceAssetPath;
+                int SubAssetIndex = -1;
+                bool IsSubAsset = false;
             };
+
+            struct FbxMeshInfo;
 
             AssetType GetAssetType(const std::filesystem::path& path) const;
             std::string GetTypeLabel(AssetType type) const;
@@ -101,6 +115,12 @@ namespace CCEngine
             bool IsSearchBoxPoint(float mouseX, float mouseY) const;
             void SetSearchQuery(const std::string& query);
             void ApplyFilter();
+            void AppendFbxSubAssetEntries(const AssetEntry& fbxEntry, const std::string& query);
+            const std::vector<FbxMeshInfo>& GetFbxMeshInfos(const std::filesystem::path& path);
+            bool IsFbxContainer(const AssetEntry& entry) const;
+            bool IsVirtualSubAsset(const AssetEntry& entry) const;
+            bool IsFbxExpandButtonPoint(int index, float mouseX, float mouseY) const;
+            void ToggleFbxExpanded(const std::filesystem::path& path);
             bool IsEntrySelected(int index) const;
             void ClearSelection();
             void SelectSingle(int index);
@@ -113,13 +133,11 @@ namespace CCEngine
             std::string GetTreeKey(const std::filesystem::path& path) const;
             bool TreeEntryHasChildren(const std::filesystem::path& path) const;
             void ToggleTreeFolder(const std::filesystem::path& path);
-            bool MoveEntryToDirectory(const AssetEntry& entry, const std::filesystem::path& targetDirectory);
+            bool MoveEntryToDirectory(const AssetEntry& entry, const std::filesystem::path& targetDirectory, AssetUndoManager::Command* undoCommand);
             bool MoveSelectedEntriesToDirectory(const std::filesystem::path& targetDirectory);
             void StepIconSize(int direction);
             void NotifyAssetDatabaseChanged();
-            bool UndoAssetOperation();
-            bool RedoAssetOperation();
-            Texture2D* GetTexturePreview(const AssetEntry& entry);
+            Texture2D* GetAssetPreviewTexture(const AssetEntry& entry);
             void DrawAssetPreview(const AssetEntry& entry, float x, float y, float size);
             void DrawFallbackAssetIcon(const AssetEntry& entry, float x, float y, float size);
             uint64_t ComputeDirectorySignature(const std::filesystem::path& directory) const;
@@ -134,6 +152,12 @@ namespace CCEngine
                 bool HasChildren = false;
             };
 
+            struct FbxMeshInfo
+            {
+                std::string Name;
+                int MeshIndex = -1;
+            };
+
             struct TexturePreviewJob
             {
                 std::atomic<bool> IsLoading = false;
@@ -146,39 +170,8 @@ namespace CCEngine
                 std::unique_ptr<Texture2D> Texture;
             };
 
-            enum class AssetUndoKind
-            {
-                CreateFolder = 0,
-                Rename,
-                Move,
-                RecycleDelete
-            };
-
-            struct AssetUndoItem
-            {
-                std::filesystem::path FromPath;
-                std::filesystem::path ToPath;
-                std::filesystem::path BackupPath;
-                std::filesystem::path BackupMetaPath;
-                AssetType Type = AssetType::Unknown;
-                bool IsDirectory = false;
-            };
-
-            struct AssetUndoCommand
-            {
-                AssetUndoKind Kind = AssetUndoKind::Move;
-                std::string Label;
-                std::vector<AssetUndoItem> Items;
-            };
-
-            void PushAssetUndoCommand(const AssetUndoCommand& command);
-            bool ApplyAssetUndoCommand(const AssetUndoCommand& command, bool undo);
-            bool MoveAssetBundleForUndo(const std::filesystem::path& from, const std::filesystem::path& to, bool isDirectory);
-            bool CopyAssetBundleForDeleteUndo(const std::filesystem::path& source, AssetUndoItem& item);
-            bool RestoreDeletedAssetFromBackup(const AssetUndoItem& item);
+            void PushAssetUndoCommand(const AssetUndoManager::Command& command);
             void RefreshAfterAssetUndo(const std::filesystem::path& preferredDirectory);
-            std::filesystem::path MakeAssetUndoBackupPath(const std::filesystem::path& source) const;
-            std::string FormatAssetUndoLabel(const AssetUndoCommand& command) const;
 
         private:
             std::filesystem::path m_RootDirectory;
@@ -188,10 +181,15 @@ namespace CCEngine
             std::vector<TreeEntry> m_TreeEntries;
             std::unordered_set<std::string> m_ExpandedTreeFolders;
             std::unordered_map<std::string, uint64_t> m_DirectoryWatchSignatures;
+            std::vector<std::string> m_DirectoryWatchOrder;
+            size_t m_DirectoryWatchCursor = 0;
             mutable std::unordered_map<std::string, bool> m_TreeChildCache;
+            std::unordered_set<std::string> m_ExpandedFbxAssets;
+            std::unordered_map<std::string, std::vector<FbxMeshInfo>> m_FbxMeshCache;
             std::unordered_map<std::string, std::shared_ptr<TexturePreviewJob>> m_TexturePreviewCache;
             std::vector<std::string> m_TexturePreviewOrder;
             int m_TexturePreviewUploadsThisFrame = 0;
+            int m_TexturePreviewLoadsStartedThisFrame = 0;
             ScrollState m_ScrollState;
             ScrollState m_TreeScrollState;
 
@@ -232,6 +230,7 @@ namespace CCEngine
             std::vector<std::string> m_ContextMenuItems;
             std::string m_SearchQuery;
             bool m_SearchFocused = false;
+            bool m_ExternalWatcherActive = false;
             std::chrono::steady_clock::time_point m_LastExternalFileCheck = {};
 
             enum class ModalMode
@@ -262,9 +261,7 @@ namespace CCEngine
             std::function<void()> m_OnAssetDatabaseChanged = nullptr;
             std::function<void()> m_OnAssetHistoryChanged = nullptr;
 
-            std::vector<AssetUndoCommand> m_AssetUndoStack;
-            std::vector<AssetUndoCommand> m_AssetRedoStack;
-            static constexpr size_t s_MaxAssetUndoCommands = 100;
+            AssetUndoManager* m_AssetUndoManager = nullptr;
         };
     }
 }

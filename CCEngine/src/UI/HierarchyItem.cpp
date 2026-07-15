@@ -51,67 +51,95 @@ namespace CCEngine
             m_OffsetMax.y = m_OffsetMin.y + localChildY;
         }
 
+        void HierarchyItem::SetRenderClipRange(float top, float bottom)
+        {
+            m_RenderClipTop = top;
+            m_RenderClipBottom = bottom;
+        }
+
         void HierarchyItem::OnRender()
         {
             if (!m_IsVisible) return;
-
-            Window* renderWindow = Widget::GetCurrentRenderWindow();
-            auto [mouseX, mouseY] = renderWindow
-                ? renderWindow->GetMousePosition()
-                : CCEngine::Application::Get()->GetWindow().GetMousePosition();
 
             float headerHeight = UIRenderer::GetDefaultFont() ? UIRenderer::GetDefaultFont()->GetFontSize() : 24.0f;
             float verticalPadding = 8.0f;
             headerHeight += verticalPadding;
 
-            bool isHovered = Widget::IsCurrentRenderWindowMouseActive() &&
-                !Widget::IsMouseInteractionActive() &&
-                (mouseX >= m_CalculatedPos.x && mouseX <= m_CalculatedPos.x + m_CalculatedSize.x &&
-                mouseY >= m_CalculatedPos.y && mouseY <= m_CalculatedPos.y + headerHeight);
-            isHovered = isHovered && !IsMouseBlockedByWidgetAbove(mouseX, mouseY);
-
-            if (m_IsSelected)
+            const bool hasClipRange = m_RenderClipBottom > m_RenderClipTop;
+            if (hasClipRange)
             {
-                DirectX::XMFLOAT4 selectedColor = { 44.0f / 255.0f, 93.0f / 255.0f, 135.0f / 255.0f, 1.0f };
-                UIRenderer::DrawRectFilled(m_CalculatedPos.x, m_CalculatedPos.y, m_CalculatedSize.x, headerHeight, selectedColor);
-            }
-            else if (isHovered)
-            {
-                DirectX::XMFLOAT4 hoverColor = { 60.0f / 255.0f, 60.0f / 255.0f, 60.0f / 255.0f, 1.0f };
-                UIRenderer::DrawRectFilled(m_CalculatedPos.x, m_CalculatedPos.y, m_CalculatedSize.x, headerHeight, hoverColor);
+                if (m_CalculatedPos.y + m_CalculatedSize.y < m_RenderClipTop)
+                    return;
+                if (m_CalculatedPos.y > m_RenderClipBottom)
+                    return;
             }
 
-            float indentX = m_CalculatedPos.x + (m_IndentLevel * 14.0f) + 8.0f;
-            float hitBoxLeft = indentX;
-            float hitBoxRight = indentX + 24.0f;
+            // GPU scissor는 픽셀만 잘라낸다. 항목이 수백 개면 화면 밖 줄도
+            // hover 검사와 문자열 렌더 준비를 하므로, 보이는 줄만 CPU에서 처리한다.
+            const bool headerVisible = !hasClipRange ||
+                (m_CalculatedPos.y + headerHeight >= m_RenderClipTop &&
+                    m_CalculatedPos.y <= m_RenderClipBottom);
 
-            bool hoveringArrow = Widget::IsCurrentRenderWindowMouseActive() &&
-                !Widget::IsMouseInteractionActive() &&
-                (mouseX >= hitBoxLeft && mouseX <= hitBoxRight &&
-                mouseY >= m_CalculatedPos.y && mouseY <= m_CalculatedPos.y + headerHeight);
-            hoveringArrow = hoveringArrow && !IsMouseBlockedByWidgetAbove(mouseX, mouseY);
-
-            float centerY = m_CalculatedPos.y + (headerHeight * 0.5f);
-
-            if (m_HasChildren)
+            if (headerVisible)
             {
-                DirectX::XMFLOAT4 arrowColor = hoveringArrow ?
-                    DirectX::XMFLOAT4{ 220.0f / 255.0f, 220.0f / 255.0f, 220.0f / 255.0f, 1.0f } :
-                    DirectX::XMFLOAT4{ 150.0f / 255.0f, 150.0f / 255.0f, 150.0f / 255.0f, 1.0f };
+                Window* renderWindow = Widget::GetCurrentRenderWindow();
+                auto [mouseX, mouseY] = renderWindow
+                    ? renderWindow->GetMousePosition()
+                    : CCEngine::Application::Get()->GetWindow().GetMousePosition();
 
-                if (m_IsExpanded) UIRenderer::DrawString("v", indentX + 2.0f, centerY + 5.0f, arrowColor);
-                else UIRenderer::DrawString(">", indentX + 4.0f, centerY + 6.0f, arrowColor);
+                bool isHovered = Widget::IsCurrentRenderWindowMouseActive() &&
+                    !Widget::IsMouseInteractionActive() &&
+                    (mouseX >= m_CalculatedPos.x && mouseX <= m_CalculatedPos.x + m_CalculatedSize.x &&
+                    mouseY >= m_CalculatedPos.y && mouseY <= m_CalculatedPos.y + headerHeight);
+                isHovered = isHovered && !IsMouseBlockedByWidgetAbove(mouseX, mouseY);
+
+                if (m_IsSelected)
+                {
+                    DirectX::XMFLOAT4 selectedColor = { 44.0f / 255.0f, 93.0f / 255.0f, 135.0f / 255.0f, 1.0f };
+                    UIRenderer::DrawRectFilled(m_CalculatedPos.x, m_CalculatedPos.y, m_CalculatedSize.x, headerHeight, selectedColor);
+                }
+                else if (isHovered)
+                {
+                    DirectX::XMFLOAT4 hoverColor = { 60.0f / 255.0f, 60.0f / 255.0f, 60.0f / 255.0f, 1.0f };
+                    UIRenderer::DrawRectFilled(m_CalculatedPos.x, m_CalculatedPos.y, m_CalculatedSize.x, headerHeight, hoverColor);
+                }
+
+                float indentX = m_CalculatedPos.x + (m_IndentLevel * 14.0f) + 8.0f;
+                float hitBoxLeft = indentX;
+                float hitBoxRight = indentX + 24.0f;
+
+                bool hoveringArrow = Widget::IsCurrentRenderWindowMouseActive() &&
+                    !Widget::IsMouseInteractionActive() &&
+                    (mouseX >= hitBoxLeft && mouseX <= hitBoxRight &&
+                    mouseY >= m_CalculatedPos.y && mouseY <= m_CalculatedPos.y + headerHeight);
+                hoveringArrow = hoveringArrow && !IsMouseBlockedByWidgetAbove(mouseX, mouseY);
+
+                float centerY = m_CalculatedPos.y + (headerHeight * 0.5f);
+
+                if (m_HasChildren)
+                {
+                    DirectX::XMFLOAT4 arrowColor = hoveringArrow ?
+                        DirectX::XMFLOAT4{ 220.0f / 255.0f, 220.0f / 255.0f, 220.0f / 255.0f, 1.0f } :
+                        DirectX::XMFLOAT4{ 150.0f / 255.0f, 150.0f / 255.0f, 150.0f / 255.0f, 1.0f };
+
+                    if (m_IsExpanded) UIRenderer::DrawString("v", indentX + 2.0f, centerY + 5.0f, arrowColor);
+                    else UIRenderer::DrawString(">", indentX + 4.0f, centerY + 6.0f, arrowColor);
+                }
+
+                float textX = indentX + 18.0f;
+                float textY = m_CalculatedPos.y + headerHeight * 0.7f;
+                DirectX::XMFLOAT4 textColor = { 210.0f / 255.0f, 210.0f / 255.0f, 210.0f / 255.0f, 1.0f };
+                UIRenderer::DrawString(m_Text, textX, textY, textColor);
             }
-
-            float textX = indentX + 18.0f;
-            float textY = m_CalculatedPos.y + headerHeight * 0.7f;
-            DirectX::XMFLOAT4 textColor = { 210.0f / 255.0f, 210.0f / 255.0f, 210.0f / 255.0f, 1.0f };
-            UIRenderer::DrawString(m_Text, textX, textY, textColor);
 
             if (m_IsExpanded)
             {
                 for (auto child : m_Children)
+                {
+                    if (auto item = dynamic_cast<HierarchyItem*>(child))
+                        item->SetRenderClipRange(m_RenderClipTop, m_RenderClipBottom);
                     child->OnRender();
+                }
             }
         }
 

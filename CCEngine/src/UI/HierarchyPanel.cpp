@@ -189,6 +189,16 @@ namespace CCEngine {
             float rightPadding = (m_ScrollState.GetMaxScroll() > 0) ? 22.0f : 0.0f;
             SetClipPadding(0.0f, m_startYOffset, rightPadding, 0.0f);
 
+            // 패널 scissor는 최종 픽셀만 자른다. 하이어라키 아이템은 이 범위를 받아
+            // 보이지 않는 줄의 hover/문자열 처리를 건너뛴다.
+            float clipTop = m_CalculatedPos.y + m_startYOffset;
+            float clipBottom = m_CalculatedPos.y + m_CalculatedSize.y;
+            for (auto child : m_Children)
+            {
+                if (auto item = dynamic_cast<UI::HierarchyItem*>(child))
+                    item->SetRenderClipRange(clipTop, clipBottom);
+            }
+
             UI::WindowPanel::OnRender();
 
             // 스크롤바 그리기

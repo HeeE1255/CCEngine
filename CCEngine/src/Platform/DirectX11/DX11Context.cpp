@@ -144,10 +144,11 @@ namespace CCEngine
 		std::cout << "DirectX 11 윈도우 컨텍스트 초기화 완료 (HWND: " << m_hWnd << ")" << std::endl;
 	}
 
-	void DX11Context::SwapBuffers() 
+	void DX11Context::SwapBuffers(bool waitForVSync)
 	{
-		// 각 인스턴스의 스왑 체인을 개별적으로 Present
-		m_SwapChain->Present(1, 0);
+		// 메인 창은 v-sync로 기준 프레임을 잡고, 보조 창은 즉시 표시한다.
+		// 여러 OS 창이 모두 Present(1)을 쓰면 한 프레임 안에서 대기점이 여러 번 생긴다.
+		m_SwapChain->Present(waitForVSync ? 1 : 0, 0);
 	}
 
 	void DX11Context::Clear(float r, float g, float b, float a)

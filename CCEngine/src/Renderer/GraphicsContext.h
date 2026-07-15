@@ -14,7 +14,7 @@ namespace CCEngine
         virtual ~GraphicsContext() = default;
 
         virtual void Init() = 0;
-        virtual void SwapBuffers() = 0;
+        virtual void SwapBuffers(bool waitForVSync = true) = 0;
         virtual void Clear(float r, float g, float b, float a) = 0;
         virtual void ResizeBuffers(uint32_t width, uint32_t height) = 0;
 

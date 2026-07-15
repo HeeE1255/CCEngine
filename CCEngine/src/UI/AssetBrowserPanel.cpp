@@ -4,6 +4,7 @@
 #include <shellapi.h>
 #include "Core/AssetDatabase.h"
 #include "Core/ConsoleLog.h"
+#include "Editor/AssetUndoManager.h"
 #include "Renderer/UIRenderer.h"
 #include "Renderer/Texture.h"
 #include "Application.h"
@@ -11,10 +12,16 @@
 #include "Events/ApplicationEvent.h"
 #include "Events/KeyEvent.h"
 #include "stb_image.h"
+#include "json.hpp"
+#include <assimp/Importer.hpp>
+#include <assimp/postprocess.h>
+#include <assimp/scene.h>
 #include <windows.h>
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <cmath>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <sstream>
@@ -25,6 +32,40 @@ namespace CCEngine
     {
         namespace
         {
+            std::atomic<int> s_ActivePreviewLoads{ 0 };
+            std::atomic<int> s_ActiveFbxMeshPreviewLoads{ 0 };
+
+            bool TryAcquirePreviewSlot(std::atomic<int>& counter, int maxCount)
+            {
+                int current = counter.load(std::memory_order_relaxed);
+                while (current < maxCount)
+                {
+                    if (counter.compare_exchange_weak(current, current + 1, std::memory_order_acq_rel))
+                        return true;
+                }
+
+                return false;
+            }
+
+            struct PreviewLoadSlot
+            {
+                std::atomic<int>* Counter = nullptr;
+
+                explicit PreviewLoadSlot(std::atomic<int>& counter)
+                    : Counter(&counter)
+                {
+                }
+
+                PreviewLoadSlot(const PreviewLoadSlot&) = delete;
+                PreviewLoadSlot& operator=(const PreviewLoadSlot&) = delete;
+
+                ~PreviewLoadSlot()
+                {
+                    if (Counter)
+                        Counter->fetch_sub(1, std::memory_order_acq_rel);
+                }
+            };
+
             struct DecodedPreviewPixels
             {
                 int Width = 0;
@@ -32,6 +73,135 @@ namespace CCEngine
                 std::vector<uint32_t> Pixels;
                 bool Success = false;
             };
+
+            uint32_t PackPreviewPixel(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255)
+            {
+                return ((uint32_t)r) | ((uint32_t)g << 8) | ((uint32_t)b << 16) | ((uint32_t)a << 24);
+            }
+
+            void PutPreviewPixel(DecodedPreviewPixels& image, int x, int y, uint32_t color)
+            {
+                if (x < 0 || y < 0 || x >= image.Width || y >= image.Height)
+                    return;
+
+                image.Pixels[(size_t)y * (size_t)image.Width + (size_t)x] = color;
+            }
+
+            void FillPreviewRect(DecodedPreviewPixels& image, int x, int y, int width, int height, uint32_t color)
+            {
+                for (int py = y; py < y + height; ++py)
+                {
+                    for (int px = x; px < x + width; ++px)
+                        PutPreviewPixel(image, px, py, color);
+                }
+            }
+
+            void DrawPreviewLine(DecodedPreviewPixels& image, int x0, int y0, int x1, int y1, uint32_t color)
+            {
+                int dx = std::abs(x1 - x0);
+                int sx = x0 < x1 ? 1 : -1;
+                int dy = -std::abs(y1 - y0);
+                int sy = y0 < y1 ? 1 : -1;
+                int error = dx + dy;
+
+                while (true)
+                {
+                    PutPreviewPixel(image, x0, y0, color);
+                    if (x0 == x1 && y0 == y1)
+                        break;
+
+                    int e2 = error * 2;
+                    if (e2 >= dy)
+                    {
+                        error += dy;
+                        x0 += sx;
+                    }
+                    if (e2 <= dx)
+                    {
+                        error += dx;
+                        y0 += sy;
+                    }
+                }
+            }
+
+            uint64_t HashPreviewText(const std::string& text)
+            {
+                uint64_t hash = 1469598103934665603ull;
+                for (unsigned char c : text)
+                {
+                    hash ^= (uint64_t)c;
+                    hash *= 1099511628211ull;
+                }
+                return hash;
+            }
+
+            constexpr const char* ThumbnailAlgorithmVersion = "fit2d-v3";
+
+            std::filesystem::path GetPreviewCachePath(const std::filesystem::path& assetPath, const std::string& typeKey)
+            {
+                std::error_code ec;
+                uint64_t stamp = 0;
+
+                auto writeTime = std::filesystem::last_write_time(assetPath, ec);
+                if (!ec)
+                    stamp ^= (uint64_t)writeTime.time_since_epoch().count();
+                ec.clear();
+
+                if (std::filesystem::is_regular_file(assetPath, ec))
+                    stamp ^= (uint64_t)std::filesystem::file_size(assetPath, ec);
+                ec.clear();
+
+                uint64_t hash = HashPreviewText(assetPath.string() + "|" + typeKey + "|" + ThumbnailAlgorithmVersion + "|" + std::to_string(stamp));
+                std::filesystem::path cacheRoot = std::filesystem::current_path() / ".ccengine" / "AssetThumbnails";
+                return cacheRoot / (typeKey + "_" + std::to_string(hash) + ".ccthumb");
+            }
+
+            bool LoadPreviewCacheFile(const std::filesystem::path& cachePath, DecodedPreviewPixels& outPixels)
+            {
+                std::ifstream input(cachePath, std::ios::binary);
+                if (!input)
+                    return false;
+
+                char magic[8] = {};
+                uint32_t width = 0;
+                uint32_t height = 0;
+                input.read(magic, sizeof(magic));
+                input.read(reinterpret_cast<char*>(&width), sizeof(width));
+                input.read(reinterpret_cast<char*>(&height), sizeof(height));
+                const char expectedMagic[8] = { 'C', 'C', 'T', 'H', 'M', 'B', '1', '\0' };
+                if (std::memcmp(magic, expectedMagic, sizeof(expectedMagic)) != 0 || width == 0 || height == 0 || width > 512 || height > 512)
+                    return false;
+
+                outPixels.Width = (int)width;
+                outPixels.Height = (int)height;
+                outPixels.Pixels.resize((size_t)width * (size_t)height);
+                input.read(reinterpret_cast<char*>(outPixels.Pixels.data()), (std::streamsize)(outPixels.Pixels.size() * sizeof(uint32_t)));
+                outPixels.Success = input.good();
+                return outPixels.Success;
+            }
+
+            void SavePreviewCacheFile(const std::filesystem::path& cachePath, const DecodedPreviewPixels& pixels)
+            {
+                if (!pixels.Success || pixels.Pixels.empty())
+                    return;
+
+                std::error_code ec;
+                std::filesystem::create_directories(cachePath.parent_path(), ec);
+                if (ec)
+                    return;
+
+                std::ofstream output(cachePath, std::ios::binary | std::ios::trunc);
+                if (!output)
+                    return;
+
+                const char magic[8] = { 'C', 'C', 'T', 'H', 'M', 'B', '1', '\0' };
+                uint32_t width = (uint32_t)pixels.Width;
+                uint32_t height = (uint32_t)pixels.Height;
+                output.write(magic, sizeof(magic));
+                output.write(reinterpret_cast<const char*>(&width), sizeof(width));
+                output.write(reinterpret_cast<const char*>(&height), sizeof(height));
+                output.write(reinterpret_cast<const char*>(pixels.Pixels.data()), (std::streamsize)(pixels.Pixels.size() * sizeof(uint32_t)));
+            }
 
             DecodedPreviewPixels DecodeTexturePreviewPixels(const std::string& path, int maxSize)
             {
@@ -73,6 +243,352 @@ namespace CCEngine
                 stbi_image_free(source);
                 result.Success = true;
                 return result;
+            }
+
+            DecodedPreviewPixels GenerateModelOrPrefabPreviewPixels(const std::filesystem::path& path, bool prefab, int size)
+            {
+                DecodedPreviewPixels result;
+                result.Width = size;
+                result.Height = size;
+                result.Pixels.resize((size_t)size * (size_t)size);
+
+                uint64_t hash = HashPreviewText(path.filename().string());
+                uint8_t tintR = prefab ? 85 : 70;
+                uint8_t tintG = prefab ? 125 : 150;
+                uint8_t tintB = prefab ? 230 : 105;
+                tintR = (uint8_t)std::min(245, (int)tintR + (int)(hash % 32));
+                tintG = (uint8_t)std::min(245, (int)tintG + (int)((hash >> 8) % 28));
+                tintB = (uint8_t)std::min(245, (int)tintB + (int)((hash >> 16) % 24));
+
+                for (int y = 0; y < size; ++y)
+                {
+                    for (int x = 0; x < size; ++x)
+                    {
+                        float t = (float)y / (float)(std::max)(1, size - 1);
+                        uint8_t bg = (uint8_t)(28 + (int)(t * 18.0f));
+                        result.Pixels[(size_t)y * (size_t)size + (size_t)x] = PackPreviewPixel(bg, bg, (uint8_t)(bg + 5));
+                    }
+                }
+
+                int cx = size / 2;
+                int cy = size / 2 + size / 12;
+                int half = size / 5;
+                int lift = size / 7;
+
+                uint32_t front = PackPreviewPixel(tintR, tintG, tintB);
+                uint32_t top = PackPreviewPixel((uint8_t)std::min(255, tintR + 32), (uint8_t)std::min(255, tintG + 32), (uint8_t)std::min(255, tintB + 32));
+                uint32_t side = PackPreviewPixel((uint8_t)(tintR * 0.65f), (uint8_t)(tintG * 0.65f), (uint8_t)(tintB * 0.65f));
+                uint32_t outline = PackPreviewPixel(22, 24, 28);
+
+                FillPreviewRect(result, cx - half, cy - half, half * 2, half * 2, front);
+                for (int i = 0; i < lift; ++i)
+                {
+                    DrawPreviewLine(result, cx - half + i, cy - half - i, cx + half + i, cy - half - i, top);
+                    DrawPreviewLine(result, cx + half + i, cy - half - i, cx + half + i, cy + half - i, side);
+                }
+                DrawPreviewLine(result, cx - half, cy - half, cx + half, cy - half, outline);
+                DrawPreviewLine(result, cx + half, cy - half, cx + half, cy + half, outline);
+                DrawPreviewLine(result, cx + half, cy + half, cx - half, cy + half, outline);
+                DrawPreviewLine(result, cx - half, cy + half, cx - half, cy - half, outline);
+
+                if (prefab)
+                {
+                    // 프리팹은 단일 파일이지만 실제로는 여러 컴포넌트와 자식 엔티티를 묶은 설계 단위다.
+                    // 작은 노드 표시를 추가해 일반 모델 파일과 시각적으로 구분한다.
+                    uint32_t node = PackPreviewPixel(210, 225, 255);
+                    int nodeSize = std::max(3, size / 14);
+                    FillPreviewRect(result, size / 5, size / 5, nodeSize, nodeSize, node);
+                    FillPreviewRect(result, size - size / 5 - nodeSize, size / 4, nodeSize, nodeSize, node);
+                    FillPreviewRect(result, size / 2 - nodeSize / 2, size - size / 5 - nodeSize, nodeSize, nodeSize, node);
+                    DrawPreviewLine(result, size / 5 + nodeSize, size / 5 + nodeSize, cx - half, cy - half, node);
+                    DrawPreviewLine(result, size - size / 5 - nodeSize, size / 4 + nodeSize, cx + half, cy - half, node);
+                    DrawPreviewLine(result, size / 2, size - size / 5 - nodeSize, cx, cy + half, node);
+                }
+                else
+                {
+                    uint32_t axisX = PackPreviewPixel(220, 84, 72);
+                    uint32_t axisY = PackPreviewPixel(84, 220, 110);
+                    uint32_t axisZ = PackPreviewPixel(84, 120, 230);
+                    DrawPreviewLine(result, cx, cy + half + 8, cx + half, cy + half + 14, axisX);
+                    DrawPreviewLine(result, cx, cy + half + 8, cx, cy + half - 18, axisY);
+                    DrawPreviewLine(result, cx, cy + half + 8, cx - half, cy + half + 2, axisZ);
+                }
+
+                result.Success = true;
+                return result;
+            }
+
+            struct PreviewPoint
+            {
+                float X = 0.0f;
+                float Y = 0.0f;
+            };
+
+            float GetPreviewPercentile(std::vector<float>& values, float percentile)
+            {
+                if (values.empty())
+                    return 0.0f;
+
+                std::sort(values.begin(), values.end());
+                size_t index = (size_t)std::clamp(percentile * (float)(values.size() - 1), 0.0f, (float)(values.size() - 1));
+                return values[index];
+            }
+
+            DecodedPreviewPixels GenerateModelWirePreviewPixels(const std::filesystem::path& path, int size, int onlyMeshIndex = -1)
+            {
+                Assimp::Importer importer;
+                const aiScene* scene = importer.ReadFile(
+                    path.string(),
+                    aiProcess_Triangulate |
+                    aiProcess_JoinIdenticalVertices |
+                    aiProcess_PreTransformVertices |
+                    aiProcess_GenNormals);
+
+                if (!scene || !scene->HasMeshes())
+                    return GenerateModelOrPrefabPreviewPixels(path, false, size);
+
+                DecodedPreviewPixels result;
+                result.Width = size;
+                result.Height = size;
+                result.Pixels.resize((size_t)size * (size_t)size);
+
+                for (int y = 0; y < size; ++y)
+                {
+                    for (int x = 0; x < size; ++x)
+                    {
+                        float t = (float)y / (float)(std::max)(1, size - 1);
+                        uint8_t bg = (uint8_t)(24 + (int)(t * 22.0f));
+                        result.Pixels[(size_t)y * (size_t)size + (size_t)x] = PackPreviewPixel(bg, bg, (uint8_t)(bg + 7));
+                    }
+                }
+
+                unsigned int totalVertices = 0;
+                for (unsigned int meshIndex = 0; meshIndex < scene->mNumMeshes; ++meshIndex)
+                {
+                    if (onlyMeshIndex >= 0 && (int)meshIndex != onlyMeshIndex)
+                        continue;
+
+                    aiMesh* mesh = scene->mMeshes[meshIndex];
+                    if (mesh)
+                        totalVertices += mesh->mNumVertices;
+                }
+
+                unsigned int sampleStep = (std::max)(1u, totalVertices / 20000u);
+                unsigned int sampleCounter = 0;
+                std::vector<float> xs;
+                std::vector<float> ys;
+                std::vector<float> zs;
+                xs.reserve((std::min)(totalVertices, 20000u));
+                ys.reserve(xs.capacity());
+                zs.reserve(xs.capacity());
+
+                for (unsigned int meshIndex = 0; meshIndex < scene->mNumMeshes; ++meshIndex)
+                {
+                    if (onlyMeshIndex >= 0 && (int)meshIndex != onlyMeshIndex)
+                        continue;
+
+                    aiMesh* mesh = scene->mMeshes[meshIndex];
+                    if (!mesh)
+                        continue;
+
+                    for (unsigned int i = 0; i < mesh->mNumVertices; ++i)
+                    {
+                        if ((sampleCounter++ % sampleStep) != 0)
+                            continue;
+
+                        const aiVector3D& p = mesh->mVertices[i];
+                        xs.push_back(p.x);
+                        ys.push_back(p.y);
+                        zs.push_back(p.z);
+                    }
+                }
+
+                if (xs.empty())
+                    return GenerateModelOrPrefabPreviewPixels(path, false, size);
+
+                // 모델 파일에는 본, 더미, 장식처럼 본체에서 멀리 튄 점이 섞일 수 있다.
+                // 전체 최소/최대를 그대로 쓰면 본체가 작은 점처럼 줄어드므로 대표 범위만 잡아 프레임을 맞춘다.
+                aiVector3D minPos(
+                    GetPreviewPercentile(xs, 0.02f),
+                    GetPreviewPercentile(ys, 0.02f),
+                    GetPreviewPercentile(zs, 0.02f));
+                aiVector3D maxPos(
+                    GetPreviewPercentile(xs, 0.98f),
+                    GetPreviewPercentile(ys, 0.98f),
+                    GetPreviewPercentile(zs, 0.98f));
+
+                aiVector3D center = (minPos + maxPos) * 0.5f;
+                float extent = (std::max)({ maxPos.x - minPos.x, maxPos.y - minPos.y, maxPos.z - minPos.z, 0.001f });
+
+                auto projectRaw = [&](const aiVector3D& source) -> PreviewPoint
+                    {
+                        aiVector3D p = (source - center) * (1.0f / extent);
+                        float isoX = (p.x - p.z) * 0.92f;
+                        float isoY = (p.x + p.z) * 0.42f - p.y * 0.92f;
+                        return { isoX, isoY };
+                    };
+
+                std::vector<float> projectedXs;
+                std::vector<float> projectedYs;
+                projectedXs.reserve(xs.capacity());
+                projectedYs.reserve(xs.capacity());
+                sampleCounter = 0;
+                for (unsigned int meshIndex = 0; meshIndex < scene->mNumMeshes; ++meshIndex)
+                {
+                    if (onlyMeshIndex >= 0 && (int)meshIndex != onlyMeshIndex)
+                        continue;
+
+                    aiMesh* mesh = scene->mMeshes[meshIndex];
+                    if (!mesh)
+                        continue;
+
+                    for (unsigned int i = 0; i < mesh->mNumVertices; ++i)
+                    {
+                        if ((sampleCounter++ % sampleStep) != 0)
+                            continue;
+
+                        PreviewPoint p = projectRaw(mesh->mVertices[i]);
+                        projectedXs.push_back(p.X);
+                        projectedYs.push_back(p.Y);
+                    }
+                }
+
+                PreviewPoint minProjected = {
+                    GetPreviewPercentile(projectedXs, 0.01f),
+                    GetPreviewPercentile(projectedYs, 0.01f)
+                };
+                PreviewPoint maxProjected = {
+                    GetPreviewPercentile(projectedXs, 0.99f),
+                    GetPreviewPercentile(projectedYs, 0.99f)
+                };
+
+                float projectedWidth = (std::max)(0.001f, maxProjected.X - minProjected.X);
+                float projectedHeight = (std::max)(0.001f, maxProjected.Y - minProjected.Y);
+                float padding = (float)size * 0.14f;
+                float fitScale = (std::min)((size - padding * 2.0f) / projectedWidth, (size - padding * 2.0f) / projectedHeight);
+
+                auto project = [&](const aiVector3D& source) -> PreviewPoint
+                    {
+                        PreviewPoint p = projectRaw(source);
+                        float x = padding + (p.X - minProjected.X) * fitScale;
+                        float y = padding + (p.Y - minProjected.Y) * fitScale;
+                        return { x, y };
+                    };
+
+                uint32_t edgeColor = PackPreviewPixel(118, 184, 235);
+                uint32_t brightEdge = PackPreviewPixel(190, 225, 255);
+                unsigned int drawnFaces = 0;
+
+                // 실제 모델을 에디터 프리뷰로 다시 그리면 매 프레임 비용이 커진다.
+                // 대표 버텍스 범위만 써서 프레임을 잡고, 결과는 캐시에 저장해 다음부터 파일만 읽는다.
+                for (unsigned int meshIndex = 0; meshIndex < scene->mNumMeshes && drawnFaces < 2500; ++meshIndex)
+                {
+                    if (onlyMeshIndex >= 0 && (int)meshIndex != onlyMeshIndex)
+                        continue;
+
+                    aiMesh* mesh = scene->mMeshes[meshIndex];
+                    if (!mesh)
+                        continue;
+
+                    for (unsigned int faceIndex = 0; faceIndex < mesh->mNumFaces && drawnFaces < 2500; ++faceIndex)
+                    {
+                        const aiFace& face = mesh->mFaces[faceIndex];
+                        if (face.mNumIndices < 3)
+                            continue;
+
+                        PreviewPoint a = project(mesh->mVertices[face.mIndices[0]]);
+                        PreviewPoint b = project(mesh->mVertices[face.mIndices[1]]);
+                        PreviewPoint c = project(mesh->mVertices[face.mIndices[2]]);
+                        uint32_t color = (drawnFaces % 5 == 0) ? brightEdge : edgeColor;
+                        DrawPreviewLine(result, (int)a.X, (int)a.Y, (int)b.X, (int)b.Y, color);
+                        DrawPreviewLine(result, (int)b.X, (int)b.Y, (int)c.X, (int)c.Y, color);
+                        DrawPreviewLine(result, (int)c.X, (int)c.Y, (int)a.X, (int)a.Y, color);
+                        ++drawnFaces;
+                    }
+                }
+
+                result.Success = true;
+                return result;
+            }
+
+            DecodedPreviewPixels GeneratePrefabPreviewPixels(const std::filesystem::path& path, int size)
+            {
+                std::ifstream input(path);
+                if (input)
+                {
+                    try
+                    {
+                        nlohmann::json data;
+                        input >> data;
+                        if (data.contains("Entities") && data["Entities"].is_array())
+                        {
+                            for (const auto& entityData : data["Entities"])
+                            {
+                                if (!entityData.contains("ModelComponent"))
+                                    continue;
+
+                                const auto& modelData = entityData["ModelComponent"];
+                                std::string modelPath;
+                                std::string guid = modelData.value("Guid", "");
+                                if (!guid.empty())
+                                    modelPath = AssetDatabase::GetPathFromGuid(guid).string();
+                                if (modelPath.empty())
+                                    modelPath = modelData.value("Path", "");
+
+                                if (!modelPath.empty() && std::filesystem::exists(modelPath))
+                                {
+                                    DecodedPreviewPixels modelPreview = GenerateModelWirePreviewPixels(modelPath, size);
+                                    if (modelPreview.Success)
+                                    {
+                                        uint32_t badge = PackPreviewPixel(82, 128, 235);
+                                        FillPreviewRect(modelPreview, size - size / 4, size - size / 4, size / 5, size / 5, badge);
+                                        DrawPreviewLine(modelPreview, size - size / 4, size - size / 4, size - size / 20, size - size / 20, PackPreviewPixel(220, 232, 255));
+                                        return modelPreview;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    catch (...)
+                    {
+                    }
+                }
+
+                return GenerateModelOrPrefabPreviewPixels(path, true, size);
+            }
+
+            DecodedPreviewPixels LoadOrGenerateCachedAssetPreview(const std::filesystem::path& path, bool prefab, int size)
+            {
+                std::string typeKey = prefab ? "prefab" : "model";
+                std::filesystem::path cachePath = GetPreviewCachePath(path, typeKey);
+
+                DecodedPreviewPixels cached;
+                if (LoadPreviewCacheFile(cachePath, cached))
+                    return cached;
+
+                // 모델/프리팹 프리뷰는 파일 분석과 그리기 비용이 누적될 수 있다.
+                // 한 번 만든 픽셀은 디스크 캐시에 저장해 다음 실행에서도 바로 재사용한다.
+                DecodedPreviewPixels generated = prefab
+                    ? GeneratePrefabPreviewPixels(path, size)
+                    : GenerateModelWirePreviewPixels(path, size);
+                SavePreviewCacheFile(cachePath, generated);
+                return generated;
+            }
+
+            DecodedPreviewPixels LoadOrGenerateCachedFbxMeshPreview(const std::filesystem::path& path, int meshIndex, int size)
+            {
+                std::string typeKey = "fbxmesh_" + std::to_string(meshIndex);
+                std::filesystem::path cachePath = GetPreviewCachePath(path, typeKey);
+
+                DecodedPreviewPixels cached;
+                if (LoadPreviewCacheFile(cachePath, cached))
+                    return cached;
+
+                // FBX 파일 자체는 컨테이너 아이콘으로 두고, 내부 mesh sub-asset만 프리뷰를 만든다.
+                // mesh index를 캐시 키에 넣어 같은 FBX 안의 여러 메쉬가 서로 다른 썸네일을 갖게 한다.
+                DecodedPreviewPixels generated = GenerateModelWirePreviewPixels(path, size, meshIndex);
+                SavePreviewCacheFile(cachePath, generated);
+                return generated;
             }
 
             std::string TrimText(const std::string& text)
@@ -202,6 +718,7 @@ namespace CCEngine
                 m_TreeChildCache.clear();
                 m_TexturePreviewCache.clear();
                 m_TexturePreviewOrder.clear();
+                m_FbxMeshCache.clear();
                 AssetDatabase::Scan(m_RootDirectory);
             }
             else
@@ -282,6 +799,9 @@ namespace CCEngine
 
             bool importedAny = false;
             std::vector<std::filesystem::path> importedPaths;
+            AssetUndoManager::Command undoCommand;
+            undoCommand.Operation = AssetUndoManager::Kind::Import;
+            undoCommand.Label = sourcePaths.size() == 1 ? "Import Asset" : "Import Assets";
 
             for (const auto& sourcePath : sourcePaths)
             {
@@ -316,12 +836,19 @@ namespace CCEngine
 
                 importedAny = true;
                 importedPaths.push_back(destination);
+
+                AssetUndoManager::Item undoItem;
+                if (m_AssetUndoManager && m_AssetUndoManager->PrepareImportBackup(destination, undoItem))
+                    undoCommand.Items.push_back(undoItem);
             }
 
             if (!importedAny)
                 return false;
 
             AssetDatabase::MarkDirty(m_RootDirectory);
+            if (!undoCommand.Items.empty())
+                PushAssetUndoCommand(undoCommand);
+
             m_TreeChildCache.clear();
             Refresh(true);
 
@@ -497,6 +1024,7 @@ namespace CCEngine
                 case AssetType::Scene: return "SCN";
                 case AssetType::Prefab: return "PFB";
                 case AssetType::Model: return "MDL";
+                case AssetType::FbxMesh: return "MSH";
                 case AssetType::Texture: return "TEX";
                 case AssetType::Script: return "C#";
                 default: return "???";
@@ -510,6 +1038,7 @@ namespace CCEngine
                 case AssetType::Scene: return "scene";
                 case AssetType::Prefab: return "prefab";
                 case AssetType::Model: return "model";
+                case AssetType::FbxMesh: return "mesh";
                 case AssetType::Texture: return "texture";
                 case AssetType::Script: return "script";
                 case AssetType::Folder: return "folder";
@@ -534,6 +1063,10 @@ namespace CCEngine
                     break;
                 case AssetType::Model:
                     if (m_OnModelSelected) m_OnModelSelected(path);
+                    break;
+                case AssetType::FbxMesh:
+                    // FBX 내부 메쉬는 독립 파일이 아니라 컨테이너 안의 sub-asset이다.
+                    // 지금 단계에서는 선택/프리뷰만 제공하고, 실제 인스턴스화는 FBX 파일 단위로 처리한다.
                     break;
                 case AssetType::Script:
                 {
@@ -570,8 +1103,8 @@ namespace CCEngine
                 return false;
 
             bool anyDeleted = false;
-            AssetUndoCommand undoCommand;
-            undoCommand.Kind = AssetUndoKind::RecycleDelete;
+            AssetUndoManager::Command undoCommand;
+            undoCommand.Operation = AssetUndoManager::Kind::RecycleDelete;
             undoCommand.Label = m_ModalTargetPaths.size() == 1 ? "Delete Asset" : "Delete Assets";
 
             for (const auto& path : m_ModalTargetPaths)
@@ -580,11 +1113,10 @@ namespace CCEngine
                     continue;
 
                 std::error_code ec;
-                AssetUndoItem undoItem;
+                AssetUndoManager::Item undoItem;
                 undoItem.FromPath = path;
                 undoItem.IsDirectory = std::filesystem::is_directory(path, ec) && !ec;
-                undoItem.Type = undoItem.IsDirectory ? AssetType::Folder : GetAssetType(path);
-                bool hasUndoBackup = CopyAssetBundleForDeleteUndo(path, undoItem);
+                bool hasUndoBackup = m_AssetUndoManager && m_AssetUndoManager->PrepareDeleteBackup(path, undoItem);
 
                 if (AssetDatabase::RecycleAsset(path))
                 {
@@ -621,10 +1153,10 @@ namespace CCEngine
             if (ec)
                 return false;
 
-            AssetUndoCommand undoCommand;
-            undoCommand.Kind = AssetUndoKind::CreateFolder;
+            AssetUndoManager::Command undoCommand;
+            undoCommand.Operation = AssetUndoManager::Kind::CreateFolder;
             undoCommand.Label = "Create Folder";
-            undoCommand.Items.push_back({ {}, folderPath, {}, {}, AssetType::Folder, true });
+            undoCommand.Items.push_back({ {}, folderPath, {}, {}, true });
             PushAssetUndoCommand(undoCommand);
 
             // 폴더 생성 뒤에는 트리 캐시를 비워야 왼쪽 폴더 목록에도 바로 나타난다.
@@ -680,10 +1212,10 @@ namespace CCEngine
             if (!renamed)
                 return false;
 
-            AssetUndoCommand undoCommand;
-            undoCommand.Kind = AssetUndoKind::Rename;
+            AssetUndoManager::Command undoCommand;
+            undoCommand.Operation = AssetUndoManager::Kind::Rename;
             undoCommand.Label = "Rename Asset";
-            undoCommand.Items.push_back({ sourcePath, targetPath, {}, {}, isDirectory ? AssetType::Folder : GetAssetType(targetPath), isDirectory });
+            undoCommand.Items.push_back({ sourcePath, targetPath, {}, {}, isDirectory });
             PushAssetUndoCommand(undoCommand);
 
             CancelModal();
@@ -766,10 +1298,10 @@ namespace CCEngine
                 if (ec)
                     return false;
 
-                AssetUndoCommand undoCommand;
-                undoCommand.Kind = AssetUndoKind::CreateFolder;
+                AssetUndoManager::Command undoCommand;
+                undoCommand.Operation = AssetUndoManager::Kind::CreateFolder;
                 undoCommand.Label = "Create Folder";
-                undoCommand.Items.push_back({ {}, folderPath, {}, {}, AssetType::Folder, true });
+                undoCommand.Items.push_back({ {}, folderPath, {}, {}, true });
                 PushAssetUndoCommand(undoCommand);
 
                 AssetDatabase::MarkDirty(m_RootDirectory);
@@ -944,6 +1476,41 @@ namespace CCEngine
             return true;
         }
 
+        bool AssetBrowserPanel::IsFbxExpandButtonPoint(int index, float mouseX, float mouseY) const
+        {
+            if (index < 0 || index >= (int)m_ViewEntries.size())
+                return false;
+
+            if (!IsFbxContainer(m_ViewEntries[index]))
+                return false;
+
+            float x = 0.0f;
+            float y = 0.0f;
+            float w = 0.0f;
+            float h = 0.0f;
+            if (!GetEntryBounds(index, x, y, w, h))
+                return false;
+
+            if (m_IconSizeStep == 0)
+            {
+                float buttonX = x + 6.0f;
+                float buttonY = y + 5.0f;
+                return mouseX >= buttonX && mouseX <= buttonX + 16.0f &&
+                    mouseY >= buttonY && mouseY <= buttonY + 16.0f;
+            }
+
+            const float iconSizes[5] = { 18.0f, 32.0f, 48.0f, 72.0f, 96.0f };
+            float iconSize = iconSizes[(std::clamp)(m_IconSizeStep, 0, 4)];
+            float iconX = x + (w + 8.0f - iconSize) * 0.5f - 4.0f;
+            float iconY = y + 6.0f;
+            float buttonSize = 18.0f;
+            float buttonX = iconX + iconSize - buttonSize * 0.45f;
+            float buttonY = iconY + iconSize * 0.38f;
+
+            return mouseX >= buttonX && mouseX <= buttonX + buttonSize &&
+                mouseY >= buttonY && mouseY <= buttonY + buttonSize;
+        }
+
         int AssetBrowserPanel::GetTreeIndexAt(float mouseX, float mouseY) const
         {
             if (!IsTreePoint(mouseX, mouseY))
@@ -1060,7 +1627,11 @@ namespace CCEngine
             std::string query = ToLowerText(TrimText(m_SearchQuery));
             if (query.empty())
             {
-                m_ViewEntries = m_Entries;
+                for (const AssetEntry& entry : m_Entries)
+                {
+                    m_ViewEntries.push_back(entry);
+                    AppendFbxSubAssetEntries(entry, query);
+                }
                 return;
             }
 
@@ -1078,13 +1649,116 @@ namespace CCEngine
                 std::string extension = ToLowerText(entry.Path.extension().string());
                 std::string type = ToLowerText(GetTypeLabel(entry.Type));
 
-                if (name.find(query) != std::string::npos ||
+                bool matchesEntry =
+                    name.find(query) != std::string::npos ||
                     extension.find(query) != std::string::npos ||
-                    type.find(query) != std::string::npos)
+                    type.find(query) != std::string::npos;
+
+                if (matchesEntry)
                 {
                     m_ViewEntries.push_back(entry);
                 }
+
+                AppendFbxSubAssetEntries(entry, query);
             }
+        }
+
+        void AssetBrowserPanel::AppendFbxSubAssetEntries(const AssetEntry& fbxEntry, const std::string& query)
+        {
+            if (!IsFbxContainer(fbxEntry))
+                return;
+
+            std::string key = GetTreeKey(fbxEntry.Path);
+            if (m_ExpandedFbxAssets.find(key) == m_ExpandedFbxAssets.end())
+                return;
+
+            const auto& meshes = GetFbxMeshInfos(fbxEntry.Path);
+            for (const FbxMeshInfo& meshInfo : meshes)
+            {
+                if (meshInfo.MeshIndex < 0)
+                    continue;
+
+                if (!query.empty())
+                {
+                    std::string meshName = ToLowerText(meshInfo.Name);
+                    if (meshName.find(query) == std::string::npos)
+                        continue;
+                }
+
+                AssetEntry meshEntry;
+                meshEntry.Path = fbxEntry.Path;
+                meshEntry.SourceAssetPath = fbxEntry.Path;
+                meshEntry.DisplayName = meshInfo.Name;
+                meshEntry.Type = AssetType::FbxMesh;
+                meshEntry.SubAssetIndex = meshInfo.MeshIndex;
+                meshEntry.IsSubAsset = true;
+                m_ViewEntries.push_back(meshEntry);
+            }
+        }
+
+        const std::vector<AssetBrowserPanel::FbxMeshInfo>& AssetBrowserPanel::GetFbxMeshInfos(const std::filesystem::path& path)
+        {
+            std::string key = GetTreeKey(path);
+            auto found = m_FbxMeshCache.find(key);
+            if (found != m_FbxMeshCache.end())
+                return found->second;
+
+            std::vector<FbxMeshInfo> meshes;
+            Assimp::Importer importer;
+            const aiScene* scene = importer.ReadFile(
+                path.string(),
+                aiProcess_Triangulate |
+                aiProcess_JoinIdenticalVertices |
+                aiProcess_GenNormals);
+
+            if (scene && scene->HasMeshes())
+            {
+                meshes.reserve(scene->mNumMeshes);
+                for (unsigned int i = 0; i < scene->mNumMeshes; ++i)
+                {
+                    aiMesh* mesh = scene->mMeshes[i];
+                    if (!mesh)
+                        continue;
+
+                    FbxMeshInfo info;
+                    info.MeshIndex = (int)i;
+                    info.Name = mesh->mName.length > 0
+                        ? mesh->mName.C_Str()
+                        : "Mesh " + std::to_string(i);
+                    meshes.push_back(info);
+                }
+            }
+
+            // FBX 내부 메쉬는 디스크의 독립 파일이 아니다.
+            // 한 번 파싱한 이름 목록만 캐시에 두고, 실제 삭제/이동/이름변경 대상에서는 제외한다.
+            auto [inserted, _] = m_FbxMeshCache.emplace(key, std::move(meshes));
+            return inserted->second;
+        }
+
+        bool AssetBrowserPanel::IsFbxContainer(const AssetEntry& entry) const
+        {
+            if (entry.IsSubAsset || entry.Type != AssetType::Model)
+                return false;
+
+            std::string extension = ToLowerText(entry.Path.extension().string());
+            return extension == ".fbx";
+        }
+
+        bool AssetBrowserPanel::IsVirtualSubAsset(const AssetEntry& entry) const
+        {
+            return entry.IsSubAsset || entry.Type == AssetType::FbxMesh;
+        }
+
+        void AssetBrowserPanel::ToggleFbxExpanded(const std::filesystem::path& path)
+        {
+            std::string key = GetTreeKey(path);
+            if (m_ExpandedFbxAssets.find(key) != m_ExpandedFbxAssets.end())
+                m_ExpandedFbxAssets.erase(key);
+            else
+                m_ExpandedFbxAssets.insert(key);
+
+            ClearSelection();
+            ApplyFilter();
         }
 
         bool AssetBrowserPanel::IsEntrySelected(int index) const
@@ -1204,7 +1878,7 @@ namespace CCEngine
                     continue;
 
                 const AssetEntry& entry = m_ViewEntries[index];
-                if (entry.DisplayName == ".." || entry.Type == AssetType::Unknown)
+                if (entry.DisplayName == ".." || entry.Type == AssetType::Unknown || IsVirtualSubAsset(entry))
                     continue;
 
                 entries.push_back(entry);
@@ -1269,19 +1943,34 @@ namespace CCEngine
         void AssetBrowserPanel::UpdateDirectoryWatchState()
         {
             m_DirectoryWatchSignatures.clear();
+            m_DirectoryWatchOrder.clear();
+            m_DirectoryWatchCursor = 0;
 
             // 외부 탐색기 변경은 엔진 내부 작업이 아니어서 캐시가 자동으로 더러워지지 않는다.
-            // 현재 폴더와 보이는 트리 폴더의 가벼운 시그니처를 저장해 두고 변경 시 다시 스캔한다.
-            m_DirectoryWatchSignatures[GetTreeKey(m_CurrentDirectory)] = ComputeDirectorySignature(m_CurrentDirectory);
+            // watcher를 못 쓰는 환경에서는 저장된 폴더 시그니처를 조금씩 비교해 변경을 찾는다.
+            auto rememberDirectory = [this](const std::filesystem::path& directory)
+                {
+                    std::string key = GetTreeKey(directory);
+                    if (m_DirectoryWatchSignatures.find(key) != m_DirectoryWatchSignatures.end())
+                        return;
+
+                    m_DirectoryWatchSignatures[key] = ComputeDirectorySignature(directory);
+                    m_DirectoryWatchOrder.push_back(key);
+                };
+
+            rememberDirectory(m_CurrentDirectory);
             for (const TreeEntry& entry : m_TreeEntries)
-                m_DirectoryWatchSignatures[GetTreeKey(entry.Path)] = ComputeDirectorySignature(entry.Path);
+                rememberDirectory(entry.Path);
         }
 
         void AssetBrowserPanel::CheckExternalFileChanges()
         {
+            if (m_ExternalWatcherActive)
+                return;
+
             auto now = std::chrono::steady_clock::now();
             if (m_LastExternalFileCheck.time_since_epoch().count() != 0 &&
-                now - m_LastExternalFileCheck < std::chrono::milliseconds(900))
+                now - m_LastExternalFileCheck < std::chrono::milliseconds(350))
             {
                 return;
             }
@@ -1301,8 +1990,24 @@ namespace CCEngine
                 return;
             }
 
-            for (const auto& [pathText, oldSignature] : m_DirectoryWatchSignatures)
+            if (m_DirectoryWatchOrder.empty())
+                return;
+
+            // 한 번에 모든 폴더를 훑으면 대형 프로젝트에서 1초마다 프레임이 멈춘다.
+            // 그래서 현재 프레임에는 몇 개만 검사하고, 다음 프레임에서 이어서 본다.
+            constexpr size_t MaxDirectorySignatureChecksPerTick = 4;
+            size_t checks = (std::min)(MaxDirectorySignatureChecksPerTick, m_DirectoryWatchOrder.size());
+            for (size_t i = 0; i < checks; ++i)
             {
+                if (m_DirectoryWatchCursor >= m_DirectoryWatchOrder.size())
+                    m_DirectoryWatchCursor = 0;
+
+                const std::string& pathText = m_DirectoryWatchOrder[m_DirectoryWatchCursor++];
+                auto signatureIt = m_DirectoryWatchSignatures.find(pathText);
+                if (signatureIt == m_DirectoryWatchSignatures.end())
+                    continue;
+
+                uint64_t oldSignature = signatureIt->second;
                 uint64_t newSignature = ComputeDirectorySignature(std::filesystem::path(pathText));
                 if (newSignature != oldSignature)
                 {
@@ -1314,7 +2019,15 @@ namespace CCEngine
             }
         }
 
-        bool AssetBrowserPanel::MoveEntryToDirectory(const AssetEntry& entry, const std::filesystem::path& targetDirectory)
+        void AssetBrowserPanel::OnExternalAssetFilesChanged()
+        {
+            // OS watcher가 이미 에셋 DB를 갱신했다.
+            // 브라우저는 트리 캐시와 현재 화면 목록만 다시 만든다.
+            m_TreeChildCache.clear();
+            Refresh(false);
+        }
+
+        bool AssetBrowserPanel::MoveEntryToDirectory(const AssetEntry& entry, const std::filesystem::path& targetDirectory, AssetUndoManager::Command* undoCommand)
         {
             if (entry.DisplayName == ".." || entry.Path == targetDirectory)
                 return false;
@@ -1336,11 +2049,6 @@ namespace CCEngine
             std::filesystem::path destination = target / entry.Path.filename();
             if (std::filesystem::equivalent(entry.Path, destination, ec) || std::filesystem::exists(destination, ec))
                 return false;
-
-            AssetUndoCommand undoCommand;
-            undoCommand.Kind = AssetUndoKind::Move;
-            undoCommand.Label = "Move Asset";
-            undoCommand.Items.push_back({ entry.Path, destination, {}, {}, entry.Type, entry.Type == AssetType::Folder });
 
             if (entry.Type == AssetType::Folder)
             {
@@ -1364,8 +2072,8 @@ namespace CCEngine
                     return false;
             }
 
-            PushAssetUndoCommand(undoCommand);
-            Refresh(true);
+            if (undoCommand)
+                undoCommand->Items.push_back({ entry.Path, destination, {}, {}, entry.Type == AssetType::Folder });
             return true;
         }
 
@@ -1376,15 +2084,22 @@ namespace CCEngine
                 return false;
 
             bool movedAny = false;
+            AssetUndoManager::Command undoCommand;
+            undoCommand.Operation = AssetUndoManager::Kind::Move;
+            undoCommand.Label = selected.size() == 1 ? "Move Asset" : "Move Assets";
             for (const AssetEntry& entry : selected)
             {
-                if (MoveEntryToDirectory(entry, targetDirectory))
+                if (MoveEntryToDirectory(entry, targetDirectory, &undoCommand))
                     movedAny = true;
             }
 
             if (movedAny)
             {
+                // 다중 선택 이동은 사용자가 한 번 끌어서 만든 한 작업이다.
+                // 파일 수만큼 히스토리가 쪼개지면 Ctrl+Z 한 번으로 원래 상태에 못 돌아간다.
+                PushAssetUndoCommand(undoCommand);
                 ClearSelection();
+                Refresh(true);
                 NotifyAssetDatabaseChanged();
             }
             return movedAny;
@@ -1404,290 +2119,83 @@ namespace CCEngine
                 m_OnAssetDatabaseChanged();
         }
 
-        void AssetBrowserPanel::PushAssetUndoCommand(const AssetUndoCommand& command)
+        void AssetBrowserPanel::PushAssetUndoCommand(const AssetUndoManager::Command& command)
         {
-            if (command.Items.empty())
+            if (!m_AssetUndoManager)
                 return;
 
-            m_AssetUndoStack.push_back(command);
-            if (m_AssetUndoStack.size() > s_MaxAssetUndoCommands)
-                m_AssetUndoStack.erase(m_AssetUndoStack.begin());
-
-            m_AssetRedoStack.clear();
+            m_AssetUndoManager->Push(command);
             if (m_OnAssetHistoryChanged)
                 m_OnAssetHistoryChanged();
-        }
-
-        bool AssetBrowserPanel::UndoAssetOperation()
-        {
-            if (m_AssetUndoStack.empty())
-                return false;
-
-            AssetUndoCommand command = m_AssetUndoStack.back();
-            if (!ApplyAssetUndoCommand(command, true))
-                return false;
-
-            m_AssetUndoStack.pop_back();
-            m_AssetRedoStack.push_back(command);
-            ConsoleLog::Info("Asset Undo: " + command.Label);
-            if (m_OnAssetHistoryChanged)
-                m_OnAssetHistoryChanged();
-            return true;
-        }
-
-        bool AssetBrowserPanel::RedoAssetOperation()
-        {
-            if (m_AssetRedoStack.empty())
-                return false;
-
-            AssetUndoCommand command = m_AssetRedoStack.back();
-            if (!ApplyAssetUndoCommand(command, false))
-                return false;
-
-            m_AssetRedoStack.pop_back();
-            m_AssetUndoStack.push_back(command);
-            ConsoleLog::Info("Asset Redo: " + command.Label);
-            if (m_OnAssetHistoryChanged)
-                m_OnAssetHistoryChanged();
-            return true;
         }
 
         std::vector<std::string> AssetBrowserPanel::GetAssetHistoryLabels() const
         {
-            std::vector<std::string> labels;
-            labels.reserve(m_AssetUndoStack.size() + m_AssetRedoStack.size());
+            if (!m_AssetUndoManager)
+                return {};
 
-            for (const AssetUndoCommand& command : m_AssetUndoStack)
-                labels.push_back(FormatAssetUndoLabel(command));
+            return m_AssetUndoManager->GetHistoryLabels();
+        }
 
-            for (auto it = m_AssetRedoStack.rbegin(); it != m_AssetRedoStack.rend(); ++it)
-                labels.push_back(FormatAssetUndoLabel(*it));
+        size_t AssetBrowserPanel::GetAppliedAssetHistoryCount() const
+        {
+            return m_AssetUndoManager ? m_AssetUndoManager->GetAppliedCount() : 0;
+        }
 
-            return labels;
+        bool AssetBrowserPanel::CanUndoAssetOperation() const
+        {
+            return m_AssetUndoManager && m_AssetUndoManager->CanUndo();
+        }
+
+        bool AssetBrowserPanel::CanRedoAssetOperation() const
+        {
+            return m_AssetUndoManager && m_AssetUndoManager->CanRedo();
+        }
+
+        bool AssetBrowserPanel::RequestAssetUndo()
+        {
+            if (!m_AssetUndoManager)
+                return false;
+
+            std::filesystem::path preferredDirectory;
+            if (!m_AssetUndoManager->Undo(&preferredDirectory))
+                return false;
+
+            // 파일 작업 자체는 공용 매니저가 처리하고, 패널은 현재 경로와 표시 캐시만 갱신한다.
+            // 이렇게 나누면 여러 에셋 브라우저가 열려도 Undo 기록은 하나로 유지된다.
+            RefreshAfterAssetUndo(preferredDirectory);
+            if (m_OnAssetHistoryChanged)
+                m_OnAssetHistoryChanged();
+            return true;
+        }
+
+        bool AssetBrowserPanel::RequestAssetRedo()
+        {
+            if (!m_AssetUndoManager)
+                return false;
+
+            std::filesystem::path preferredDirectory;
+            if (!m_AssetUndoManager->Redo(&preferredDirectory))
+                return false;
+
+            RefreshAfterAssetUndo(preferredDirectory);
+            if (m_OnAssetHistoryChanged)
+                m_OnAssetHistoryChanged();
+            return true;
         }
 
         bool AssetBrowserPanel::SeekAssetHistory(size_t targetAppliedCount)
         {
-            const size_t totalCommands = m_AssetUndoStack.size() + m_AssetRedoStack.size();
-            targetAppliedCount = (std::min)(targetAppliedCount, totalCommands);
-
-            bool changed = false;
-            while (m_AssetUndoStack.size() > targetAppliedCount)
-            {
-                if (!UndoAssetOperation())
-                    break;
-                changed = true;
-            }
-
-            while (m_AssetUndoStack.size() < targetAppliedCount)
-            {
-                if (!RedoAssetOperation())
-                    break;
-                changed = true;
-            }
-
-            return changed;
-        }
-
-        bool AssetBrowserPanel::ApplyAssetUndoCommand(const AssetUndoCommand& command, bool undo)
-        {
-            if (command.Items.empty())
+            if (!m_AssetUndoManager)
                 return false;
 
-            bool changed = false;
-            auto applyItem = [&](const AssetUndoItem& item) -> bool
-                {
-                    switch (command.Kind)
-                    {
-                        case AssetUndoKind::CreateFolder:
-                        {
-                            const std::filesystem::path& folderPath = item.ToPath;
-                            std::error_code ec;
-                            if (undo)
-                            {
-                                if (!std::filesystem::exists(folderPath, ec) || ec)
-                                    return false;
-
-                                // 생성 Undo는 빈 폴더만 제거한다.
-                                // 사용자가 그 안에 파일을 넣은 뒤라면 데이터 손실을 막기 위해 실패로 처리한다.
-                                if (!std::filesystem::is_empty(folderPath, ec) || ec)
-                                {
-                                    ConsoleLog::Warning("Create Folder Undo skipped non-empty folder: " + folderPath.string());
-                                    return false;
-                                }
-
-                                std::filesystem::remove(folderPath, ec);
-                                return !ec;
-                            }
-
-                            if (std::filesystem::exists(folderPath, ec) && !ec)
-                                return false;
-
-                            std::filesystem::create_directories(folderPath, ec);
-                            return !ec;
-                        }
-                        case AssetUndoKind::Rename:
-                        case AssetUndoKind::Move:
-                        {
-                            const std::filesystem::path& from = undo ? item.ToPath : item.FromPath;
-                            const std::filesystem::path& to = undo ? item.FromPath : item.ToPath;
-                            return MoveAssetBundleForUndo(from, to, item.IsDirectory);
-                        }
-                        case AssetUndoKind::RecycleDelete:
-                        {
-                            if (undo)
-                                return RestoreDeletedAssetFromBackup(item);
-
-                            return MoveAssetBundleForUndo(item.FromPath, item.BackupPath, item.IsDirectory);
-                        }
-                        default:
-                            return false;
-                    }
-                };
-
-            if (undo)
-            {
-                for (auto it = command.Items.rbegin(); it != command.Items.rend(); ++it)
-                    changed = applyItem(*it) || changed;
-            }
-            else
-            {
-                for (const AssetUndoItem& item : command.Items)
-                    changed = applyItem(item) || changed;
-            }
-
-            if (!changed)
+            std::filesystem::path preferredDirectory;
+            if (!m_AssetUndoManager->Seek(targetAppliedCount, &preferredDirectory))
                 return false;
 
-            std::filesystem::path preferredDirectory = command.Items.front().FromPath.empty()
-                ? command.Items.front().ToPath.parent_path()
-                : command.Items.front().FromPath.parent_path();
             RefreshAfterAssetUndo(preferredDirectory);
-            return true;
-        }
-
-        bool AssetBrowserPanel::MoveAssetBundleForUndo(const std::filesystem::path& from, const std::filesystem::path& to, bool isDirectory)
-        {
-            std::error_code ec;
-            if (!std::filesystem::exists(from, ec) || ec)
-                return false;
-
-            if (std::filesystem::exists(to, ec) && !ec)
-            {
-                ConsoleLog::Warning("Asset Undo blocked by existing path: " + to.string());
-                return false;
-            }
-
-            if (!to.parent_path().empty())
-                std::filesystem::create_directories(to.parent_path(), ec);
-            if (ec)
-                return false;
-
-            // Undo/Redo는 에셋 파일과 sidecar meta를 항상 한 묶음으로 움직인다.
-            // meta가 따로 남으면 GUID는 살아 있어도 sourcePath가 어긋나 참조 검증에서 깨진다.
-            std::filesystem::rename(from, to, ec);
-            if (ec)
-                return false;
-
-            if (!isDirectory)
-            {
-                std::filesystem::path fromMeta = AssetDatabase::GetMetaPath(from);
-                std::filesystem::path toMeta = AssetDatabase::GetMetaPath(to);
-                if (std::filesystem::exists(fromMeta, ec) && !ec)
-                {
-                    std::filesystem::rename(fromMeta, toMeta, ec);
-                    if (ec)
-                    {
-                        std::error_code rollbackEc;
-                        std::filesystem::rename(to, from, rollbackEc);
-                        return false;
-                    }
-                }
-            }
-
-            return true;
-        }
-
-        bool AssetBrowserPanel::CopyAssetBundleForDeleteUndo(const std::filesystem::path& source, AssetUndoItem& item)
-        {
-            std::error_code ec;
-            if (!std::filesystem::exists(source, ec) || ec)
-                return false;
-
-            item.BackupPath = MakeAssetUndoBackupPath(source);
-            item.BackupMetaPath = AssetDatabase::GetMetaPath(item.BackupPath);
-            std::filesystem::create_directories(item.BackupPath.parent_path(), ec);
-            if (ec)
-                return false;
-
-            // 삭제 Undo는 OS 휴지통만 믿지 않고 엔진 내부 백업을 하나 둔다.
-            // 그래야 사용자가 Ctrl+Z를 누를 때 원래 프로젝트 경로로 즉시 복구할 수 있다.
-            if (item.IsDirectory)
-            {
-                std::filesystem::copy(
-                    source,
-                    item.BackupPath,
-                    std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing,
-                    ec);
-            }
-            else
-            {
-                std::filesystem::copy_file(source, item.BackupPath, std::filesystem::copy_options::none, ec);
-                if (!ec)
-                {
-                    std::filesystem::path sourceMeta = AssetDatabase::GetMetaPath(source);
-                    if (std::filesystem::exists(sourceMeta, ec) && !ec)
-                        std::filesystem::copy_file(sourceMeta, item.BackupMetaPath, std::filesystem::copy_options::none, ec);
-                }
-            }
-
-            if (ec)
-            {
-                std::error_code cleanupEc;
-                std::filesystem::remove_all(item.BackupPath, cleanupEc);
-                std::filesystem::remove(item.BackupMetaPath, cleanupEc);
-                ConsoleLog::Warning("Failed to prepare delete undo backup: " + source.string());
-                return false;
-            }
-
-            return true;
-        }
-
-        bool AssetBrowserPanel::RestoreDeletedAssetFromBackup(const AssetUndoItem& item)
-        {
-            std::error_code ec;
-            if (item.FromPath.empty() || item.BackupPath.empty())
-                return false;
-
-            if (std::filesystem::exists(item.FromPath, ec) && !ec)
-            {
-                ConsoleLog::Warning("Delete Undo blocked by existing path: " + item.FromPath.string());
-                return false;
-            }
-
-            if (!std::filesystem::exists(item.BackupPath, ec) || ec)
-            {
-                ConsoleLog::Warning("Delete Undo backup is missing: " + item.BackupPath.string());
-                return false;
-            }
-
-            if (!item.FromPath.parent_path().empty())
-                std::filesystem::create_directories(item.FromPath.parent_path(), ec);
-            if (ec)
-                return false;
-
-            std::filesystem::rename(item.BackupPath, item.FromPath, ec);
-            if (ec)
-                return false;
-
-            if (!item.IsDirectory && !item.BackupMetaPath.empty() && std::filesystem::exists(item.BackupMetaPath, ec) && !ec)
-            {
-                std::filesystem::path restoredMeta = AssetDatabase::GetMetaPath(item.FromPath);
-                std::filesystem::rename(item.BackupMetaPath, restoredMeta, ec);
-                if (ec)
-                    ConsoleLog::Warning("Delete Undo restored asset but failed to restore meta: " + item.FromPath.string());
-            }
-
+            if (m_OnAssetHistoryChanged)
+                m_OnAssetHistoryChanged();
             return true;
         }
 
@@ -1702,51 +2210,30 @@ namespace CCEngine
             NotifyAssetDatabaseChanged();
         }
 
-        std::filesystem::path AssetBrowserPanel::MakeAssetUndoBackupPath(const std::filesystem::path& source) const
+        Texture2D* AssetBrowserPanel::GetAssetPreviewTexture(const AssetEntry& entry)
         {
-            auto now = std::chrono::steady_clock::now().time_since_epoch().count();
-            std::filesystem::path backupRoot = std::filesystem::current_path() / ".ccengine" / "AssetUndoTrash";
-
-            std::ostringstream name;
-            name << now << "_" << source.filename().string();
-            std::filesystem::path candidate = backupRoot / name.str();
-
-            int suffix = 1;
-            std::error_code ec;
-            while (std::filesystem::exists(candidate, ec) && !ec)
+            if (entry.Type == AssetType::FbxMesh && m_IconSizeStep == 0)
             {
-                std::ostringstream retryName;
-                retryName << now << "_" << suffix++ << "_" << source.filename().string();
-                candidate = backupRoot / retryName.str();
+                // 리스트 모드는 아이콘이 작아서 mesh 프리뷰 이득이 거의 없다.
+                // 펼침 직후에는 이름 확인이 먼저라서, 작은 목록에서는 기본 아이콘만 써서 부하를 줄인다.
+                return nullptr;
             }
 
-            return candidate;
-        }
-
-        std::string AssetBrowserPanel::FormatAssetUndoLabel(const AssetUndoCommand& command) const
-        {
-            std::string label = command.Label.empty() ? "Asset Operation" : command.Label;
-            if (command.Items.size() == 1)
-            {
-                const AssetUndoItem& item = command.Items.front();
-                std::filesystem::path displayPath = item.ToPath.empty() ? item.FromPath : item.ToPath;
-                if (!displayPath.empty())
-                    label += " " + displayPath.filename().string();
-            }
-            else
-            {
-                label += " (" + std::to_string(command.Items.size()) + ")";
-            }
-
-            return label;
-        }
-
-        Texture2D* AssetBrowserPanel::GetTexturePreview(const AssetEntry& entry)
-        {
-            if (entry.Type != AssetType::Texture)
+            bool isTexture = entry.Type == AssetType::Texture;
+            bool isFbxContainerModel = IsFbxContainer(entry);
+            bool isGeneratedPreview =
+                entry.Type == AssetType::Prefab ||
+                entry.Type == AssetType::FbxMesh ||
+                (entry.Type == AssetType::Model && !isFbxContainerModel);
+            if (!isTexture && !isGeneratedPreview)
                 return nullptr;
 
-            std::string key = GetTreeKey(entry.Path);
+            std::string key = GetTreeKey(entry.IsSubAsset ? entry.SourceAssetPath : entry.Path);
+            if (isGeneratedPreview)
+                key += std::string("|") + ThumbnailAlgorithmVersion;
+            if (entry.Type == AssetType::FbxMesh)
+                key += "|mesh:" + std::to_string(entry.SubAssetIndex);
+
             auto cached = m_TexturePreviewCache.find(key);
             if (cached != m_TexturePreviewCache.end())
             {
@@ -1793,15 +2280,48 @@ namespace CCEngine
                 return job->Texture.get();
             }
 
+            constexpr int MaxPreviewLoadsStartedPerFrame = 2;
+            if (m_TexturePreviewLoadsStartedThisFrame >= MaxPreviewLoadsStartedPerFrame)
+                return nullptr;
+
+            constexpr int MaxActivePreviewLoads = 2;
+            constexpr int MaxActiveFbxMeshPreviewLoads = 1;
+            bool fbxMeshPreview = entry.Type == AssetType::FbxMesh;
+            if (!TryAcquirePreviewSlot(s_ActivePreviewLoads, MaxActivePreviewLoads))
+                return nullptr;
+
+            if (fbxMeshPreview && !TryAcquirePreviewSlot(s_ActiveFbxMeshPreviewLoads, MaxActiveFbxMeshPreviewLoads))
+            {
+                s_ActivePreviewLoads.fetch_sub(1, std::memory_order_acq_rel);
+                return nullptr;
+            }
+
             auto job = std::make_shared<TexturePreviewJob>();
             job->IsLoading = true;
             m_TexturePreviewCache[key] = job;
             m_TexturePreviewOrder.push_back(key);
+            ++m_TexturePreviewLoadsStartedThisFrame;
 
-            std::string path = entry.Path.string();
-            std::thread([job, path]()
+            std::string path = (entry.IsSubAsset ? entry.SourceAssetPath : entry.Path).string();
+            AssetType type = entry.Type;
+            int subAssetIndex = entry.SubAssetIndex;
+            std::thread([job, path, type, subAssetIndex]()
                 {
-                    DecodedPreviewPixels decoded = DecodeTexturePreviewPixels(path, 128);
+                    // 썸네일 작업은 detach된 스레드에서 끝나므로, 카운터도 스레드 종료 시점에 반납한다.
+                    // 이렇게 해야 큰 FBX를 펼쳤을 때 여러 mesh 프리뷰가 동시에 Assimp 로드를 시작하지 않는다.
+                    PreviewLoadSlot activeSlot(s_ActivePreviewLoads);
+                    std::unique_ptr<PreviewLoadSlot> fbxMeshSlot;
+                    if (type == AssetType::FbxMesh)
+                        fbxMeshSlot = std::make_unique<PreviewLoadSlot>(s_ActiveFbxMeshPreviewLoads);
+
+                    DecodedPreviewPixels decoded;
+                    if (type == AssetType::Texture)
+                        decoded = DecodeTexturePreviewPixels(path, 128);
+                    else if (type == AssetType::FbxMesh)
+                        decoded = LoadOrGenerateCachedFbxMeshPreview(std::filesystem::path(path), subAssetIndex, 128);
+                    else
+                        decoded = LoadOrGenerateCachedAssetPreview(std::filesystem::path(path), type == AssetType::Prefab, 128);
+
                     if (!decoded.Success)
                     {
                         job->Failed = true;
@@ -1820,6 +2340,8 @@ namespace CCEngine
                     job->IsLoading = false;
                 }).detach();
 
+            // 썸네일 디코딩은 백그라운드에서 하지만, 시작 자체도 몰리면 디스크 IO가 튄다.
+            // 한 프레임에 새 작업을 조금만 열어 두면 폴더를 열 때 화면이 덜 멈춘다.
             // 임시 썸네일 캐시는 UI 응답성을 위한 메모리 캐시다.
             // 너무 많이 쌓이면 에디터 전체 메모리를 갉아먹으므로 오래된 항목부터 버린다.
             constexpr size_t MaxTexturePreviewCache = 128;
@@ -1838,7 +2360,7 @@ namespace CCEngine
             UIRenderer::DrawRectFilled(x, y, size, size, { 0.075f, 0.075f, 0.082f, 1.0f });
             UIRenderer::DrawRect(x, y, size, size, { 0.22f, 0.22f, 0.24f, 1.0f });
 
-            Texture2D* previewTexture = GetTexturePreview(entry);
+            Texture2D* previewTexture = GetAssetPreviewTexture(entry);
             if (previewTexture)
             {
                 float checker = (std::max)(4.0f, size / 4.0f);
@@ -1884,6 +2406,10 @@ namespace CCEngine
                     iconColor = { 0.35f, 0.56f, 0.38f, 1.0f };
                     label = "MDL";
                     break;
+                case AssetType::FbxMesh:
+                    iconColor = { 0.42f, 0.62f, 0.86f, 1.0f };
+                    label = "MSH";
+                    break;
                 case AssetType::Texture:
                     iconColor = { 0.54f, 0.40f, 0.58f, 1.0f };
                     label = "TEX";
@@ -1903,7 +2429,7 @@ namespace CCEngine
                 return;
             }
 
-            if (entry.Type == AssetType::Model || entry.Type == AssetType::Prefab)
+            if (entry.Type == AssetType::Model || entry.Type == AssetType::Prefab || entry.Type == AssetType::FbxMesh)
             {
                 float body = size * 0.54f;
                 float bx = x + size * 0.23f;
@@ -1974,6 +2500,7 @@ namespace CCEngine
             auto [mouseX, mouseY] = mouseWindow->GetMousePosition();
             m_HoveredIndex = -1;
             m_TexturePreviewUploadsThisFrame = 0;
+            m_TexturePreviewLoadsStartedThisFrame = 0;
 
             std::error_code ec;
             auto relativeCurrent = std::filesystem::relative(m_CurrentDirectory, m_RootDirectory, ec);
@@ -2105,6 +2632,13 @@ namespace CCEngine
 
                     UIRenderer::DrawRectFilled(startX, currentY, rowWidth, m_RowHeight, rowColor);
                     DrawAssetPreview(m_ViewEntries[i], startX + 7.0f, currentY + 4.0f, 18.0f);
+                    if (IsFbxContainer(m_ViewEntries[i]))
+                    {
+                        bool expanded = m_ExpandedFbxAssets.find(GetTreeKey(m_ViewEntries[i].Path)) != m_ExpandedFbxAssets.end();
+                        UIRenderer::DrawRectFilled(startX + 8.0f, currentY + 6.0f, 14.0f, 14.0f, { 0.23f, 0.24f, 0.26f, 1.0f });
+                        UIRenderer::DrawRect({ startX + 8.0f, currentY + 6.0f }, { 14.0f, 14.0f }, { 0.48f, 0.50f, 0.54f, 1.0f });
+                        UIRenderer::DrawString(expanded ? "v" : ">", startX + 11.0f, currentY + 18.0f, { 0.88f, 0.88f, 0.90f, 1.0f });
+                    }
                     UIRenderer::DrawString(GetTypeLabel(m_ViewEntries[i].Type), startX + 34.0f, currentY + 18.0f, { 0.82f, 0.78f, 0.58f, 1.0f });
                     UIRenderer::DrawString(m_ViewEntries[i].DisplayName, startX + 76.0f, currentY + 18.0f, { 0.86f, 0.86f, 0.86f, 1.0f });
                 }
@@ -2143,6 +2677,16 @@ namespace CCEngine
                     float iconX = cellX + (cellW - iconSize) * 0.5f - 4.0f;
                     float iconY = cellY + 6.0f;
                     DrawAssetPreview(m_ViewEntries[i], iconX, iconY, iconSize);
+                    if (IsFbxContainer(m_ViewEntries[i]))
+                    {
+                        bool expanded = m_ExpandedFbxAssets.find(GetTreeKey(m_ViewEntries[i].Path)) != m_ExpandedFbxAssets.end();
+                        float buttonSize = 18.0f;
+                        float buttonX = iconX + iconSize - buttonSize * 0.45f;
+                        float buttonY = iconY + iconSize * 0.38f;
+                        UIRenderer::DrawRectFilled(buttonX, buttonY, buttonSize, buttonSize, { 0.23f, 0.24f, 0.26f, 1.0f });
+                        UIRenderer::DrawRect({ buttonX, buttonY }, { buttonSize, buttonSize }, { 0.52f, 0.54f, 0.58f, 1.0f });
+                        UIRenderer::DrawString(expanded ? "<" : ">", buttonX + 5.0f, buttonY + 14.0f, { 0.90f, 0.90f, 0.92f, 1.0f });
+                    }
 
                     std::string label = m_ViewEntries[i].DisplayName;
                     size_t maxChars = m_IconSizeStep >= 3 ? 14 : 10;
@@ -2387,14 +2931,14 @@ namespace CCEngine
                 // 마우스가 에셋 브라우저 안에 있을 때만 Ctrl+Z/Y를 가져가면 다른 패널의 단축키를 침범하지 않는다.
                 if (mouseInsideBrowser && ctrl && ke.GetKeyCode() == 'Z')
                 {
-                    bool handled = shift ? RedoAssetOperation() : UndoAssetOperation();
+                    bool handled = shift ? RequestAssetRedo() : RequestAssetUndo();
                     e.Handled = handled;
                     return handled;
                 }
 
                 if (mouseInsideBrowser && ctrl && ke.GetKeyCode() == 'Y')
                 {
-                    bool handled = RedoAssetOperation();
+                    bool handled = RequestAssetRedo();
                     e.Handled = handled;
                     return handled;
                 }
@@ -2590,6 +3134,15 @@ namespace CCEngine
 
                     if (index >= 0 && index < (int)m_ViewEntries.size())
                     {
+                        if (IsFbxExpandButtonPoint(index, me.GetX(), me.GetY()))
+                        {
+                            ToggleFbxExpanded(m_ViewEntries[index].Path);
+                            m_IsMouseDownOnEntry = false;
+                            m_DragEntryIndex = -1;
+                            e.Handled = true;
+                            return true;
+                        }
+
                         m_IsMouseDownOnEmptyContent = false;
                         m_IsDraggingSelectionBox = false;
                         auto now = std::chrono::steady_clock::now();
@@ -2614,7 +3167,7 @@ namespace CCEngine
                         }
                         else
                         {
-                            m_IsMouseDownOnEntry = IsEntrySelected(index);
+                            m_IsMouseDownOnEntry = IsEntrySelected(index) && !IsVirtualSubAsset(m_ViewEntries[index]);
                             m_DragEntryIndex = m_IsMouseDownOnEntry ? index : -1;
                             m_DragStartX = me.GetX();
                             m_DragStartY = me.GetY();
@@ -2654,7 +3207,7 @@ namespace CCEngine
                             m_SelectedIndex = index;
 
                         const auto& entry = m_ViewEntries[index];
-                        if (entry.DisplayName != ".." && entry.Type != AssetType::Unknown)
+                        if (entry.DisplayName != ".." && entry.Type != AssetType::Unknown && !IsVirtualSubAsset(entry))
                         {
                             if (GetSelectedEntries().size() == 1)
                                 m_ContextMenuItems.push_back("Rename");

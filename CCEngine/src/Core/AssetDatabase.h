@@ -68,6 +68,7 @@ namespace CCEngine
         static bool RecycleAsset(const std::filesystem::path& assetPath);
         static bool DeleteMetaFile(const std::filesystem::path& assetPath);
         static AssetReferenceValidationReport ValidateProjectReferences(const std::filesystem::path& rootDirectory = "assets", bool repairFiles = true);
+        static AssetReferenceValidationReport ValidateKnownProjectReferences(const std::filesystem::path& rootDirectory = "assets", bool repairFiles = true, bool logCleanReport = false);
 
         static std::string AssetKindToString(AssetKind kind);
         static AssetKind AssetKindFromString(const std::string& text);

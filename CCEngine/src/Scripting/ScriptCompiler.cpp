@@ -1,5 +1,6 @@
 #include "Scripting/ScriptCompiler.h"
 #include "Core/ConsoleLog.h"
+#include "Editor/AssetFileWatcher.h"
 #include "Scripting/ScriptMetadata.h"
 
 #include <array>
@@ -38,8 +39,11 @@ namespace CCEngine
         bool s_AutoCompileArmed = false;
         std::chrono::steady_clock::time_point s_LastPollTime{};
         std::chrono::steady_clock::time_point s_LastSourceChangeTime{};
+        AssetFileWatcher s_SourceWatcher;
+        bool s_SourceWatcherStartAttempted = false;
+        bool s_SourceWatcherRunning = false;
 
-        constexpr std::chrono::milliseconds SourcePollInterval(400);
+        constexpr std::chrono::milliseconds SourcePollInterval(5000);
         constexpr std::chrono::milliseconds SourceCompileDebounce(700);
 
         void HashCombine(uint64_t& seed, uint64_t value)
@@ -86,6 +90,72 @@ namespace CCEngine
             }
 
             return snapshot;
+        }
+
+        std::filesystem::path GetScriptsRoot()
+        {
+            return std::filesystem::current_path() / "assets" / "Scripts";
+        }
+
+        bool IsScriptSourcePath(const std::filesystem::path& path)
+        {
+            if (path.extension() != ".cs")
+                return false;
+
+            std::error_code ec;
+            std::filesystem::path absolutePath = std::filesystem::absolute(path, ec).lexically_normal();
+            if (ec)
+                return false;
+
+            std::filesystem::path scriptsRoot = std::filesystem::absolute(GetScriptsRoot(), ec).lexically_normal();
+            if (ec)
+                return false;
+
+            std::filesystem::path relative = absolutePath.lexically_relative(scriptsRoot);
+            if (relative.empty())
+                return false;
+
+            auto folderIt = relative.begin();
+            if (folderIt == relative.end())
+                return false;
+
+            std::string firstFolder = folderIt->string();
+            return firstFolder == "Game" || firstFolder == "ScriptCore";
+        }
+
+        void EnsureSourceWatcher()
+        {
+            if (s_SourceWatcherStartAttempted)
+                return;
+
+            s_SourceWatcherStartAttempted = true;
+
+            std::error_code ec;
+            std::filesystem::path scriptsRoot = GetScriptsRoot();
+            if (!std::filesystem::exists(scriptsRoot, ec) || !std::filesystem::is_directory(scriptsRoot, ec))
+                return;
+
+            // 스크립트 변경 감지는 메인 프레임에서 폴더 전체를 계속 훑지 않기 위한 장치다.
+            // watcher는 변경 신호만 모으고, 실제 manifest 비교는 메인 스레드에서 짧게 처리한다.
+            s_SourceWatcherRunning = s_SourceWatcher.Start(scriptsRoot);
+        }
+
+        bool ConsumeSourceWatcherChanges()
+        {
+            if (!s_SourceWatcherRunning)
+                return false;
+
+            std::vector<std::filesystem::path> changedPaths;
+            if (!s_SourceWatcher.ConsumeDebouncedChanges(changedPaths))
+                return false;
+
+            for (const auto& path : changedPaths)
+            {
+                if (IsScriptSourcePath(path))
+                    return true;
+            }
+
+            return false;
         }
 
         bool IsManifestOlderThanSources(const SourceSnapshot& snapshot)
@@ -155,13 +225,42 @@ namespace CCEngine
 
         void PollSourceChanges()
         {
+            EnsureSourceWatcher();
+
             auto now = std::chrono::steady_clock::now();
-            if (s_LastPollTime.time_since_epoch().count() != 0 && now - s_LastPollTime < SourcePollInterval)
+            if (s_AutoCompileArmed && now - s_LastSourceChangeTime >= SourceCompileDebounce)
+            {
+                s_AutoCompileArmed = false;
+                ConsoleLog::Info("C# script changes detected. Recompiling...");
+                RequestCompileInternal();
                 return;
-            s_LastPollTime = now;
+            }
+
+            bool shouldBuildSnapshot = !s_SourceSnapshotInitialized;
+            if (!shouldBuildSnapshot)
+            {
+                if (s_SourceWatcherRunning)
+                {
+                    shouldBuildSnapshot = ConsumeSourceWatcherChanges();
+                }
+                else
+                {
+                    if (s_LastPollTime.time_since_epoch().count() != 0 && now - s_LastPollTime < SourcePollInterval)
+                        return;
+
+                    s_LastPollTime = now;
+                    shouldBuildSnapshot = true;
+                }
+            }
+
+            if (!shouldBuildSnapshot)
+                return;
 
             if (s_Compiling)
+            {
+                s_CompilePending = true;
                 return;
+            }
 
             SourceSnapshot snapshot = BuildSourceSnapshot();
             if (!snapshot.HasSources)
@@ -182,13 +281,6 @@ namespace CCEngine
                 // 저장 중인 파일을 바로 빌드하면 중간 상태를 잡을 수 있어 잠깐 기다린 뒤 컴파일한다.
                 ArmAutoCompile(snapshot);
                 return;
-            }
-
-            if (s_AutoCompileArmed && now - s_LastSourceChangeTime >= SourceCompileDebounce)
-            {
-                s_AutoCompileArmed = false;
-                ConsoleLog::Info("C# script changes detected. Recompiling...");
-                RequestCompileInternal();
             }
         }
     }
@@ -220,6 +312,13 @@ namespace CCEngine
         }
         else
             ConsoleLog::Error(result.Output.empty() ? "C# script compilation failed." : result.Output);
+
+        SourceSnapshot snapshot = BuildSourceSnapshot();
+        if (snapshot.HasSources)
+        {
+            s_SourceSnapshotInitialized = true;
+            s_SourceFingerprint = snapshot.Fingerprint;
+        }
 
         if (s_CompilePending)
         {

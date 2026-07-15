@@ -14,7 +14,7 @@ namespace CCEngine
         virtual ~DX11Context();
 
         virtual void Init() override;
-        virtual void SwapBuffers() override;
+        virtual void SwapBuffers(bool waitForVSync = true) override;
         virtual void Clear(float r, float g, float b, float a) override;
 
 

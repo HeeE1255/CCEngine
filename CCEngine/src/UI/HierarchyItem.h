@@ -25,6 +25,7 @@ namespace CCEngine
             void SetExpanded(bool expanded) { m_IsExpanded = expanded; }
             void SetHasChildren(bool has) { m_HasChildren = has; }
             bool GetExpanded() const { return m_IsExpanded; }
+            void SetRenderClipRange(float top, float bottom);
 
             // 콜백 설정
             void SetOnSelect(const std::function<void()>& callback) { m_OnSelect = callback; }
@@ -36,6 +37,8 @@ namespace CCEngine
             bool m_IsSelected = false;
             bool m_IsExpanded = false;
             bool m_HasChildren = false;
+            float m_RenderClipTop = 0.0f;
+            float m_RenderClipBottom = 0.0f;
 
 
             std::function<void()> m_OnSelect = nullptr;

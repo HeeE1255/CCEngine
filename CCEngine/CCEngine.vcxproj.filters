@@ -87,6 +87,12 @@
     <ClInclude Include="src\Core\Window.h">
       <Filter>src\Core</Filter>
     </ClInclude>
+    <ClInclude Include="src\Editor\AssetFileWatcher.h">
+      <Filter>src\Editor</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Editor\AssetUndoManager.h">
+      <Filter>src\Editor</Filter>
+    </ClInclude>
     <ClInclude Include="src\Editor\EditorCamera.h">
       <Filter>src\Editor</Filter>
     </ClInclude>
@@ -343,6 +349,12 @@
     </ClCompile>
     <ClCompile Include="src\Core\Window.cpp">
       <Filter>src\Core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Editor\AssetFileWatcher.cpp">
+      <Filter>src\Editor</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Editor\AssetUndoManager.cpp">
+      <Filter>src\Editor</Filter>
     </ClCompile>
     <ClCompile Include="src\Editor\EditorCamera.cpp">
       <Filter>src\Editor</Filter>
