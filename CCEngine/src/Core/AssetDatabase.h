@@ -14,7 +14,8 @@ namespace CCEngine
         Scene,
         Prefab,
         Model,
-        Texture
+        Texture,
+        Script
     };
 
     struct AssetMetadata
@@ -48,6 +49,28 @@ namespace CCEngine
         std::vector<AssetReferenceIssue> Issues;
     };
 
+    struct AssetImportResult
+    {
+        bool Success = false;
+        bool SourceMissing = false;
+        bool WasChanged = false;
+        AssetKind Type = AssetKind::Unknown;
+        std::filesystem::path SourcePath;
+        std::string Guid;
+        std::string Importer;
+        std::string Message;
+    };
+
+    struct AssetRefreshReport
+    {
+        uint32_t FilesScanned = 0;
+        uint32_t Imported = 0;
+        uint32_t Reimported = 0;
+        uint32_t Unchanged = 0;
+        uint32_t Failed = 0;
+        std::vector<AssetImportResult> Results;
+    };
+
     class CC_API AssetDatabase
     {
     public:
@@ -62,6 +85,8 @@ namespace CCEngine
         static std::filesystem::path GetMetaPath(const std::filesystem::path& assetPath);
 
         static bool EnsureMetaFile(const std::filesystem::path& assetPath);
+        static AssetImportResult ReimportAsset(const std::filesystem::path& assetPath, bool force = true);
+        static AssetRefreshReport RefreshAssets(const std::filesystem::path& rootDirectory = "assets", bool forceReimport = false);
         static bool MoveAsset(const std::filesystem::path& from, const std::filesystem::path& to);
         static bool RenameAsset(const std::filesystem::path& assetPath, const std::string& newName);
         static bool DeleteAsset(const std::filesystem::path& assetPath);

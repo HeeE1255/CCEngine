@@ -113,7 +113,23 @@ namespace CCEngine
                 case AssetKind::Prefab: return "PrefabImporter";
                 case AssetKind::Model: return "ModelImporter";
                 case AssetKind::Texture: return "TextureImporter";
+                case AssetKind::Script: return "ScriptImporter";
                 default: return "UnknownImporter";
+            }
+        }
+
+        uint32_t GetImporterVersionForKind(AssetKind kind)
+        {
+            switch (kind)
+            {
+                case AssetKind::Scene:
+                case AssetKind::Prefab:
+                case AssetKind::Model:
+                case AssetKind::Texture:
+                case AssetKind::Script:
+                    return 1;
+                default:
+                    return 0;
             }
         }
 
@@ -201,6 +217,30 @@ namespace CCEngine
                 && left.Importer == right.Importer
                 && left.FileHash == right.FileHash
                 && left.Version == right.Version;
+        }
+
+        bool NeedsImport(const std::filesystem::path& assetPath, const AssetMetadata& metadata)
+        {
+            AssetKind kind = AssetDatabase::GetAssetKind(assetPath);
+            if (kind == AssetKind::Unknown)
+                return false;
+
+            if (metadata.Guid.empty())
+                return true;
+
+            if (metadata.Type != kind)
+                return true;
+
+            if (NormalizeKey(metadata.SourcePath) != NormalizeKey(assetPath))
+                return true;
+
+            if (metadata.Importer != GetImporterForKind(kind))
+                return true;
+
+            if (metadata.Version != GetImporterVersionForKind(kind))
+                return true;
+
+            return !IsMetaFreshForAsset(assetPath, AssetDatabase::GetMetaPath(assetPath));
         }
 
         void RegisterMetadata(const AssetMetadata& metadata)
@@ -899,6 +939,7 @@ namespace CCEngine
         if (extension == ".ccprefab") return AssetKind::Prefab;
         if (extension == ".fbx" || extension == ".obj" || extension == ".gltf" || extension == ".glb") return AssetKind::Model;
         if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".tga") return AssetKind::Texture;
+        if (extension == ".cs") return AssetKind::Script;
         return AssetKind::Unknown;
     }
 
@@ -939,7 +980,7 @@ namespace CCEngine
         updatedMetadata.Type = kind;
         updatedMetadata.SourcePath = assetPath;
         updatedMetadata.Importer = GetImporterForKind(kind);
-        updatedMetadata.Version = 1;
+        updatedMetadata.Version = GetImporterVersionForKind(kind);
 
         // meta가 원본보다 최신이면 이전 해시를 그대로 믿는다.
         // 큰 텍스처나 FBX를 매 스캔마다 다시 읽으면 에디터 입력이 순간적으로 멈춘다.
@@ -956,6 +997,145 @@ namespace CCEngine
 
         RegisterMetadata(updatedMetadata);
         return true;
+    }
+
+    AssetImportResult AssetDatabase::ReimportAsset(const std::filesystem::path& assetPath, bool force)
+    {
+        AssetImportResult result;
+        result.SourcePath = assetPath;
+        result.Type = GetAssetKind(assetPath);
+
+        if (result.Type == AssetKind::Unknown)
+        {
+            result.Message = "Unsupported asset type: " + assetPath.string();
+            ConsoleLog::Warning(result.Message);
+            return result;
+        }
+
+        std::error_code ec;
+        if (!std::filesystem::exists(assetPath, ec) || ec)
+        {
+            result.SourceMissing = true;
+            result.Message = "Reimport failed. Source file is missing: " + assetPath.string();
+            ConsoleLog::Error(result.Message);
+            return result;
+        }
+
+        AssetMetadata previousMetadata;
+        const std::filesystem::path metaPath = GetMetaPath(assetPath);
+        const bool hadReadableMeta = std::filesystem::exists(metaPath, ec) && !ec && ReadMetaFile(metaPath, previousMetadata);
+        if (!force && hadReadableMeta && !NeedsImport(assetPath, previousMetadata))
+        {
+            result.Success = true;
+            result.Type = previousMetadata.Type;
+            result.Guid = previousMetadata.Guid;
+            result.Importer = previousMetadata.Importer;
+            result.Message = "Asset import skipped. Up to date: " + assetPath.string();
+            RegisterMetadata(previousMetadata);
+            return result;
+        }
+
+        AssetMetadata metadata = previousMetadata;
+        if (!hadReadableMeta || metadata.Guid.empty())
+            metadata.Guid = GenerateGuid();
+
+        if (IsGuidUsedByAnotherAsset(metadata.Guid, assetPath))
+            metadata.Guid = GenerateGuid();
+
+        metadata.Type = result.Type;
+        metadata.SourcePath = assetPath;
+        metadata.Importer = GetImporterForKind(result.Type);
+        metadata.Version = GetImporterVersionForKind(result.Type);
+        metadata.FileHash = CalculateFileHash(assetPath);
+
+        // Reimport는 GUID를 유지하면서 importer가 만든 산출물 상태만 새로 맞추는 작업이다.
+        // 그래서 meta를 새로 만들더라도 기존 GUID가 유효하면 그대로 보존한다.
+        if (!WriteMetaFile(metadata))
+        {
+            result.Message = "Reimport failed. Could not write meta file: " + metaPath.string();
+            ConsoleLog::Error(result.Message);
+            return result;
+        }
+
+        RegisterMetadata(metadata);
+        result.Success = true;
+        result.WasChanged = !hadReadableMeta || !IsSameMetadata(previousMetadata, metadata);
+        result.Guid = metadata.Guid;
+        result.Importer = metadata.Importer;
+        result.Message = std::string(hadReadableMeta ? "Reimported " : "Imported ") +
+            AssetKindToString(result.Type) + ": " + assetPath.string();
+        ConsoleLog::Info(result.Message);
+        MarkDirty(s_LastScanRoot);
+        return result;
+    }
+
+    AssetRefreshReport AssetDatabase::RefreshAssets(const std::filesystem::path& rootDirectory, bool forceReimport)
+    {
+        AssetRefreshReport report;
+
+        std::error_code ec;
+        if (!std::filesystem::exists(rootDirectory, ec) || ec)
+        {
+            AssetImportResult result;
+            result.Message = "Asset refresh failed. Root folder is missing: " + rootDirectory.string();
+            ConsoleLog::Error(result.Message);
+            report.Results.push_back(result);
+            ++report.Failed;
+            return report;
+        }
+
+        for (std::filesystem::recursive_directory_iterator it(
+            rootDirectory,
+            std::filesystem::directory_options::skip_permission_denied,
+            ec), end; it != end && !ec; it.increment(ec))
+        {
+            if (!it->is_regular_file(ec) || ec)
+            {
+                ec.clear();
+                continue;
+            }
+
+            const std::filesystem::path path = it->path();
+            if (path.extension() == ".meta" || GetAssetKind(path) == AssetKind::Unknown)
+                continue;
+
+            ++report.FilesScanned;
+            AssetMetadata metadata;
+            bool hasMeta = ReadMetaFile(GetMetaPath(path), metadata);
+            bool shouldImport = forceReimport || !hasMeta || NeedsImport(path, metadata);
+            if (!shouldImport)
+            {
+                EnsureMetaFile(path);
+                ++report.Unchanged;
+                continue;
+            }
+
+            AssetImportResult result = ReimportAsset(path, forceReimport);
+            if (result.Success)
+            {
+                if (hasMeta)
+                    ++report.Reimported;
+                else
+                    ++report.Imported;
+            }
+            else
+            {
+                ++report.Failed;
+            }
+            report.Results.push_back(result);
+        }
+
+        // refresh 마지막에는 DB를 한 번 정렬해 GUID->현재 경로 캐시를 확정한다.
+        Scan(rootDirectory);
+
+        ConsoleLog::Info(
+            "Asset refresh finished. scanned=" + std::to_string(report.FilesScanned) +
+            ", imported=" + std::to_string(report.Imported) +
+            ", reimported=" + std::to_string(report.Reimported) +
+            ", unchanged=" + std::to_string(report.Unchanged) +
+            ", failed=" + std::to_string(report.Failed));
+
+        return report;
     }
 
     bool AssetDatabase::MoveAsset(const std::filesystem::path& from, const std::filesystem::path& to)
@@ -1188,6 +1368,7 @@ namespace CCEngine
             case AssetKind::Prefab: return "Prefab";
             case AssetKind::Model: return "Model";
             case AssetKind::Texture: return "Texture";
+            case AssetKind::Script: return "Script";
             default: return "Unknown";
         }
     }
@@ -1198,6 +1379,7 @@ namespace CCEngine
         if (text == "Prefab") return AssetKind::Prefab;
         if (text == "Model") return AssetKind::Model;
         if (text == "Texture") return AssetKind::Texture;
+        if (text == "Script") return AssetKind::Script;
         return AssetKind::Unknown;
     }
 }

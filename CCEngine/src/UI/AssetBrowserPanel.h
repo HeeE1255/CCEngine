@@ -51,6 +51,7 @@ namespace CCEngine
             bool CanRedoAssetOperation() const;
             bool RequestAssetUndo();
             bool RequestAssetRedo();
+            bool RunQualityRegressionChecks();
 
             virtual void UpdateLayout(const DirectX::XMFLOAT2& parentPos, const DirectX::XMFLOAT2& parentSize) override;
             virtual void OnRender() override;
@@ -78,17 +79,54 @@ namespace CCEngine
                 std::filesystem::path SourceAssetPath;
                 int SubAssetIndex = -1;
                 bool IsSubAsset = false;
+                std::string SubAssetParentKey;
+                int SubAssetOrder = -1;
+                int SubAssetCount = 0;
             };
 
             struct FbxMeshInfo;
 
+            enum class TypeFilter
+            {
+                All = 0,
+                Texture,
+                Model,
+                Prefab,
+                Scene,
+                Script
+            };
+
+            enum class SortMode
+            {
+                Name = 0,
+                Type,
+                ModifiedTime
+            };
+
+            struct ToolbarMetrics
+            {
+                float ButtonY = 0.0f;
+                float SearchX = 0.0f;
+                float SearchW = 0.0f;
+                float TypeX = 0.0f;
+                float SortX = 0.0f;
+                float MinusX = 0.0f;
+                float PlusX = 0.0f;
+            };
+
             AssetType GetAssetType(const std::filesystem::path& path) const;
             std::string GetTypeLabel(AssetType type) const;
             std::string GetTypeKey(AssetType type) const;
+            std::string GetTypeFilterLabel(TypeFilter filter) const;
+            std::string GetSortModeLabel(SortMode mode) const;
+            std::string GetTypeFilterLabel() const;
+            std::string GetSortModeLabel() const;
             void ActivateEntry(const AssetEntry& entry);
             bool DeleteSelectedAsset();
             bool RequestDeleteSelectedAsset();
             bool RecycleSelectedAsset();
+            bool ReimportSelectedAssets();
+            bool RefreshCurrentFolder(bool forceReimport);
             bool CreateFolderInCurrentDirectory();
             bool RenameSelectedAsset(const std::string& newName);
             void BeginCreateFolder();
@@ -113,8 +151,19 @@ namespace CCEngine
             bool IsPathInsideRoot(const std::filesystem::path& path, bool allowRoot) const;
             std::filesystem::path MakeUniquePath(const std::filesystem::path& directory, const std::string& baseName, const std::string& extension) const;
             bool IsSearchBoxPoint(float mouseX, float mouseY) const;
+            bool IsTypeFilterButtonPoint(float mouseX, float mouseY) const;
+            bool IsSortButtonPoint(float mouseX, float mouseY) const;
+            bool IsTypeFilterDropdownPoint(float mouseX, float mouseY) const;
+            bool IsSortDropdownPoint(float mouseX, float mouseY) const;
+            int GetTypeFilterDropdownItemAt(float mouseX, float mouseY) const;
+            int GetSortDropdownItemAt(float mouseX, float mouseY) const;
+            ToolbarMetrics GetToolbarMetrics() const;
+            void SetTypeFilter(TypeFilter filter);
+            void SetSortMode(SortMode mode);
             void SetSearchQuery(const std::string& query);
             void ApplyFilter();
+            bool EntryMatchesAdvancedFilter(const AssetEntry& entry, const std::string& textQuery, const std::string& extensionFilter, TypeFilter queryTypeFilter) const;
+            void SortViewEntries();
             void AppendFbxSubAssetEntries(const AssetEntry& fbxEntry, const std::string& query);
             const std::vector<FbxMeshInfo>& GetFbxMeshInfos(const std::filesystem::path& path);
             bool IsFbxContainer(const AssetEntry& entry) const;
@@ -137,6 +186,8 @@ namespace CCEngine
             bool MoveSelectedEntriesToDirectory(const std::filesystem::path& targetDirectory);
             void StepIconSize(int direction);
             void NotifyAssetDatabaseChanged();
+            bool ShowSelectedEntryInFolder();
+            bool RevealSelectedEntryInExplorer();
             Texture2D* GetAssetPreviewTexture(const AssetEntry& entry);
             void DrawAssetPreview(const AssetEntry& entry, float x, float y, float size);
             void DrawFallbackAssetIcon(const AssetEntry& entry, float x, float y, float size);
@@ -230,6 +281,10 @@ namespace CCEngine
             std::vector<std::string> m_ContextMenuItems;
             std::string m_SearchQuery;
             bool m_SearchFocused = false;
+            TypeFilter m_TypeFilter = TypeFilter::All;
+            SortMode m_SortMode = SortMode::Name;
+            bool m_TypeFilterDropdownVisible = false;
+            bool m_SortDropdownVisible = false;
             bool m_ExternalWatcherActive = false;
             std::chrono::steady_clock::time_point m_LastExternalFileCheck = {};
 

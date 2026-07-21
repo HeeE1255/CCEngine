@@ -83,6 +83,15 @@ namespace CCEngine {
         void RebuildHistoryPanel();
         void MarkHistoryPanelDirty();
         void RefreshEditorSelection(Entity selected = {});
+        void RebindScenePanels(Entity selected = {});
+        void SetActiveScene(Scene* scene, Entity selected = {});
+        bool IsInPlayMode() const;
+        bool EnterPlayMode();
+        bool ExitPlayMode();
+        void TogglePausePlayMode();
+        void UpdatePlayModeButtons();
+        void FrameSelectedEntity();
+        void UpdateSceneToolButtons();
         void SetCurrentSceneAsProjectStartScene();
         void OpenProjectStartScene();
         void SaveProjectSettings();
@@ -95,6 +104,7 @@ namespace CCEngine {
         void OpenAssetReferenceValidatorWindow();
         void OpenKeyBindingPickerWindow(UI::KeyBindingInput* targetInput);
         void BringEditorOverlaysToFront();
+        bool RunEditorQualityAssurance(bool closeWhenFinished);
 
     private:
         void BuildEditorUI();
@@ -113,6 +123,10 @@ namespace CCEngine {
         bool m_PendingAssetFileRefresh = false;
         std::chrono::steady_clock::time_point m_AssetFileRefreshRequestedAt = {};
         std::vector<std::filesystem::path> m_PendingAssetFileWatcherPaths;
+        bool m_RunEditorQAOnStartup = false;
+        bool m_CloseAfterEditorQA = false;
+        bool m_EditorQACompleted = false;
+        int m_EditorQAFramesAfterAttach = 0;
 
         Scene* m_ActiveScene = nullptr;
         Scene* m_EditorScene = nullptr;
@@ -177,6 +191,14 @@ namespace CCEngine {
         UI::Button* m_BtnPlay = nullptr;
         UI::Button* m_BtnPause = nullptr;
         UI::Button* m_BtnStop = nullptr;
+        UI::Button* m_BtnToolSelect = nullptr;
+        UI::Button* m_BtnToolMove = nullptr;
+        UI::Button* m_BtnToolRotate = nullptr;
+        UI::Button* m_BtnToolScale = nullptr;
+        UI::Button* m_BtnToolSpace = nullptr;
+        UI::Button* m_BtnToolPivot = nullptr;
+        UI::Button* m_BtnToolSnap = nullptr;
+        UI::Button* m_BtnToolFrame = nullptr;
         UI::Panel* m_ObjectContextMenuPanel = nullptr;
         UI::Panel* m_MeshObjectSubmenuPanel = nullptr;
         UI::Button* m_BtnCreateEmpty = nullptr;
@@ -213,8 +235,12 @@ namespace CCEngine {
 
         Entity m_PrefabDragEntity = {};
         bool m_IsDraggingPrefabToAssetBrowser = false;
+        bool m_IsMultiTransformUndoOpen = false;
         float m_PrefabDragStartX = 0.0f;
         float m_PrefabDragStartY = 0.0f;
+        std::chrono::steady_clock::time_point m_LastViewportRightClickTime = {};
+        float m_LastViewportRightClickX = 0.0f;
+        float m_LastViewportRightClickY = 0.0f;
 
     };
 

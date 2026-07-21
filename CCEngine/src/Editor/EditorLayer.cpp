@@ -8,6 +8,7 @@
 #include "Renderer/Texture.h"
 #include "Renderer/Font.h"
 #include "Renderer/RendererHandle.h"
+#include "Editor/EditorQATestRunner.h"
 #include "Scene/Components.h"
 #include "Scene/PrefabSerializer.h"
 #include "Scene/SceneSerializer.h"
@@ -26,6 +27,7 @@
 #include <windows.h>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iomanip>
 #include <iostream>
@@ -33,6 +35,7 @@
 #include <algorithm>
 #include <cctype>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "Events/Event.h"
@@ -200,6 +203,65 @@ namespace CCEngine {
 
             return false;
         }
+
+        DirectX::XMMATRIX GetEditorLocalTransform(Entity entity)
+        {
+            auto& tc = entity.GetComponent<TransformComponent>();
+            return DirectX::XMMatrixScaling(tc.Scale.x, tc.Scale.y, tc.Scale.z) *
+                DirectX::XMMatrixRotationQuaternion(DirectX::XMLoadFloat4(&tc.QuaternionRotation)) *
+                DirectX::XMMatrixTranslation(tc.Translation.x, tc.Translation.y, tc.Translation.z);
+        }
+
+        DirectX::XMMATRIX GetEditorWorldTransform(Entity entity)
+        {
+            DirectX::XMMATRIX transform = GetEditorLocalTransform(entity);
+
+            if (entity.HasComponent<RelationshipComponent>())
+            {
+                entt::entity parentID = entity.GetComponent<RelationshipComponent>().Parent;
+                if (parentID != entt::null)
+                    transform = transform * GetEditorWorldTransform(Entity{ parentID, entity.GetScene() });
+            }
+
+            return transform;
+        }
+
+        DirectX::XMFLOAT3 GetEditorWorldPosition(Entity entity)
+        {
+            DirectX::XMFLOAT3 position = { 0.0f, 0.0f, 0.0f };
+            if (!entity || !entity.HasComponent<TransformComponent>())
+                return position;
+
+            DirectX::XMStoreFloat3(&position, GetEditorWorldTransform(entity).r[3]);
+            return position;
+        }
+
+        void AccumulateFrameBounds(Entity entity, DirectX::XMVECTOR& minPoint, DirectX::XMVECTOR& maxPoint, bool& hasPoint)
+        {
+            if (!entity || !entity.HasComponent<TransformComponent>())
+                return;
+
+            DirectX::XMFLOAT3 worldPosition = GetEditorWorldPosition(entity);
+            DirectX::XMVECTOR point = DirectX::XMLoadFloat3(&worldPosition);
+
+            if (!hasPoint)
+            {
+                minPoint = point;
+                maxPoint = point;
+                hasPoint = true;
+            }
+            else
+            {
+                minPoint = DirectX::XMVectorMin(minPoint, point);
+                maxPoint = DirectX::XMVectorMax(maxPoint, point);
+            }
+
+            if (!entity.HasComponent<RelationshipComponent>())
+                return;
+
+            for (entt::entity childID : entity.GetComponent<RelationshipComponent>().Children)
+                AccumulateFrameBounds(Entity{ childID, entity.GetScene() }, minPoint, maxPoint, hasPoint);
+        }
     }
 
     EditorLayer::EditorLayer()
@@ -293,14 +355,34 @@ namespace CCEngine {
         }
         if (!startScenePath.empty())
             OpenScene(startScenePath);
+
+        Application* app = Application::Get();
+        if (app)
+        {
+            m_RunEditorQAOnStartup = app->HasCommandLineFlag("--run-editor-qa");
+            m_CloseAfterEditorQA = app->HasCommandLineFlag("--exit");
+        }
     }
 
     void EditorLayer::OnDetach()
     {
         m_AssetFileWatcher.Stop();
 
-        if (m_EditorScene) { m_ActiveScene->OnRuntimeStop(); delete m_ActiveScene; }
-        else { delete m_ActiveScene; }
+        if (IsInPlayMode())
+        {
+            if (m_ActiveScene)
+            {
+                m_ActiveScene->OnRuntimeStop();
+                delete m_ActiveScene;
+            }
+            delete m_EditorScene;
+        }
+        else
+        {
+            delete m_ActiveScene;
+        }
+        m_ActiveScene = nullptr;
+        m_EditorScene = nullptr;
 
         delete m_Framebuffer;
         delete m_GameFramebuffer;
@@ -312,6 +394,17 @@ namespace CCEngine {
         auto editorFrameStartedAt = std::chrono::steady_clock::now();
         std::vector<EditorHitchStage> editorHitchStages;
         auto editorStageStartedAt = std::chrono::steady_clock::now();
+
+        if (m_RunEditorQAOnStartup && !m_EditorQACompleted)
+        {
+            ++m_EditorQAFramesAfterAttach;
+            if (m_EditorQAFramesAfterAttach >= 2)
+            {
+                // QA는 UI가 한 번 레이아웃된 뒤 실행한다.
+                // 버튼 좌표, 드롭다운 hit-test처럼 화면 크기에 의존하는 검사는 초기 배치 전에는 의미가 없다.
+                RunEditorQualityAssurance(m_CloseAfterEditorQA);
+            }
+        }
 
         // 외부 컴파일 작업의 완료 결과는 메인 스레드에서 Console로 전달한다.
         if (ScriptCompiler::Update())
@@ -466,8 +559,9 @@ namespace CCEngine {
 
         // 자체 기즈모 시스템 구현
         auto selectedEntity = m_HierarchyPanel->GetSelectedEntity();
+        auto selectedEntities = m_HierarchyPanel->GetSelectedEntities();
         m_GizmoSystem.OnRenderSkeleton(selectedEntity);
-        m_GizmoSystem.OnRender(selectedEntity, m_Camera.GetViewMatrix(), m_Camera.GetProjectionMatrix());
+        m_GizmoSystem.OnRender(selectedEntities, selectedEntity, m_Camera.GetViewMatrix(), m_Camera.GetProjectionMatrix());
 
         m_Framebuffer->Unbind();
         AddEditorHitchStage(editorHitchStages, "EditorSceneRender", editorStageStartedAt);
@@ -505,7 +599,8 @@ namespace CCEngine {
         AddEditorHitchStage(editorHitchStages, "GameSceneRender", editorStageStartedAt);
 
         editorStageStartedAt = std::chrono::steady_clock::now();
-        m_UndoManager.TrackTransformUndo();
+        if (!m_IsMultiTransformUndoOpen)
+            m_UndoManager.TrackTransformUndo();
         AddEditorHitchStage(editorHitchStages, "UndoTracking", editorStageStartedAt);
         ReportEditorHitch(editorFrameStartedAt, editorHitchStages);
     }
@@ -716,7 +811,7 @@ namespace CCEngine {
                     isWidgetOrChildOf(topmostWidget, m_HierarchyPanel))
                 {
                     Entity hoveredEntity = m_HierarchyPanel->GetEntityAt(mouseX, mouseY);
-                    if (hoveredEntity)
+                    if (hoveredEntity && !m_HierarchyPanel->IsSelected(hoveredEntity))
                         m_HierarchyPanel->SetSelectedEntity(hoveredEntity);
 
                     ShowObjectContextMenu(mouseX, mouseY, hoveredEntity || m_HierarchyPanel->GetSelectedEntity());
@@ -727,9 +822,27 @@ namespace CCEngine {
                 if (m_ViewportWidget && m_ViewportWidget->IsPointInside(mouseX, mouseY) &&
                     isWidgetOrChildOf(topmostWidget, m_ViewportWidget))
                 {
-                    ShowObjectContextMenu(mouseX, mouseY, m_HierarchyPanel && m_HierarchyPanel->GetSelectedEntity());
-                    mouseEvent.Handled = true;
-                    return;
+                    auto now = std::chrono::steady_clock::now();
+                    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_LastViewportRightClickTime).count();
+                    float dx = mouseX - m_LastViewportRightClickX;
+                    float dy = mouseY - m_LastViewportRightClickY;
+                    bool isDoubleRightClick =
+                        elapsedMs >= 0 &&
+                        elapsedMs <= 350 &&
+                        (dx * dx + dy * dy) <= 64.0f;
+
+                    // 씬 뷰의 우클릭은 카메라 조작에 쓰인다.
+                    // 컨텍스트 메뉴는 더블 우클릭일 때만 열어 두 기능이 서로 끼어들지 않게 한다.
+                    m_LastViewportRightClickTime = now;
+                    m_LastViewportRightClickX = mouseX;
+                    m_LastViewportRightClickY = mouseY;
+
+                    if (isDoubleRightClick)
+                    {
+                        ShowObjectContextMenu(mouseX, mouseY, m_HierarchyPanel && m_HierarchyPanel->GetSelectedEntity());
+                        mouseEvent.Handled = true;
+                        return;
+                    }
                 }
             }
 
@@ -801,7 +914,25 @@ namespace CCEngine {
             if (pixelData >= 0 && m_ActiveScene->GetRegistry().valid((entt::entity)pixelData))
             {
                 CCEngine::Entity clickedEntity{ (entt::entity)pixelData, m_ActiveScene };
-                m_HierarchyPanel->SetSelectedEntity(clickedEntity);
+                bool isCtrlPressed = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+                if (isCtrlPressed)
+                {
+                    std::vector<Entity> nextSelection = m_HierarchyPanel->GetSelectedEntities();
+                    auto existing = std::find_if(nextSelection.begin(), nextSelection.end(),
+                        [clickedEntity](Entity selected) { return selected == clickedEntity; });
+
+                    if (existing != nextSelection.end())
+                        nextSelection.erase(existing);
+                    else
+                        nextSelection.push_back(clickedEntity);
+
+                    Entity activeEntity = nextSelection.empty() ? Entity{} : nextSelection.back();
+                    m_HierarchyPanel->SetSelectedEntities(nextSelection, activeEntity);
+                }
+                else
+                {
+                    m_HierarchyPanel->SetSelectedEntity(clickedEntity);
+                }
                 std::cout << "[Picking] Picked Entity ID: " << pixelData << std::endl;
             }
             else
@@ -847,7 +978,23 @@ namespace CCEngine {
             if (isInsideViewport || m_GizmoSystem.IsDragging())
             {
                 auto selectedEntity = m_HierarchyPanel->GetSelectedEntity();
-                m_GizmoSystem.OnEvent(e, selectedEntity, m_Camera.GetViewMatrix(), m_Camera.GetProjectionMatrix(), vpSize.x, vpSize.y, vpPos.x, vpPos.y);
+                auto selectedEntities = m_HierarchyPanel->GetSelectedEntities();
+                bool wasDragging = m_GizmoSystem.IsDragging();
+                m_GizmoSystem.OnEvent(e, selectedEntities, selectedEntity, m_Camera.GetViewMatrix(), m_Camera.GetProjectionMatrix(), vpSize.x, vpSize.y, vpPos.x, vpPos.y);
+                bool isDragging = m_GizmoSystem.IsDragging();
+
+                if (!wasDragging && isDragging && selectedEntities.size() > 1 && !m_IsMultiTransformUndoOpen)
+                {
+                    // 여러 오브젝트가 함께 움직일 때는 개별 Transform 기록 대신 씬 스냅샷으로 묶는다.
+                    // 그래야 Ctrl+Z 한 번에 선택 묶음 전체가 같은 시점으로 돌아간다.
+                    m_UndoManager.BeginSceneStructureChange("Transform Multiple Objects");
+                    m_IsMultiTransformUndoOpen = true;
+                }
+                else if (wasDragging && !isDragging && m_IsMultiTransformUndoOpen)
+                {
+                    m_UndoManager.CommitSceneStructureChange();
+                    m_IsMultiTransformUndoOpen = false;
+                }
             }
         };
 
@@ -1036,18 +1183,60 @@ namespace CCEngine {
         if (!m_ActiveScene || !m_HierarchyPanel)
             return;
 
-        Entity selected = m_HierarchyPanel->GetSelectedEntity();
-        if (!selected || !m_ActiveScene->GetRegistry().valid((entt::entity)selected))
+        std::vector<Entity> selectedEntities = m_HierarchyPanel->GetSelectedEntities();
+        if (selectedEntities.empty())
             return;
 
-        std::string label = "Delete Object";
-        if (selected.HasComponent<TagComponent>())
-            label = "Delete " + selected.GetComponent<TagComponent>().Tag;
+        std::unordered_set<entt::entity> selectedSet;
+        for (Entity selected : selectedEntities)
+        {
+            if (selected && m_ActiveScene->GetRegistry().valid((entt::entity)selected))
+                selectedSet.insert((entt::entity)selected);
+        }
+        if (selectedSet.empty())
+            return;
+
+        std::vector<Entity> deleteRoots;
+        for (Entity selected : selectedEntities)
+        {
+            if (!selected || !m_ActiveScene->GetRegistry().valid((entt::entity)selected))
+                continue;
+
+            bool hasSelectedAncestor = false;
+            Entity current = selected;
+            while (current.HasComponent<RelationshipComponent>())
+            {
+                entt::entity parent = current.GetComponent<RelationshipComponent>().Parent;
+                if (parent == entt::null)
+                    break;
+
+                if (selectedSet.find(parent) != selectedSet.end())
+                {
+                    hasSelectedAncestor = true;
+                    break;
+                }
+                current = Entity{ parent, m_ActiveScene };
+            }
+
+            if (!hasSelectedAncestor)
+                deleteRoots.push_back(selected);
+        }
+
+        std::string label = deleteRoots.size() > 1 ? "Delete Multiple Objects" : "Delete Object";
+        if (deleteRoots.size() == 1 && deleteRoots[0].HasComponent<TagComponent>())
+            label = "Delete " + deleteRoots[0].GetComponent<TagComponent>().Tag;
         m_UndoManager.BeginSceneStructureChange(label);
 
-        bool deletedPrimaryCamera = selected.HasComponent<CameraComponent>() &&
-            selected.GetComponent<CameraComponent>().Primary;
-        m_ActiveScene->DestroyEntity(selected);
+        bool deletedPrimaryCamera = false;
+        for (Entity selected : deleteRoots)
+        {
+            if (!selected || !m_ActiveScene->GetRegistry().valid((entt::entity)selected))
+                continue;
+
+            deletedPrimaryCamera = deletedPrimaryCamera ||
+                (selected.HasComponent<CameraComponent>() && selected.GetComponent<CameraComponent>().Primary);
+            m_ActiveScene->DestroyEntity(selected);
+        }
 
         // 게임 뷰 카메라가 삭제되면 남은 첫 카메라가 자동 승계한다.
         if (deletedPrimaryCamera)
@@ -1068,18 +1257,44 @@ namespace CCEngine {
         if (!m_ActiveScene || !m_HierarchyPanel)
             return;
 
-        Entity selected = m_HierarchyPanel->GetSelectedEntity();
-        if (!selected || !m_ActiveScene->GetRegistry().valid((entt::entity)selected))
+        std::vector<Entity> selectedEntities = m_HierarchyPanel->GetSelectedEntities();
+        if (selectedEntities.empty())
             return;
 
-        std::string label = "Duplicate Object";
-        if (selected.HasComponent<TagComponent>())
-            label = "Duplicate " + selected.GetComponent<TagComponent>().Tag;
+        std::string label = selectedEntities.size() > 1 ? "Duplicate Multiple Objects" : "Duplicate Object";
+        if (selectedEntities.size() == 1 && selectedEntities[0].HasComponent<TagComponent>())
+            label = "Duplicate " + selectedEntities[0].GetComponent<TagComponent>().Tag;
 
         m_UndoManager.BeginSceneStructureChange(label);
-        Entity duplicated = m_ActiveScene->DuplicateEntity(selected);
-        if (duplicated)
-            RefreshEditorSelection(duplicated);
+        std::vector<Entity> duplicatedEntities;
+        for (Entity selected : selectedEntities)
+        {
+            if (!selected || !m_ActiveScene->GetRegistry().valid((entt::entity)selected))
+                continue;
+
+            Entity duplicated = m_ActiveScene->DuplicateEntity(selected);
+            if (duplicated)
+                duplicatedEntities.push_back(duplicated);
+        }
+
+        if (!duplicatedEntities.empty())
+        {
+            Entity activeDuplicate = duplicatedEntities.back();
+            for (UI::HierarchyPanel* hierarchy : m_HierarchyPanels)
+            {
+                if (!hierarchy)
+                    continue;
+
+                hierarchy->SetSelectedEntities(duplicatedEntities, activeDuplicate);
+                hierarchy->Refresh();
+            }
+
+            for (UI::InspectorPanel* inspector : m_InspectorPanels)
+            {
+                if (inspector)
+                    inspector->SetSelectedEntity(activeDuplicate);
+            }
+        }
         m_UndoManager.CommitSceneStructureChange();
     }
 
@@ -1100,6 +1315,204 @@ namespace CCEngine {
         }
     }
 
+    void EditorLayer::RebindScenePanels(Entity selected)
+    {
+        for (UI::HierarchyPanel* hierarchy : m_HierarchyPanels)
+        {
+            if (!hierarchy)
+                continue;
+
+            hierarchy->SetContext(m_ActiveScene);
+            hierarchy->SetSelectedEntity(selected);
+            hierarchy->Refresh();
+        }
+
+        for (UI::InspectorPanel* inspector : m_InspectorPanels)
+        {
+            if (inspector)
+                inspector->SetSelectedEntity(selected);
+        }
+    }
+
+    void EditorLayer::SetActiveScene(Scene* scene, Entity selected)
+    {
+        if (!scene || scene == m_ActiveScene)
+        {
+            RebindScenePanels(selected);
+            return;
+        }
+
+        m_ActiveScene = scene;
+        RebindScenePanels(selected);
+    }
+
+    bool EditorLayer::IsInPlayMode() const
+    {
+        return m_EditorScene != nullptr;
+    }
+
+    bool EditorLayer::EnterPlayMode()
+    {
+        if (!m_ActiveScene || IsInPlayMode())
+            return false;
+
+        if (ScriptCompiler::IsCompiling())
+        {
+            ConsoleLog::Warning("Wait for C# script compilation to finish before entering Play Mode.");
+            return false;
+        }
+
+        m_UndoManager.ClearTransformHistory();
+        m_UndoManager.ClearSceneStructureHistory();
+
+        m_EditorScene = m_ActiveScene;
+        Scene* runtimeScene = Scene::Copy(m_EditorScene);
+        if (!runtimeScene)
+        {
+            m_EditorScene = nullptr;
+            ConsoleLog::Error("Failed to create Play Mode scene copy.");
+            return false;
+        }
+
+        // Play Mode는 에디터 씬을 직접 실행하지 않고 복사본을 실행한다.
+        // 런타임에서 스크립트나 물리가 Transform을 바꿔도 Stop 순간 복사본을 버리므로 원본 씬은 그대로 남는다.
+        m_ActiveScene = runtimeScene;
+        m_ActiveScene->OnRuntimeStart();
+        RebindScenePanels({});
+        UpdatePlayModeButtons();
+        ConsoleLog::Info("Entered Play Mode. Editor scene is isolated.");
+        return true;
+    }
+
+    bool EditorLayer::ExitPlayMode()
+    {
+        if (!IsInPlayMode())
+            return false;
+
+        if (m_ActiveScene)
+        {
+            m_ActiveScene->OnRuntimeStop();
+            delete m_ActiveScene;
+        }
+
+        // Stop은 런타임 복사본을 폐기하고 저장되어 있던 에디터 씬 포인터로 되돌아간다.
+        // 이 경계가 있어야 Play 중 실험한 값이 씬 파일이나 Undo 히스토리에 섞이지 않는다.
+        m_ActiveScene = m_EditorScene;
+        m_EditorScene = nullptr;
+
+        if (m_ActiveScene)
+            m_ActiveScene->SetSceneState(SceneState::Edit);
+
+        m_UndoManager.ClearTransformHistory();
+        m_UndoManager.ClearSceneStructureHistory();
+        RebindScenePanels({});
+        UpdatePlayModeButtons();
+        ConsoleLog::Info("Exited Play Mode. Runtime scene changes were discarded.");
+        return true;
+    }
+
+    void EditorLayer::TogglePausePlayMode()
+    {
+        if (!m_ActiveScene || !IsInPlayMode())
+            return;
+
+        SceneState state = m_ActiveScene->GetState();
+        if (state == SceneState::Play)
+            m_ActiveScene->SetSceneState(SceneState::Pause);
+        else if (state == SceneState::Pause)
+            m_ActiveScene->SetSceneState(SceneState::Play);
+
+        UpdatePlayModeButtons();
+    }
+
+    void EditorLayer::UpdatePlayModeButtons()
+    {
+        if (m_BtnPlay)
+        {
+            bool active = m_ActiveScene && m_ActiveScene->GetState() == SceneState::Play;
+            m_BtnPlay->SetActive(active);
+        }
+
+        if (m_BtnPause)
+        {
+            bool active = m_ActiveScene && m_ActiveScene->GetState() == SceneState::Pause;
+            m_BtnPause->SetActive(active);
+        }
+    }
+
+    void EditorLayer::FrameSelectedEntity()
+    {
+        if (!m_HierarchyPanel)
+            return;
+
+        std::vector<Entity> selectedEntities = m_HierarchyPanel->GetSelectedEntities();
+        if (selectedEntities.empty())
+            return;
+
+        DirectX::XMVECTOR minPoint = DirectX::XMVectorZero();
+        DirectX::XMVECTOR maxPoint = DirectX::XMVectorZero();
+        bool hasPoint = false;
+        float radiusFloor = 1.0f;
+        for (Entity selected : selectedEntities)
+        {
+            if (!selected || !selected.HasComponent<TransformComponent>())
+                continue;
+
+            AccumulateFrameBounds(selected, minPoint, maxPoint, hasPoint);
+
+            if (selected.HasComponent<MeshComponent>())
+            {
+                const auto& transform = selected.GetComponent<TransformComponent>();
+                radiusFloor = (std::max)(radiusFloor, (std::max)({ transform.Scale.x, transform.Scale.y, transform.Scale.z, 1.0f }));
+            }
+            if (selected.HasComponent<ModelComponent>())
+                radiusFloor = (std::max)(radiusFloor, 3.0f);
+        }
+
+        if (!hasPoint)
+            return;
+
+        DirectX::XMVECTOR center = DirectX::XMVectorScale(DirectX::XMVectorAdd(minPoint, maxPoint), 0.5f);
+        DirectX::XMVECTOR extent = DirectX::XMVectorSubtract(maxPoint, minPoint);
+        float radius = DirectX::XMVectorGetX(DirectX::XMVector3Length(extent)) * 0.5f;
+
+        radius = (std::max)(radius, radiusFloor);
+
+        DirectX::XMFLOAT3 target;
+        DirectX::XMStoreFloat3(&target, center);
+
+        // 상용 에디터의 Frame Selected와 같은 역할이다.
+        // 선택 대상의 계층 위치를 훑어 중심을 잡고, 카메라는 현재 방향을 유지한 채 뒤로 물러난다.
+        m_Camera.FrameSelection(target, radius);
+    }
+
+    void EditorLayer::UpdateSceneToolButtons()
+    {
+        GizmoMode mode = m_GizmoSystem.GetMode();
+
+        if (m_BtnToolSelect) m_BtnToolSelect->SetActive(mode == GizmoMode::None);
+        if (m_BtnToolMove) m_BtnToolMove->SetActive(mode == GizmoMode::Translate);
+        if (m_BtnToolRotate) m_BtnToolRotate->SetActive(mode == GizmoMode::Rotate);
+        if (m_BtnToolScale) m_BtnToolScale->SetActive(mode == GizmoMode::Scale);
+
+        if (m_BtnToolSpace)
+        {
+            bool isLocal = m_GizmoSystem.GetSpace() == GizmoSpace::Local;
+            m_BtnToolSpace->SetText(isLocal ? "Local" : "World");
+            m_BtnToolSpace->SetActive(isLocal);
+        }
+
+        if (m_BtnToolPivot)
+        {
+            bool isCenter = m_GizmoSystem.GetPivotMode() == GizmoPivotMode::Center;
+            m_BtnToolPivot->SetText(isCenter ? "Center" : "Pivot");
+            m_BtnToolPivot->SetActive(isCenter);
+        }
+
+        if (m_BtnToolSnap)
+            m_BtnToolSnap->SetActive(m_GizmoSystem.IsSnappingEnabled());
+    }
+
     void EditorLayer::ConfigureUndoManager()
     {
         EditorUndoManager::Callbacks callbacks;
@@ -1107,14 +1520,8 @@ namespace CCEngine {
         callbacks.ReplaceActiveScene = [this](Scene* scene)
         {
             delete m_ActiveScene;
-            m_ActiveScene = scene;
-            for (UI::HierarchyPanel* hierarchy : m_HierarchyPanels)
-            {
-                if (!hierarchy)
-                    continue;
-                hierarchy->SetContext(m_ActiveScene);
-                hierarchy->Refresh();
-            }
+            m_ActiveScene = nullptr;
+            SetActiveScene(scene);
         };
         callbacks.GetSelectedEntity = [this]()
         {
@@ -1146,6 +1553,12 @@ namespace CCEngine {
     // =========================================================================
     void EditorLayer::SaveScene()
     {
+        if (IsInPlayMode())
+        {
+            ConsoleLog::Warning("Stop Play Mode before saving the scene. Runtime scene changes are temporary.");
+            return;
+        }
+
         if (m_CurrentScenePath.empty()) { SaveSceneAs(); return; }
         CCEngine::SceneSerializer serializer(m_ActiveScene);
         serializer.Serialize(m_CurrentScenePath);
@@ -1155,6 +1568,12 @@ namespace CCEngine {
 
     void EditorLayer::SaveSceneAs()
     {
+        if (IsInPlayMode())
+        {
+            ConsoleLog::Warning("Stop Play Mode before saving the scene. Runtime scene changes are temporary.");
+            return;
+        }
+
         std::filesystem::path initialDirPath = std::filesystem::current_path() / "assets" / "scenes";
         std::string initialDirStr = initialDirPath.string();
         std::string filepath = CCEngine::PlatformUtils::SaveFile("CCEngine Scene (*.ccscene)\0*.ccscene\0", initialDirStr.c_str());
@@ -1169,6 +1588,12 @@ namespace CCEngine {
 
     void EditorLayer::OpenScene()
     {
+        if (IsInPlayMode())
+        {
+            ConsoleLog::Warning("Stop Play Mode before opening another scene.");
+            return;
+        }
+
         std::filesystem::path initialDirPath = std::filesystem::current_path() / "assets" / "scenes";
         std::string initialDirStr = initialDirPath.string();
         std::string filepath = CCEngine::PlatformUtils::OpenFile("CCEngine Scene (*.ccscene)\0*.ccscene\0", initialDirStr.c_str());
@@ -1179,6 +1604,11 @@ namespace CCEngine {
     {
         if (filepath.empty())
             return;
+        if (IsInPlayMode())
+        {
+            ConsoleLog::Warning("Stop Play Mode before opening another scene.");
+            return;
+        }
 
         CCEngine::SceneSerializer serializer(m_ActiveScene);
         if (serializer.Deserialize(filepath)) {
@@ -1200,6 +1630,11 @@ namespace CCEngine {
     {
         if (filepath.empty())
             return;
+        if (IsInPlayMode())
+        {
+            ConsoleLog::Warning("Stop Play Mode before loading a scene additively.");
+            return;
+        }
 
         CCEngine::SceneSerializer serializer(m_ActiveScene);
         Entity sceneRoot = serializer.DeserializeAppend(filepath);
@@ -1299,6 +1734,424 @@ namespace CCEngine {
     {
         m_PendingAssetReferenceValidation = true;
         m_AssetReferenceValidationRequestedAt = std::chrono::steady_clock::now();
+    }
+
+    bool EditorLayer::RunEditorQualityAssurance(bool closeWhenFinished)
+    {
+        m_EditorQACompleted = true;
+
+        if (m_RootUI)
+        {
+            auto& window = Application::Get()->GetWindow();
+            m_RootUI->UpdateLayout({ 0.0f, 0.0f }, { (float)window.GetWidth(), (float)window.GetHeight() });
+        }
+
+        EditorQATestRunner runner;
+
+        runner.AddTest("Editor.Scene.Exists", [this]()
+            {
+                EditorQATestResult result;
+                result.Name = "Editor.Scene.Exists";
+                result.Passed = m_ActiveScene != nullptr;
+                result.Message = result.Passed ? "Active scene is ready." : "Active scene is null.";
+                return result;
+            });
+
+        runner.AddTest("Editor.Scene.PrimaryCamera", [this]()
+            {
+                EditorQATestResult result;
+                result.Name = "Editor.Scene.PrimaryCamera";
+
+                if (!m_ActiveScene)
+                {
+                    result.Passed = false;
+                    result.Message = "Active scene is null.";
+                    return result;
+                }
+
+                bool hasPrimaryCamera = false;
+                auto view = m_ActiveScene->GetRegistry().view<CameraComponent>();
+                for (auto entity : view)
+                {
+                    const auto& camera = view.get<CameraComponent>(entity);
+                    if (camera.Primary)
+                    {
+                        hasPrimaryCamera = true;
+                        break;
+                    }
+                }
+
+                result.Passed = hasPrimaryCamera;
+                result.Message = hasPrimaryCamera ? "Primary camera found." : "No primary camera found.";
+                return result;
+            });
+
+        runner.AddTest("PlayMode.SceneCopyIsolation", []()
+            {
+                EditorQATestResult result;
+                result.Name = "PlayMode.SceneCopyIsolation";
+
+                Scene editorScene;
+                Entity source = editorScene.CreateEntity("QA Play Object");
+                auto& sourceTransform = source.GetComponent<TransformComponent>();
+                sourceTransform.Translation = { 1.0f, 2.0f, 3.0f };
+
+                Scene* runtimeScene = Scene::Copy(&editorScene);
+                if (!runtimeScene)
+                {
+                    result.Passed = false;
+                    result.Message = "Scene copy returned null.";
+                    return result;
+                }
+
+                Entity runtimeEntity;
+                auto view = runtimeScene->GetRegistry().view<TagComponent, TransformComponent>();
+                for (auto entity : view)
+                {
+                    const auto& tag = view.get<TagComponent>(entity);
+                    if (tag.Tag == "QA Play Object")
+                    {
+                        runtimeEntity = Entity(entity, runtimeScene);
+                        break;
+                    }
+                }
+
+                if (!runtimeEntity)
+                {
+                    delete runtimeScene;
+                    result.Passed = false;
+                    result.Message = "Copied scene did not contain the test entity.";
+                    return result;
+                }
+
+                // Play Mode 검증은 런타임 복사본만 바꿔 본다.
+                // 원본 Transform이 그대로면 Stop 때 복사본을 버려도 에디터 씬이 오염되지 않는다는 뜻이다.
+                runtimeEntity.GetComponent<TransformComponent>().Translation.x = 99.0f;
+                const float originalX = source.GetComponent<TransformComponent>().Translation.x;
+
+                delete runtimeScene;
+
+                result.Passed = std::abs(originalX - 1.0f) < 0.0001f;
+                result.Message = result.Passed ? "Runtime scene edits stayed isolated from the editor scene." : "Runtime scene edit changed the editor scene.";
+                return result;
+            });
+
+        runner.AddTest("Editor.UI.Root", [this]()
+            {
+                EditorQATestResult result;
+                result.Name = "Editor.UI.Root";
+                result.Passed = m_RootUI != nullptr && m_ViewportWindow != nullptr && m_GameWindow != nullptr;
+                result.Message = result.Passed ? "Root UI and default view windows are ready." : "Default editor UI is incomplete.";
+                return result;
+            });
+
+        runner.AddTest("Editor.Selection.MultiSelectionModel", [this]()
+            {
+                EditorQATestResult result;
+                result.Name = "Editor.Selection.MultiSelectionModel";
+                if (!m_ActiveScene || !m_HierarchyPanel)
+                {
+                    result.Passed = false;
+                    result.Message = "Active scene or hierarchy panel is missing.";
+                    return result;
+                }
+
+                std::vector<Entity> candidates;
+                auto view = m_ActiveScene->GetRegistry().view<TransformComponent>();
+                for (auto handle : view)
+                {
+                    candidates.emplace_back(handle, m_ActiveScene);
+                    if (candidates.size() >= 2)
+                        break;
+                }
+
+                if (candidates.size() < 2)
+                {
+                    result.Passed = false;
+                    result.Message = "Need at least two transform entities for multi-selection QA.";
+                    return result;
+                }
+
+                std::vector<Entity> previousSelection = m_HierarchyPanel->GetSelectedEntities();
+                Entity previousActive = m_HierarchyPanel->GetSelectedEntity();
+
+                // 다중 선택은 '선택 묶음'과 '마지막 활성 선택'을 따로 검증한다.
+                // 인스펙터는 활성 선택을 보고, 하이어라키/기즈모는 선택 묶음을 본다.
+                m_HierarchyPanel->SetSelectedEntities(candidates, candidates[1]);
+                bool selectedBoth = m_HierarchyPanel->IsSelected(candidates[0]) && m_HierarchyPanel->IsSelected(candidates[1]);
+                bool activeIsSecond = m_HierarchyPanel->GetSelectedEntity() == candidates[1];
+                bool countIsTwo = m_HierarchyPanel->GetSelectedEntities().size() == 2;
+
+                m_HierarchyPanel->ClearSelection();
+                bool cleared = m_HierarchyPanel->GetSelectedEntities().empty() && !m_HierarchyPanel->GetSelectedEntity();
+
+                m_HierarchyPanel->SetSelectedEntities(previousSelection, previousActive);
+
+                result.Passed = selectedBoth && activeIsSecond && countIsTwo && cleared;
+                result.Message = result.Passed ? "Multi-selection stores active and selected entities correctly." : "Multi-selection state did not match expected active/list behavior.";
+                return result;
+            });
+
+        runner.AddTest("AssetBrowser.Panel.Exists", [this]()
+            {
+                EditorQATestResult result;
+                result.Name = "AssetBrowser.Panel.Exists";
+                result.Passed = !m_AssetBrowserPanels.empty() && m_AssetBrowserPanel != nullptr;
+                result.Message = result.Passed ? "Asset browser panel is registered." : "Asset browser panel is missing.";
+                return result;
+            });
+
+        runner.AddTest("AssetBrowser.InternalQA", [this]()
+            {
+                EditorQATestResult result;
+                result.Name = "AssetBrowser.InternalQA";
+                if (!m_AssetBrowserPanel)
+                {
+                    result.Passed = false;
+                    result.Message = "Asset browser panel is missing.";
+                    return result;
+                }
+
+                result.Passed = m_AssetBrowserPanel->RunQualityRegressionChecks();
+                result.Message = result.Passed ? "Asset browser invariant checks passed." : "See console for asset browser QA failures.";
+                return result;
+            });
+
+        runner.AddTest("AssetDatabase.ReferenceValidation", [this]()
+            {
+                EditorQATestResult result;
+                result.Name = "AssetDatabase.ReferenceValidation";
+                ValidateAssetReferences(false);
+                result.Passed = true;
+                result.Message = "Known asset references validation completed.";
+                return result;
+            });
+
+        const std::filesystem::path qaRoot = std::filesystem::current_path() / "assets" / "__qa_temp__";
+        auto makeResult = [](const std::string& name, bool passed, const std::string& message)
+            {
+                EditorQATestResult result;
+                result.Name = name;
+                result.Passed = passed;
+                result.Message = message;
+                return result;
+            };
+
+        auto resetQARoot = [qaRoot](std::string& errorMessage)
+            {
+                std::error_code ec;
+                std::filesystem::remove_all(qaRoot, ec);
+                if (ec)
+                {
+                    errorMessage = "Failed to clear QA temp folder: " + ec.message();
+                    return false;
+                }
+
+                std::filesystem::create_directories(qaRoot, ec);
+                if (ec)
+                {
+                    errorMessage = "Failed to create QA temp folder: " + ec.message();
+                    return false;
+                }
+
+                return true;
+            };
+
+        auto cleanupQARoot = [qaRoot]()
+            {
+                std::error_code ec;
+                std::filesystem::remove_all(qaRoot, ec);
+                AssetDatabase::MarkDirty(qaRoot.parent_path());
+            };
+
+        auto writeSmallFile = [](const std::filesystem::path& path, const std::string& text, std::string& errorMessage)
+            {
+                if (!path.parent_path().empty())
+                {
+                    std::error_code ec;
+                    std::filesystem::create_directories(path.parent_path(), ec);
+                    if (ec)
+                    {
+                        errorMessage = "Failed to create parent folder: " + ec.message();
+                        return false;
+                    }
+                }
+
+                std::ofstream file(path, std::ios::binary);
+                if (!file)
+                {
+                    errorMessage = "Failed to write file: " + path.string();
+                    return false;
+                }
+
+                file << text;
+                return true;
+            };
+
+        runner.AddTest("AssetUndo.CreateFolderUndoRedo", [qaRoot, makeResult, resetQARoot, cleanupQARoot]()
+            {
+                std::string errorMessage;
+                if (!resetQARoot(errorMessage))
+                    return makeResult("AssetUndo.CreateFolderUndoRedo", false, errorMessage);
+
+                const std::filesystem::path folderPath = qaRoot / "CreatedFolder";
+                std::error_code ec;
+                std::filesystem::create_directories(folderPath, ec);
+                if (ec)
+                {
+                    cleanupQARoot();
+                    return makeResult("AssetUndo.CreateFolderUndoRedo", false, "Failed to create folder before undo registration.");
+                }
+
+                AssetUndoManager undoManager;
+                AssetUndoManager::Command command;
+                command.Operation = AssetUndoManager::Kind::CreateFolder;
+                command.Label = "QA Create Folder";
+
+                AssetUndoManager::Item item;
+                item.ToPath = folderPath;
+                item.IsDirectory = true;
+                command.Items.push_back(item);
+                undoManager.Push(command);
+
+                // QA는 실제 에디터 히스토리를 건드리지 않는 별도 매니저를 쓴다.
+                // 테스트 실패가 나도 사용자가 작업 중인 Undo 스택에는 영향이 없어야 한다.
+                const bool undoOk = undoManager.Undo();
+                const bool removedAfterUndo = !std::filesystem::exists(folderPath, ec) && !ec;
+                const bool redoOk = undoManager.Redo();
+                const bool restoredAfterRedo = std::filesystem::exists(folderPath, ec) && !ec;
+
+                cleanupQARoot();
+                const bool passed = undoOk && removedAfterUndo && redoOk && restoredAfterRedo;
+                return makeResult("AssetUndo.CreateFolderUndoRedo", passed, passed ? "Create folder undo/redo changed disk state correctly." : "Create folder undo/redo did not restore the expected disk state.");
+            });
+
+        runner.AddTest("AssetUndo.RenameUndoRedo", [qaRoot, makeResult, resetQARoot, cleanupQARoot, writeSmallFile]()
+            {
+                std::string errorMessage;
+                if (!resetQARoot(errorMessage))
+                    return makeResult("AssetUndo.RenameUndoRedo", false, errorMessage);
+
+                const std::filesystem::path sourcePath = qaRoot / "RenameSource.txt";
+                const std::filesystem::path targetPath = qaRoot / "RenameTarget.txt";
+                const std::filesystem::path sourceMeta = AssetDatabase::GetMetaPath(sourcePath);
+                const std::filesystem::path targetMeta = AssetDatabase::GetMetaPath(targetPath);
+
+                if (!writeSmallFile(sourcePath, "rename source", errorMessage) || !writeSmallFile(sourceMeta, "guid: qa-rename", errorMessage))
+                {
+                    cleanupQARoot();
+                    return makeResult("AssetUndo.RenameUndoRedo", false, errorMessage);
+                }
+
+                std::error_code ec;
+                std::filesystem::rename(sourcePath, targetPath, ec);
+                if (!ec)
+                    std::filesystem::rename(sourceMeta, targetMeta, ec);
+                if (ec)
+                {
+                    cleanupQARoot();
+                    return makeResult("AssetUndo.RenameUndoRedo", false, "Failed to prepare renamed file state.");
+                }
+
+                AssetUndoManager undoManager;
+                AssetUndoManager::Command command;
+                command.Operation = AssetUndoManager::Kind::Rename;
+                command.Label = "QA Rename Asset";
+
+                AssetUndoManager::Item item;
+                item.FromPath = sourcePath;
+                item.ToPath = targetPath;
+                item.IsDirectory = false;
+                command.Items.push_back(item);
+                undoManager.Push(command);
+
+                // 에셋 이름 변경은 파일과 meta를 한 묶음으로 되돌려야 GUID 참조가 끊기지 않는다.
+                const bool undoOk = undoManager.Undo();
+                const bool sourceRestored = std::filesystem::exists(sourcePath, ec) && !ec && std::filesystem::exists(sourceMeta, ec) && !ec;
+                const bool targetRemoved = !std::filesystem::exists(targetPath, ec) && !ec && !std::filesystem::exists(targetMeta, ec) && !ec;
+                const bool redoOk = undoManager.Redo();
+                const bool targetRestored = std::filesystem::exists(targetPath, ec) && !ec && std::filesystem::exists(targetMeta, ec) && !ec;
+                const bool sourceRemoved = !std::filesystem::exists(sourcePath, ec) && !ec && !std::filesystem::exists(sourceMeta, ec) && !ec;
+
+                cleanupQARoot();
+                const bool passed = undoOk && sourceRestored && targetRemoved && redoOk && targetRestored && sourceRemoved;
+                return makeResult("AssetUndo.RenameUndoRedo", passed, passed ? "Rename undo/redo moved asset and meta together." : "Rename undo/redo left asset or meta in the wrong place.");
+            });
+
+        runner.AddTest("AssetUndo.MoveUndoRedo", [qaRoot, makeResult, resetQARoot, cleanupQARoot, writeSmallFile]()
+            {
+                std::string errorMessage;
+                if (!resetQARoot(errorMessage))
+                    return makeResult("AssetUndo.MoveUndoRedo", false, errorMessage);
+
+                const std::filesystem::path sourcePath = qaRoot / "MoveSource" / "MovedAsset.txt";
+                const std::filesystem::path targetPath = qaRoot / "MoveTarget" / "MovedAsset.txt";
+                const std::filesystem::path sourceMeta = AssetDatabase::GetMetaPath(sourcePath);
+                const std::filesystem::path targetMeta = AssetDatabase::GetMetaPath(targetPath);
+
+                if (!writeSmallFile(sourcePath, "move source", errorMessage) || !writeSmallFile(sourceMeta, "guid: qa-move", errorMessage))
+                {
+                    cleanupQARoot();
+                    return makeResult("AssetUndo.MoveUndoRedo", false, errorMessage);
+                }
+
+                std::error_code ec;
+                std::filesystem::create_directories(targetPath.parent_path(), ec);
+                if (!ec)
+                    std::filesystem::rename(sourcePath, targetPath, ec);
+                if (!ec)
+                    std::filesystem::rename(sourceMeta, targetMeta, ec);
+                if (ec)
+                {
+                    cleanupQARoot();
+                    return makeResult("AssetUndo.MoveUndoRedo", false, "Failed to prepare moved file state.");
+                }
+
+                AssetUndoManager undoManager;
+                AssetUndoManager::Command command;
+                command.Operation = AssetUndoManager::Kind::Move;
+                command.Label = "QA Move Asset";
+
+                AssetUndoManager::Item item;
+                item.FromPath = sourcePath;
+                item.ToPath = targetPath;
+                item.IsDirectory = false;
+                command.Items.push_back(item);
+                undoManager.Push(command);
+
+                // 이동 Undo도 이름 변경과 같은 원리다.
+                // 실제 파일과 meta가 항상 같은 폴더로 따라다녀야 씬과 프리팹의 GUID 참조가 유지된다.
+                const bool undoOk = undoManager.Undo();
+                const bool sourceRestored = std::filesystem::exists(sourcePath, ec) && !ec && std::filesystem::exists(sourceMeta, ec) && !ec;
+                const bool targetRemoved = !std::filesystem::exists(targetPath, ec) && !ec && !std::filesystem::exists(targetMeta, ec) && !ec;
+                const bool redoOk = undoManager.Redo();
+                const bool targetRestored = std::filesystem::exists(targetPath, ec) && !ec && std::filesystem::exists(targetMeta, ec) && !ec;
+                const bool sourceRemoved = !std::filesystem::exists(sourcePath, ec) && !ec && !std::filesystem::exists(sourceMeta, ec) && !ec;
+
+                cleanupQARoot();
+                const bool passed = undoOk && sourceRestored && targetRemoved && redoOk && targetRestored && sourceRemoved;
+                return makeResult("AssetUndo.MoveUndoRedo", passed, passed ? "Move undo/redo moved asset and meta together." : "Move undo/redo left asset or meta in the wrong place.");
+            });
+
+        runner.AddTest("EditorUI.InputSimulator", []()
+            {
+                return RunEditorUIInputRegressionChecks();
+            });
+
+        // 테스트 러너는 결과를 구조화해서 모으고, 콘솔 출력은 마지막에 한 번만 한다.
+        // 이렇게 해야 나중에 CLI 실행, UI 버튼 실행, 로그 파일 저장이 같은 결과 객체를 공유할 수 있다.
+        EditorQATestSummary summary = runner.Run();
+        EditorQATestRunner::LogSummary(summary);
+
+        Application* app = Application::Get();
+        if (app)
+        {
+            app->SetExitCode(summary.Passed() ? 0 : 1);
+            if (closeWhenFinished)
+                app->GetWindow().SetShouldClose(true);
+        }
+
+        return summary.Passed();
     }
 
     void EditorLayer::SaveSelectedPrefab()
@@ -1634,19 +2487,6 @@ namespace CCEngine {
     void EditorLayer::HandleShortcuts()
     {
         bool isRightMouseDown = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
-
-        if (!isRightMouseDown)
-        {
-            if (GetAsyncKeyState('Q') & 0x8000) m_GizmoSystem.SetMode(GizmoMode::None);
-            if (GetAsyncKeyState('W') & 0x8000) m_GizmoSystem.SetMode(GizmoMode::Translate);
-            if (GetAsyncKeyState('E') & 0x8000) m_GizmoSystem.SetMode(GizmoMode::Rotate);
-            if (GetAsyncKeyState('R') & 0x8000) m_GizmoSystem.SetMode(GizmoMode::Scale);
-            if (GetAsyncKeyState(VK_ESCAPE) & 0x8000)
-            {
-                m_HierarchyPanel->SetSelectedEntity(CCEngine::Entity{});
-            }
-        }
-
         bool isCtrlPressed = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
         bool isShiftPressed = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
         bool isSPressedNow = (GetAsyncKeyState('S') & 0x8000) != 0;
@@ -1654,10 +2494,58 @@ namespace CCEngine {
         static bool s_IsZPressedLastFrame = false;
         static bool s_IsYPressedLastFrame = false;
         static bool s_IsDPressedLastFrame = false;
+        static bool s_IsFPressedLastFrame = false;
+        static bool s_IsXPressedLastFrame = false;
+        static bool s_IsVPressedLastFrame = false;
         bool isOPressedNow = (GetAsyncKeyState('O') & 0x8000) != 0;
         bool isZPressedNow = (GetAsyncKeyState('Z') & 0x8000) != 0;
         bool isYPressedNow = (GetAsyncKeyState('Y') & 0x8000) != 0;
         bool isDPressedNow = (GetAsyncKeyState('D') & 0x8000) != 0;
+        bool isFPressedNow = (GetAsyncKeyState('F') & 0x8000) != 0;
+        bool isXPressedNow = (GetAsyncKeyState('X') & 0x8000) != 0;
+        bool isVPressedNow = (GetAsyncKeyState('V') & 0x8000) != 0;
+
+        if (!isRightMouseDown)
+        {
+            bool toolChanged = false;
+            if (GetAsyncKeyState('Q') & 0x8000) { m_GizmoSystem.SetMode(GizmoMode::None); toolChanged = true; }
+            if (GetAsyncKeyState('W') & 0x8000) { m_GizmoSystem.SetMode(GizmoMode::Translate); toolChanged = true; }
+            if (GetAsyncKeyState('E') & 0x8000) { m_GizmoSystem.SetMode(GizmoMode::Rotate); toolChanged = true; }
+            if (GetAsyncKeyState('R') & 0x8000) { m_GizmoSystem.SetMode(GizmoMode::Scale); toolChanged = true; }
+
+            if (!isCtrlPressed && isSPressedNow && !m_IsSPressedLastFrame)
+            {
+                m_GizmoSystem.ToggleSnapping();
+                toolChanged = true;
+            }
+
+            if (!isCtrlPressed && isXPressedNow && !s_IsXPressedLastFrame)
+            {
+                m_GizmoSystem.ToggleSpace();
+                toolChanged = true;
+            }
+
+            if (!isCtrlPressed && isVPressedNow && !s_IsVPressedLastFrame)
+            {
+                m_GizmoSystem.TogglePivotMode();
+                toolChanged = true;
+            }
+
+            if (!isCtrlPressed && isFPressedNow && !s_IsFPressedLastFrame)
+                FrameSelectedEntity();
+
+            if (GetAsyncKeyState(VK_ESCAPE) & 0x8000)
+            {
+                for (UI::HierarchyPanel* hierarchy : m_HierarchyPanels)
+                {
+                    if (hierarchy)
+                        hierarchy->ClearSelection();
+                }
+            }
+
+            if (toolChanged)
+                UpdateSceneToolButtons();
+        }
 
         if (isSPressedNow && !m_IsSPressedLastFrame)
         {
@@ -1691,6 +2579,9 @@ namespace CCEngine {
         s_IsZPressedLastFrame = isZPressedNow;
         s_IsYPressedLastFrame = isYPressedNow;
         s_IsDPressedLastFrame = isDPressedNow;
+        s_IsFPressedLastFrame = isFPressedNow;
+        s_IsXPressedLastFrame = isXPressedNow;
+        s_IsVPressedLastFrame = isVPressedNow;
         m_IsSPressedLastFrame = isSPressedNow;
     }
 
@@ -2220,19 +3111,59 @@ namespace CCEngine {
         m_ToolbarPanel->SetOffsetMin(250.0f, 48.0f); m_ToolbarPanel->SetOffsetMax(-300.0f, 88.0f);
         m_RootUI->AddChild(m_ToolbarPanel);
 
+        m_BtnToolSelect = new UI::Button("BtnToolSelect", "Q");
+        m_BtnToolSelect->SetAnchorMin(0.0f, 0.5f); m_BtnToolSelect->SetAnchorMax(0.0f, 0.5f);
+        m_BtnToolSelect->SetOffsetMin(10.0f, -12.0f); m_BtnToolSelect->SetOffsetMax(40.0f, 12.0f);
+        m_ToolbarPanel->AddChild(m_BtnToolSelect);
+
+        m_BtnToolMove = new UI::Button("BtnToolMove", "W");
+        m_BtnToolMove->SetAnchorMin(0.0f, 0.5f); m_BtnToolMove->SetAnchorMax(0.0f, 0.5f);
+        m_BtnToolMove->SetOffsetMin(44.0f, -12.0f); m_BtnToolMove->SetOffsetMax(74.0f, 12.0f);
+        m_ToolbarPanel->AddChild(m_BtnToolMove);
+
+        m_BtnToolRotate = new UI::Button("BtnToolRotate", "E");
+        m_BtnToolRotate->SetAnchorMin(0.0f, 0.5f); m_BtnToolRotate->SetAnchorMax(0.0f, 0.5f);
+        m_BtnToolRotate->SetOffsetMin(78.0f, -12.0f); m_BtnToolRotate->SetOffsetMax(108.0f, 12.0f);
+        m_ToolbarPanel->AddChild(m_BtnToolRotate);
+
+        m_BtnToolScale = new UI::Button("BtnToolScale", "R");
+        m_BtnToolScale->SetAnchorMin(0.0f, 0.5f); m_BtnToolScale->SetAnchorMax(0.0f, 0.5f);
+        m_BtnToolScale->SetOffsetMin(112.0f, -12.0f); m_BtnToolScale->SetOffsetMax(142.0f, 12.0f);
+        m_ToolbarPanel->AddChild(m_BtnToolScale);
+
+        m_BtnToolSpace = new UI::Button("BtnToolSpace", "Local");
+        m_BtnToolSpace->SetAnchorMin(0.0f, 0.5f); m_BtnToolSpace->SetAnchorMax(0.0f, 0.5f);
+        m_BtnToolSpace->SetOffsetMin(154.0f, -12.0f); m_BtnToolSpace->SetOffsetMax(224.0f, 12.0f);
+        m_ToolbarPanel->AddChild(m_BtnToolSpace);
+
+        m_BtnToolPivot = new UI::Button("BtnToolPivot", "Pivot");
+        m_BtnToolPivot->SetAnchorMin(0.0f, 0.5f); m_BtnToolPivot->SetAnchorMax(0.0f, 0.5f);
+        m_BtnToolPivot->SetOffsetMin(228.0f, -12.0f); m_BtnToolPivot->SetOffsetMax(298.0f, 12.0f);
+        m_ToolbarPanel->AddChild(m_BtnToolPivot);
+
+        m_BtnToolSnap = new UI::Button("BtnToolSnap", "Snap");
+        m_BtnToolSnap->SetAnchorMin(0.0f, 0.5f); m_BtnToolSnap->SetAnchorMax(0.0f, 0.5f);
+        m_BtnToolSnap->SetOffsetMin(302.0f, -12.0f); m_BtnToolSnap->SetOffsetMax(358.0f, 12.0f);
+        m_ToolbarPanel->AddChild(m_BtnToolSnap);
+
+        m_BtnToolFrame = new UI::Button("BtnToolFrame", "Frame");
+        m_BtnToolFrame->SetAnchorMin(0.0f, 0.5f); m_BtnToolFrame->SetAnchorMax(0.0f, 0.5f);
+        m_BtnToolFrame->SetOffsetMin(362.0f, -12.0f); m_BtnToolFrame->SetOffsetMax(424.0f, 12.0f);
+        m_ToolbarPanel->AddChild(m_BtnToolFrame);
+
         m_BtnPlay = new UI::Button("BtnPlay", "Play");
-        m_BtnPlay->SetAnchorMin(0.5f, 0.5f); m_BtnPlay->SetAnchorMax(0.5f, 0.5f);
-        m_BtnPlay->SetOffsetMin(-100.0f, -12.0f); m_BtnPlay->SetOffsetMax(-40.0f, 12.0f);
+        m_BtnPlay->SetAnchorMin(1.0f, 0.5f); m_BtnPlay->SetAnchorMax(1.0f, 0.5f);
+        m_BtnPlay->SetOffsetMin(-220.0f, -12.0f); m_BtnPlay->SetOffsetMax(-160.0f, 12.0f);
         m_ToolbarPanel->AddChild(m_BtnPlay);
 
         m_BtnPause = new UI::Button("BtnPause", "Pause");
-        m_BtnPause->SetAnchorMin(0.5f, 0.5f); m_BtnPause->SetAnchorMax(0.5f, 0.5f);
-        m_BtnPause->SetOffsetMin(-30.0f, -12.0f); m_BtnPause->SetOffsetMax(30.0f, 12.0f);
+        m_BtnPause->SetAnchorMin(1.0f, 0.5f); m_BtnPause->SetAnchorMax(1.0f, 0.5f);
+        m_BtnPause->SetOffsetMin(-150.0f, -12.0f); m_BtnPause->SetOffsetMax(-80.0f, 12.0f);
         m_ToolbarPanel->AddChild(m_BtnPause);
 
         m_BtnStop = new UI::Button("BtnStop", "Stop");
-        m_BtnStop->SetAnchorMin(0.5f, 0.5f); m_BtnStop->SetAnchorMax(0.5f, 0.5f);
-        m_BtnStop->SetOffsetMin(40.0f, -12.0f); m_BtnStop->SetOffsetMax(100.0f, 12.0f);
+        m_BtnStop->SetAnchorMin(1.0f, 0.5f); m_BtnStop->SetAnchorMax(1.0f, 0.5f);
+        m_BtnStop->SetOffsetMin(-70.0f, -12.0f); m_BtnStop->SetOffsetMax(-10.0f, 12.0f);
         m_ToolbarPanel->AddChild(m_BtnStop);
 
         m_ViewportWindow = new UI::WindowPanel("ViewportWindowUI", "Scene View");
@@ -2558,91 +3489,45 @@ namespace CCEngine {
         m_BtnCreateTorus->SetOnClick([this]() { CreatePrimitiveObject("Torus", (int)MeshComponent::MeshType::Torus); HideObjectContextMenu(); });
         m_BtnDeleteObject->SetOnClick([this]() { DeleteSelectedObject(); HideObjectContextMenu(); });
 
+        m_BtnToolSelect->SetOnClick([this]() { m_GizmoSystem.SetMode(GizmoMode::None); UpdateSceneToolButtons(); });
+        m_BtnToolMove->SetOnClick([this]() { m_GizmoSystem.SetMode(GizmoMode::Translate); UpdateSceneToolButtons(); });
+        m_BtnToolRotate->SetOnClick([this]() { m_GizmoSystem.SetMode(GizmoMode::Rotate); UpdateSceneToolButtons(); });
+        m_BtnToolScale->SetOnClick([this]() { m_GizmoSystem.SetMode(GizmoMode::Scale); UpdateSceneToolButtons(); });
+        m_BtnToolSpace->SetOnClick([this]() { m_GizmoSystem.ToggleSpace(); UpdateSceneToolButtons(); });
+        m_BtnToolPivot->SetOnClick([this]() { m_GizmoSystem.TogglePivotMode(); UpdateSceneToolButtons(); });
+        m_BtnToolSnap->SetOnClick([this]() { m_GizmoSystem.ToggleSnapping(); UpdateSceneToolButtons(); });
+        m_BtnToolFrame->SetOnClick([this]() { FrameSelectedEntity(); });
+
         m_BtnPlay->SetOnClick([this]() {
-            CCEngine::SceneState state = m_ActiveScene->GetState();
-            if (state == CCEngine::SceneState::Edit) {
-                if (ScriptCompiler::IsCompiling())
-                {
-                    ConsoleLog::Warning("Wait for C# script compilation to finish before entering Play Mode.");
-                    return;
-                }
-                m_UndoManager.ClearTransformHistory();
-                m_UndoManager.ClearSceneStructureHistory();
-                m_EditorScene = m_ActiveScene;
-                m_ActiveScene = CCEngine::Scene::Copy(m_EditorScene);
-                m_ActiveScene->OnRuntimeStart();
+            if (!m_ActiveScene)
+                return;
+
+            if (!IsInPlayMode())
+            {
+                EnterPlayMode();
+                return;
+            }
+
+            if (m_ActiveScene->GetState() == CCEngine::SceneState::Pause)
+            {
                 m_ActiveScene->SetSceneState(CCEngine::SceneState::Play);
-                for (UI::HierarchyPanel* hierarchy : m_HierarchyPanels)
-                {
-                    if (hierarchy)
-                    {
-                        hierarchy->SetContext(m_ActiveScene);
-                        hierarchy->Refresh();
-                    }
-                }
-                m_BtnPlay->SetActive(true);
-                m_BtnPause->SetActive(false);
+                UpdatePlayModeButtons();
+                return;
             }
-            else if (state == CCEngine::SceneState::Play) {
-                m_ActiveScene->OnRuntimeStop();
-                delete m_ActiveScene;
-                m_ActiveScene = m_EditorScene;
-                m_EditorScene = nullptr;
-                m_UndoManager.ClearTransformHistory();
-                m_UndoManager.ClearSceneStructureHistory();
-                m_ActiveScene->SetSceneState(CCEngine::SceneState::Edit);
-                for (UI::HierarchyPanel* hierarchy : m_HierarchyPanels)
-                {
-                    if (hierarchy)
-                    {
-                        hierarchy->SetContext(m_ActiveScene);
-                        hierarchy->Refresh();
-                    }
-                }
-                m_BtnPlay->SetActive(false);
-                m_BtnPause->SetActive(false);
-            }
-            else if (state == CCEngine::SceneState::Pause) {
-                m_ActiveScene->SetSceneState(CCEngine::SceneState::Play);
-                m_BtnPlay->SetActive(true);
-                m_BtnPause->SetActive(false);
-            }
+
+            ExitPlayMode();
             });
 
         m_BtnPause->SetOnClick([this]() {
-            CCEngine::SceneState state = m_ActiveScene->GetState();
-            if (state == CCEngine::SceneState::Play) {
-                m_ActiveScene->SetSceneState(CCEngine::SceneState::Pause);
-                m_BtnPause->SetActive(true);
-            }
-            else if (state == CCEngine::SceneState::Pause) {
-                m_ActiveScene->SetSceneState(CCEngine::SceneState::Play);
-                m_BtnPause->SetActive(false);
-            }
+            TogglePausePlayMode();
             });
 
         m_BtnStop->SetOnClick([this]() {
-            CCEngine::SceneState state = m_ActiveScene->GetState();
-            if (state != CCEngine::SceneState::Edit) {
-                m_ActiveScene->OnRuntimeStop();
-                delete m_ActiveScene;
-                m_ActiveScene = m_EditorScene;
-                m_EditorScene = nullptr;
-                m_UndoManager.ClearTransformHistory();
-                m_UndoManager.ClearSceneStructureHistory();
-                m_ActiveScene->SetSceneState(CCEngine::SceneState::Edit);
-                for (UI::HierarchyPanel* hierarchy : m_HierarchyPanels)
-                {
-                    if (hierarchy)
-                    {
-                        hierarchy->SetContext(m_ActiveScene);
-                        hierarchy->Refresh();
-                    }
-                }
-                m_BtnPlay->SetActive(false);
-                m_BtnPause->SetActive(false);
-            }
+            ExitPlayMode();
             });
+
+        UpdatePlayModeButtons();
+        UpdateSceneToolButtons();
 
         CCEngine::Application::Get()->GetWindow().SetRootUI(m_RootUI);
     }

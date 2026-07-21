@@ -7,6 +7,7 @@
 #include "Editor/AssetUndoManager.h"
 #include "Renderer/UIRenderer.h"
 #include "Renderer/Texture.h"
+#include "Scripting/ScriptCompiler.h"
 #include "Application.h"
 #include "Core/Window.h"
 #include "Events/ApplicationEvent.h"
@@ -34,6 +35,13 @@ namespace CCEngine
         {
             std::atomic<int> s_ActivePreviewLoads{ 0 };
             std::atomic<int> s_ActiveFbxMeshPreviewLoads{ 0 };
+            constexpr float kToolbarButtonHeight = 22.0f;
+            constexpr float kToolbarButtonGap = 8.0f;
+            constexpr float kTypeFilterButtonWidth = 126.0f;
+            constexpr float kSortButtonWidth = 102.0f;
+            constexpr float kDropdownItemHeight = 26.0f;
+            constexpr int kTypeFilterItemCount = 6;
+            constexpr int kSortItemCount = 3;
 
             bool TryAcquirePreviewSlot(std::atomic<int>& counter, int maxCount)
             {
@@ -1046,6 +1054,39 @@ namespace CCEngine
             }
         }
 
+        std::string AssetBrowserPanel::GetTypeFilterLabel(TypeFilter filter) const
+        {
+            switch (filter)
+            {
+                case TypeFilter::Texture: return "Texture";
+                case TypeFilter::Model: return "Model";
+                case TypeFilter::Prefab: return "Prefab";
+                case TypeFilter::Scene: return "Scene";
+                case TypeFilter::Script: return "Script";
+                default: return "All Types";
+            }
+        }
+
+        std::string AssetBrowserPanel::GetSortModeLabel(SortMode mode) const
+        {
+            switch (mode)
+            {
+                case SortMode::Type: return "Type";
+                case SortMode::ModifiedTime: return "Modified";
+                default: return "Name";
+            }
+        }
+
+        std::string AssetBrowserPanel::GetTypeFilterLabel() const
+        {
+            return GetTypeFilterLabel(m_TypeFilter);
+        }
+
+        std::string AssetBrowserPanel::GetSortModeLabel() const
+        {
+            return GetSortModeLabel(m_SortMode);
+        }
+
         void AssetBrowserPanel::ActivateEntry(const AssetEntry& entry)
         {
             std::string path = entry.Path.string();
@@ -1140,6 +1181,72 @@ namespace CCEngine
             Refresh(true);
             NotifyAssetDatabaseChanged();
             return true;
+        }
+
+        bool AssetBrowserPanel::ReimportSelectedAssets()
+        {
+            std::vector<AssetEntry> selected = GetSelectedEntries();
+            if (selected.empty())
+                return false;
+
+            bool reimportedAny = false;
+            bool requestedScriptCompile = false;
+            for (const AssetEntry& entry : selected)
+            {
+                if (entry.Type == AssetType::Folder || IsVirtualSubAsset(entry))
+                    continue;
+
+                AssetImportResult result = AssetDatabase::ReimportAsset(entry.Path, true);
+                if (!result.Success)
+                    continue;
+
+                reimportedAny = true;
+                if (result.Type == AssetKind::Script)
+                    requestedScriptCompile = true;
+            }
+
+            if (!reimportedAny)
+                return false;
+
+            if (requestedScriptCompile)
+            {
+                // 스크립트 reimport는 meta 갱신에서 끝나지 않는다.
+                // 실제 런타임에서 쓰는 assembly/manifest를 맞추기 위해 컴파일 큐까지 연결한다.
+                ScriptCompiler::RequestCompile();
+            }
+
+            m_TexturePreviewCache.clear();
+            m_TexturePreviewOrder.clear();
+            m_TreeChildCache.clear();
+            Refresh(true);
+            NotifyAssetDatabaseChanged();
+            return true;
+        }
+
+        bool AssetBrowserPanel::RefreshCurrentFolder(bool forceReimport)
+        {
+            std::filesystem::path refreshRoot = IsPathInsideRoot(m_CurrentDirectory, true) ? m_CurrentDirectory : m_RootDirectory;
+            AssetRefreshReport report = AssetDatabase::RefreshAssets(refreshRoot, forceReimport);
+
+            bool requestedScriptCompile = false;
+            for (const AssetImportResult& result : report.Results)
+            {
+                if (result.Success && result.Type == AssetKind::Script)
+                {
+                    requestedScriptCompile = true;
+                    break;
+                }
+            }
+
+            if (requestedScriptCompile)
+                ScriptCompiler::RequestCompile();
+
+            m_TexturePreviewCache.clear();
+            m_TexturePreviewOrder.clear();
+            m_TreeChildCache.clear();
+            Refresh(false);
+            NotifyAssetDatabaseChanged();
+            return report.Failed == 0;
         }
 
         bool AssetBrowserPanel::CreateFolderInCurrentDirectory()
@@ -1596,15 +1703,103 @@ namespace CCEngine
             return first.string() != "..";
         }
 
+        AssetBrowserPanel::ToolbarMetrics AssetBrowserPanel::GetToolbarMetrics() const
+        {
+            ToolbarMetrics metrics;
+            metrics.ButtonY = m_CalculatedPos.y + 36.0f;
+            metrics.PlusX = m_CalculatedPos.x + m_CalculatedSize.x - 46.0f;
+            metrics.MinusX = metrics.PlusX - 28.0f;
+            metrics.SortX = metrics.MinusX - kToolbarButtonGap - kSortButtonWidth;
+            metrics.TypeX = metrics.SortX - kToolbarButtonGap - kTypeFilterButtonWidth;
+            metrics.SearchX = m_CalculatedPos.x + (std::max)(150.0f, m_TreeWidth + 18.0f);
+            metrics.SearchW = (std::max)(0.0f, metrics.TypeX - metrics.SearchX - kToolbarButtonGap);
+            return metrics;
+        }
+
         bool AssetBrowserPanel::IsSearchBoxPoint(float mouseX, float mouseY) const
         {
-            float plusX = m_CalculatedPos.x + m_CalculatedSize.x - 46.0f;
-            float searchX = m_CalculatedPos.x + (std::max)(150.0f, m_TreeWidth + 18.0f);
-            float searchY = m_CalculatedPos.y + 36.0f;
-            float searchW = (std::max)(80.0f, plusX - searchX - 10.0f);
+            const ToolbarMetrics metrics = GetToolbarMetrics();
+            if (metrics.SearchW <= 8.0f)
+                return false;
 
-            return mouseX >= searchX && mouseX <= searchX + searchW &&
-                mouseY >= searchY && mouseY <= searchY + 22.0f;
+            return mouseX >= metrics.SearchX && mouseX <= metrics.SearchX + metrics.SearchW &&
+                mouseY >= metrics.ButtonY && mouseY <= metrics.ButtonY + kToolbarButtonHeight;
+        }
+
+        bool AssetBrowserPanel::IsTypeFilterButtonPoint(float mouseX, float mouseY) const
+        {
+            const ToolbarMetrics metrics = GetToolbarMetrics();
+            return mouseX >= metrics.TypeX && mouseX <= metrics.TypeX + kTypeFilterButtonWidth &&
+                mouseY >= metrics.ButtonY && mouseY <= metrics.ButtonY + kToolbarButtonHeight;
+        }
+
+        bool AssetBrowserPanel::IsSortButtonPoint(float mouseX, float mouseY) const
+        {
+            const ToolbarMetrics metrics = GetToolbarMetrics();
+            return mouseX >= metrics.SortX && mouseX <= metrics.SortX + kSortButtonWidth &&
+                mouseY >= metrics.ButtonY && mouseY <= metrics.ButtonY + kToolbarButtonHeight;
+        }
+
+        bool AssetBrowserPanel::IsTypeFilterDropdownPoint(float mouseX, float mouseY) const
+        {
+            const ToolbarMetrics metrics = GetToolbarMetrics();
+            float y = metrics.ButtonY + kToolbarButtonHeight + 2.0f;
+            return mouseX >= metrics.TypeX && mouseX <= metrics.TypeX + kTypeFilterButtonWidth &&
+                mouseY >= y && mouseY <= y + kDropdownItemHeight * (float)kTypeFilterItemCount;
+        }
+
+        bool AssetBrowserPanel::IsSortDropdownPoint(float mouseX, float mouseY) const
+        {
+            const ToolbarMetrics metrics = GetToolbarMetrics();
+            float y = metrics.ButtonY + kToolbarButtonHeight + 2.0f;
+            return mouseX >= metrics.SortX && mouseX <= metrics.SortX + kSortButtonWidth &&
+                mouseY >= y && mouseY <= y + kDropdownItemHeight * (float)kSortItemCount;
+        }
+
+        int AssetBrowserPanel::GetTypeFilterDropdownItemAt(float mouseX, float mouseY) const
+        {
+            if (!IsTypeFilterDropdownPoint(mouseX, mouseY))
+                return -1;
+
+            const ToolbarMetrics metrics = GetToolbarMetrics();
+            float y = metrics.ButtonY + kToolbarButtonHeight + 2.0f;
+            int index = (int)((mouseY - y) / kDropdownItemHeight);
+            return index >= 0 && index < kTypeFilterItemCount ? index : -1;
+        }
+
+        int AssetBrowserPanel::GetSortDropdownItemAt(float mouseX, float mouseY) const
+        {
+            if (!IsSortDropdownPoint(mouseX, mouseY))
+                return -1;
+
+            const ToolbarMetrics metrics = GetToolbarMetrics();
+            float y = metrics.ButtonY + kToolbarButtonHeight + 2.0f;
+            int index = (int)((mouseY - y) / kDropdownItemHeight);
+            return index >= 0 && index < kSortItemCount ? index : -1;
+        }
+
+        void AssetBrowserPanel::SetTypeFilter(TypeFilter filter)
+        {
+            if (m_TypeFilter == filter)
+                return;
+
+            m_TypeFilter = filter;
+            ApplyFilter();
+            ClearSelection();
+            m_HoveredIndex = -1;
+            m_ScrollState.ScrollY = 0.0f;
+        }
+
+        void AssetBrowserPanel::SetSortMode(SortMode mode)
+        {
+            if (m_SortMode == mode)
+                return;
+
+            m_SortMode = mode;
+            ApplyFilter();
+            ClearSelection();
+            m_HoveredIndex = -1;
+            m_ScrollState.ScrollY = 0.0f;
         }
 
         void AssetBrowserPanel::SetSearchQuery(const std::string& query)
@@ -1625,13 +1820,52 @@ namespace CCEngine
             m_ViewEntries.clear();
 
             std::string query = ToLowerText(TrimText(m_SearchQuery));
-            if (query.empty())
+            std::string extensionFilter;
+            TypeFilter queryTypeFilter = TypeFilter::All;
+
+            std::stringstream queryStream(query);
+            std::string textQuery;
+            std::string token;
+            while (queryStream >> token)
+            {
+                if (token.rfind("ext:", 0) == 0)
+                {
+                    extensionFilter = token.substr(4);
+                    if (!extensionFilter.empty() && extensionFilter[0] != '.')
+                        extensionFilter = "." + extensionFilter;
+                    continue;
+                }
+
+                if (token.rfind("type:", 0) == 0)
+                {
+                    std::string typeText = token.substr(5);
+                    if (typeText == "texture" || typeText == "tex")
+                        queryTypeFilter = TypeFilter::Texture;
+                    else if (typeText == "model" || typeText == "fbx" || typeText == "mesh")
+                        queryTypeFilter = TypeFilter::Model;
+                    else if (typeText == "prefab" || typeText == "pfb")
+                        queryTypeFilter = TypeFilter::Prefab;
+                    else if (typeText == "scene" || typeText == "scn")
+                        queryTypeFilter = TypeFilter::Scene;
+                    else if (typeText == "script" || typeText == "cs")
+                        queryTypeFilter = TypeFilter::Script;
+                    continue;
+                }
+
+                if (!textQuery.empty())
+                    textQuery += " ";
+                textQuery += token;
+            }
+            query = textQuery;
+
+            if (query.empty() && extensionFilter.empty() && m_TypeFilter == TypeFilter::All && queryTypeFilter == TypeFilter::All)
             {
                 for (const AssetEntry& entry : m_Entries)
                 {
                     m_ViewEntries.push_back(entry);
                     AppendFbxSubAssetEntries(entry, query);
                 }
+                SortViewEntries();
                 return;
             }
 
@@ -1645,14 +1879,8 @@ namespace CCEngine
                     continue;
                 }
 
-                std::string name = ToLowerText(entry.DisplayName);
-                std::string extension = ToLowerText(entry.Path.extension().string());
-                std::string type = ToLowerText(GetTypeLabel(entry.Type));
-
                 bool matchesEntry =
-                    name.find(query) != std::string::npos ||
-                    extension.find(query) != std::string::npos ||
-                    type.find(query) != std::string::npos;
+                    EntryMatchesAdvancedFilter(entry, query, extensionFilter, queryTypeFilter);
 
                 if (matchesEntry)
                 {
@@ -1661,6 +1889,224 @@ namespace CCEngine
 
                 AppendFbxSubAssetEntries(entry, query);
             }
+
+            SortViewEntries();
+        }
+
+        bool AssetBrowserPanel::EntryMatchesAdvancedFilter(const AssetEntry& entry, const std::string& textQuery, const std::string& extensionFilter, TypeFilter queryTypeFilter) const
+        {
+            auto typeMatches = [&](TypeFilter filter)
+                {
+                    if (filter == TypeFilter::All)
+                        return true;
+
+                    switch (filter)
+                    {
+                        case TypeFilter::Texture: return entry.Type == AssetType::Texture;
+                        case TypeFilter::Model: return entry.Type == AssetType::Model || entry.Type == AssetType::FbxMesh;
+                        case TypeFilter::Prefab: return entry.Type == AssetType::Prefab;
+                        case TypeFilter::Scene: return entry.Type == AssetType::Scene;
+                        case TypeFilter::Script: return entry.Type == AssetType::Script;
+                        default: return true;
+                    }
+                };
+
+            if (!typeMatches(m_TypeFilter) || !typeMatches(queryTypeFilter))
+                return false;
+
+            std::string extension = ToLowerText(entry.Path.extension().string());
+            if (!extensionFilter.empty() && extension != extensionFilter)
+                return false;
+
+            if (textQuery.empty())
+                return true;
+
+            std::string name = ToLowerText(entry.DisplayName);
+            std::string type = ToLowerText(GetTypeLabel(entry.Type));
+            std::string path = ToLowerText(entry.Path.generic_string());
+            return name.find(textQuery) != std::string::npos ||
+                extension.find(textQuery) != std::string::npos ||
+                type.find(textQuery) != std::string::npos ||
+                path.find(textQuery) != std::string::npos;
+        }
+
+        void AssetBrowserPanel::SortViewEntries()
+        {
+            if (m_ViewEntries.size() <= 1)
+                return;
+
+            // 부모 폴더 이동 항목은 항상 맨 위에 고정한다.
+            // 검색/정렬 결과에서도 사용자가 현재 위치를 잃지 않게 하기 위한 기본 규칙이다.
+            std::stable_sort(m_ViewEntries.begin(), m_ViewEntries.end(),
+                [this](const AssetEntry& a, const AssetEntry& b)
+                {
+                    if (a.DisplayName == "..")
+                        return true;
+                    if (b.DisplayName == "..")
+                        return false;
+
+                    std::string groupA = a.IsSubAsset ? a.SubAssetParentKey : GetTreeKey(a.Path);
+                    std::string groupB = b.IsSubAsset ? b.SubAssetParentKey : GetTreeKey(b.Path);
+                    if (groupA == groupB)
+                    {
+                        // FBX 하위 메시 정렬은 부모 파일을 먼저 두고 내부 순서를 유지한다.
+                        // 검색이나 타입 정렬을 해도 FBX 묶음이 흩어지면 별도 에셋처럼 보여서 구조를 읽기 어렵다.
+                        if (a.IsSubAsset != b.IsSubAsset)
+                            return !a.IsSubAsset;
+
+                        if (a.IsSubAsset && b.IsSubAsset)
+                            return a.SubAssetOrder < b.SubAssetOrder;
+                    }
+                    else if (a.IsSubAsset || b.IsSubAsset)
+                    {
+                        return groupA < groupB;
+                    }
+
+                    if (m_SortMode == SortMode::Type && a.Type != b.Type)
+                        return (int)a.Type < (int)b.Type;
+
+                    if (m_SortMode == SortMode::ModifiedTime)
+                    {
+                        std::error_code ecA;
+                        std::error_code ecB;
+                        auto timeA = std::filesystem::last_write_time(a.Path, ecA);
+                        auto timeB = std::filesystem::last_write_time(b.Path, ecB);
+                        if (!ecA && !ecB && timeA != timeB)
+                            return timeA > timeB;
+                    }
+
+                    if (a.Type == AssetType::Folder && b.Type != AssetType::Folder)
+                        return true;
+                    if (a.Type != AssetType::Folder && b.Type == AssetType::Folder)
+                        return false;
+
+                    return ToLowerText(a.DisplayName) < ToLowerText(b.DisplayName);
+                });
+        }
+
+        bool AssetBrowserPanel::RunQualityRegressionChecks()
+        {
+            std::vector<std::string> failures;
+            auto fail = [&failures](const std::string& message)
+                {
+                    failures.push_back(message);
+                };
+
+            auto rangesOverlap = [](float a0, float a1, float b0, float b1)
+                {
+                    return a0 < b1 && b0 < a1;
+                };
+
+            const ToolbarMetrics toolbar = GetToolbarMetrics();
+            const float buttonRight = toolbar.PlusX + kToolbarButtonHeight;
+
+            // 회귀 검사는 실제 마우스 입력을 보내지 않고, 입력 판정에 쓰는 좌표 규칙을 직접 확인한다.
+            // 렌더 위치와 클릭 위치가 따로 계산되면 검색창, 필터, 크기 버튼이 서로 침범하는 문제가 다시 생긴다.
+            if (toolbar.SearchW <= 8.0f)
+                fail("Toolbar search box width is too small.");
+            if (rangesOverlap(toolbar.SearchX, toolbar.SearchX + toolbar.SearchW, toolbar.TypeX, toolbar.TypeX + kTypeFilterButtonWidth))
+                fail("Search box overlaps type filter.");
+            if (rangesOverlap(toolbar.TypeX, toolbar.TypeX + kTypeFilterButtonWidth, toolbar.SortX, toolbar.SortX + kSortButtonWidth))
+                fail("Type filter overlaps sort dropdown.");
+            if (rangesOverlap(toolbar.SortX, toolbar.SortX + kSortButtonWidth, toolbar.MinusX, toolbar.MinusX + kToolbarButtonHeight))
+                fail("Sort dropdown overlaps icon size buttons.");
+            if (rangesOverlap(toolbar.MinusX, toolbar.MinusX + kToolbarButtonHeight, toolbar.PlusX, buttonRight))
+                fail("Icon size buttons overlap.");
+
+            for (int i = 0; i < kTypeFilterItemCount; ++i)
+            {
+                float x = toolbar.TypeX + 4.0f;
+                float y = toolbar.ButtonY + kToolbarButtonHeight + 2.0f + (float)i * kDropdownItemHeight + kDropdownItemHeight * 0.5f;
+                if (GetTypeFilterDropdownItemAt(x, y) != i)
+                    fail("Type filter dropdown item hit-test failed.");
+            }
+
+            for (int i = 0; i < kSortItemCount; ++i)
+            {
+                float x = toolbar.SortX + 4.0f;
+                float y = toolbar.ButtonY + kToolbarButtonHeight + 2.0f + (float)i * kDropdownItemHeight + kDropdownItemHeight * 0.5f;
+                if (GetSortDropdownItemAt(x, y) != i)
+                    fail("Sort dropdown item hit-test failed.");
+            }
+
+            AssetEntry textureEntry;
+            textureEntry.Path = m_RootDirectory / "textures" / "Hero_Diffuse.png";
+            textureEntry.DisplayName = "Hero_Diffuse.png";
+            textureEntry.Type = AssetType::Texture;
+
+            const TypeFilter savedTypeFilter = m_TypeFilter;
+            m_TypeFilter = TypeFilter::All;
+            if (!EntryMatchesAdvancedFilter(textureEntry, "hero", ".png", TypeFilter::All))
+                fail("Text and extension filter should match a texture entry.");
+            if (EntryMatchesAdvancedFilter(textureEntry, "hero", ".fbx", TypeFilter::All))
+                fail("Extension filter accepted a different extension.");
+            if (EntryMatchesAdvancedFilter(textureEntry, "hero", ".png", TypeFilter::Model))
+                fail("Type filter accepted the wrong asset type.");
+            m_TypeFilter = TypeFilter::Script;
+            if (EntryMatchesAdvancedFilter(textureEntry, "hero", ".png", TypeFilter::All))
+                fail("Panel type filter was ignored.");
+            m_TypeFilter = savedTypeFilter;
+
+            const std::vector<AssetEntry> savedViewEntries = m_ViewEntries;
+            const SortMode savedSortMode = m_SortMode;
+            m_SortMode = SortMode::Name;
+
+            AssetEntry fbxParent;
+            fbxParent.Path = m_RootDirectory / "models" / "Character.fbx";
+            fbxParent.DisplayName = "Character.fbx";
+            fbxParent.Type = AssetType::Model;
+
+            AssetEntry fbxChildA;
+            fbxChildA.Path = fbxParent.Path;
+            fbxChildA.DisplayName = "Body";
+            fbxChildA.Type = AssetType::FbxMesh;
+            fbxChildA.IsSubAsset = true;
+            fbxChildA.SubAssetParentKey = GetTreeKey(fbxParent.Path);
+            fbxChildA.SubAssetOrder = 0;
+
+            AssetEntry fbxChildB = fbxChildA;
+            fbxChildB.DisplayName = "Hair";
+            fbxChildB.SubAssetOrder = 1;
+
+            AssetEntry normalEntry;
+            normalEntry.Path = m_RootDirectory / "textures" / "A_Texture.png";
+            normalEntry.DisplayName = "A_Texture.png";
+            normalEntry.Type = AssetType::Texture;
+
+            m_ViewEntries = { fbxChildB, normalEntry, fbxChildA, fbxParent };
+            SortViewEntries();
+
+            int parentIndex = -1;
+            int childAIndex = -1;
+            int childBIndex = -1;
+            for (int i = 0; i < (int)m_ViewEntries.size(); ++i)
+            {
+                if (m_ViewEntries[i].DisplayName == "Character.fbx")
+                    parentIndex = i;
+                else if (m_ViewEntries[i].DisplayName == "Body")
+                    childAIndex = i;
+                else if (m_ViewEntries[i].DisplayName == "Hair")
+                    childBIndex = i;
+            }
+
+            if (parentIndex < 0 || childAIndex < 0 || childBIndex < 0)
+                fail("FBX grouping test entries were lost.");
+            else if (!(parentIndex < childAIndex && childAIndex < childBIndex))
+                fail("FBX sub-assets are not kept after their parent in import order.");
+
+            m_ViewEntries = savedViewEntries;
+            m_SortMode = savedSortMode;
+
+            if (failures.empty())
+            {
+                ConsoleLog::Info("Asset Browser QA passed.");
+                return true;
+            }
+
+            ConsoleLog::Error("Asset Browser QA failed: " + std::to_string(failures.size()) + " issue(s).");
+            for (const std::string& failure : failures)
+                ConsoleLog::Error(" - " + failure);
+            return false;
         }
 
         void AssetBrowserPanel::AppendFbxSubAssetEntries(const AssetEntry& fbxEntry, const std::string& query)
@@ -1673,6 +2119,8 @@ namespace CCEngine
                 return;
 
             const auto& meshes = GetFbxMeshInfos(fbxEntry.Path);
+            std::vector<const FbxMeshInfo*> visibleMeshes;
+            visibleMeshes.reserve(meshes.size());
             for (const FbxMeshInfo& meshInfo : meshes)
             {
                 if (meshInfo.MeshIndex < 0)
@@ -1685,13 +2133,25 @@ namespace CCEngine
                         continue;
                 }
 
+                visibleMeshes.push_back(&meshInfo);
+            }
+
+            int visibleSubAssetOrder = 0;
+            for (const FbxMeshInfo* meshInfo : visibleMeshes)
+            {
+                if (!meshInfo)
+                    continue;
+
                 AssetEntry meshEntry;
                 meshEntry.Path = fbxEntry.Path;
                 meshEntry.SourceAssetPath = fbxEntry.Path;
-                meshEntry.DisplayName = meshInfo.Name;
+                meshEntry.DisplayName = meshInfo->Name;
                 meshEntry.Type = AssetType::FbxMesh;
-                meshEntry.SubAssetIndex = meshInfo.MeshIndex;
+                meshEntry.SubAssetIndex = meshInfo->MeshIndex;
                 meshEntry.IsSubAsset = true;
+                meshEntry.SubAssetParentKey = key;
+                meshEntry.SubAssetOrder = visibleSubAssetOrder++;
+                meshEntry.SubAssetCount = (int)visibleMeshes.size();
                 m_ViewEntries.push_back(meshEntry);
             }
         }
@@ -1885,6 +2345,87 @@ namespace CCEngine
             }
 
             return entries;
+        }
+
+        bool AssetBrowserPanel::ShowSelectedEntryInFolder()
+        {
+            std::vector<AssetEntry> entries = GetSelectedEntries();
+            if (entries.empty())
+                return false;
+
+            const AssetEntry& selected = entries.front();
+            std::filesystem::path targetPath = selected.Path;
+            std::filesystem::path parentPath = targetPath.parent_path();
+            if (parentPath.empty())
+                return false;
+
+            // 검색 결과에서 위치를 열 때는 먼저 실제 폴더로 이동한 뒤 같은 파일을 다시 선택한다.
+            // 이렇게 하면 이름, 타입, 정렬 필터를 바꾼 상태에서도 사용자가 에셋의 원래 위치를 잃지 않는다.
+            NavigateTo(parentPath);
+
+            std::error_code ec;
+            auto targetCanonical = std::filesystem::weakly_canonical(targetPath, ec);
+            if (ec)
+                targetCanonical = std::filesystem::absolute(targetPath, ec);
+
+            for (int i = 0; i < (int)m_ViewEntries.size(); ++i)
+            {
+                std::error_code entryEc;
+                auto entryCanonical = std::filesystem::weakly_canonical(m_ViewEntries[i].Path, entryEc);
+                if (entryEc)
+                    entryCanonical = std::filesystem::absolute(m_ViewEntries[i].Path, entryEc);
+
+                if (!entryEc && !ec && entryCanonical == targetCanonical)
+                {
+                    SelectSingle(i);
+                    if (m_IconSizeStep == 0)
+                    {
+                        m_ScrollState.ScrollY = (std::max)(0.0f, (float)i * (m_RowHeight + m_RowGap) - 20.0f);
+                    }
+                    else
+                    {
+                        const float iconSizes[5] = { 18.0f, 32.0f, 48.0f, 72.0f, 96.0f };
+                        float iconSize = iconSizes[(std::clamp)(m_IconSizeStep, 0, 4)];
+                        float cellW = iconSize + 58.0f;
+                        float cellH = iconSize + 42.0f;
+                        float viewW = (std::max)(1.0f, m_CalculatedSize.x - m_TreeWidth - 34.0f);
+                        int columns = (std::max)(1, (int)(viewW / cellW));
+                        int row = i / columns;
+                        m_ScrollState.ScrollY = (std::max)(0.0f, (float)row * cellH - 20.0f);
+                    }
+                    return true;
+                }
+            }
+
+            return true;
+        }
+
+        bool AssetBrowserPanel::RevealSelectedEntryInExplorer()
+        {
+            std::vector<AssetEntry> entries = GetSelectedEntries();
+            if (entries.empty())
+                return false;
+
+            const AssetEntry& selected = entries.front();
+            std::filesystem::path targetPath = selected.Path;
+
+            std::error_code ec;
+            if (!std::filesystem::exists(targetPath, ec))
+                return false;
+
+            if (std::filesystem::is_directory(targetPath, ec))
+            {
+                // 폴더는 파일 선택 인자가 아니라 폴더 열기로 처리한다.
+                // 탐색기에서 바로 해당 폴더 내용을 보는 쪽이 에셋 브라우저의 폴더 동작과 맞다.
+                auto result = reinterpret_cast<intptr_t>(
+                    ShellExecuteW(nullptr, L"open", targetPath.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+                return result > 32;
+            }
+
+            std::wstring explorerArgs = L"/select,\"" + targetPath.wstring() + L"\"";
+            auto result = reinterpret_cast<intptr_t>(
+                ShellExecuteW(nullptr, L"open", L"explorer.exe", explorerArgs.c_str(), nullptr, SW_SHOWNORMAL));
+            return result > 32;
         }
 
         std::filesystem::path AssetBrowserPanel::MakeUniquePath(const std::filesystem::path& directory, const std::string& baseName, const std::string& extension) const
@@ -2512,23 +3053,51 @@ namespace CCEngine
             UIRenderer::DrawString(pathLabel, m_CalculatedPos.x + 10.0f, toolbarY + 18.0f, { 0.62f, 0.62f, 0.62f, 1.0f });
 
             float btnSize = 22.0f;
-            float btnY = m_CalculatedPos.y + 36.0f;
-            float plusX = m_CalculatedPos.x + m_CalculatedSize.x - 46.0f;
-            float minusX = plusX - 28.0f;
-            float searchX = m_CalculatedPos.x + (std::max)(150.0f, m_TreeWidth + 18.0f);
-            float searchW = (std::max)(80.0f, minusX - searchX - 10.0f);
+            const ToolbarMetrics toolbar = GetToolbarMetrics();
+            float btnY = toolbar.ButtonY;
+            float plusX = toolbar.PlusX;
+            float minusX = toolbar.MinusX;
+            float sortX = toolbar.SortX;
+            float typeX = toolbar.TypeX;
+            float searchX = toolbar.SearchX;
+            float searchW = toolbar.SearchW;
             DirectX::XMFLOAT4 searchBg = m_SearchFocused
                 ? DirectX::XMFLOAT4{ 0.13f, 0.16f, 0.19f, 1.0f }
                 : DirectX::XMFLOAT4{ 0.08f, 0.08f, 0.09f, 1.0f };
-            UIRenderer::DrawRectFilled(searchX, btnY, searchW, btnSize, searchBg);
-            UIRenderer::DrawRect({ searchX, btnY }, { searchW, btnSize }, m_SearchFocused
-                ? DirectX::XMFLOAT4{ 0.30f, 0.42f, 0.54f, 1.0f }
-                : DirectX::XMFLOAT4{ 0.20f, 0.20f, 0.21f, 1.0f });
-            std::string searchText = m_SearchQuery.empty() ? "Search..." : m_SearchQuery;
-            if (searchText.size() > (size_t)(searchW / 7.0f))
-                searchText = searchText.substr(0, (size_t)(searchW / 7.0f));
-            UIRenderer::DrawString(searchText, searchX + 8.0f, btnY + 17.0f,
-                m_SearchQuery.empty() ? DirectX::XMFLOAT4{ 0.48f, 0.48f, 0.50f, 1.0f } : DirectX::XMFLOAT4{ 0.86f, 0.86f, 0.86f, 1.0f });
+            if (searchW > 8.0f)
+            {
+                UIRenderer::DrawRectFilled(searchX, btnY, searchW, btnSize, searchBg);
+                UIRenderer::DrawRect({ searchX, btnY }, { searchW, btnSize }, m_SearchFocused
+                    ? DirectX::XMFLOAT4{ 0.30f, 0.42f, 0.54f, 1.0f }
+                    : DirectX::XMFLOAT4{ 0.20f, 0.20f, 0.21f, 1.0f });
+                std::string searchText = m_SearchQuery.empty() ? "Search..." : m_SearchQuery;
+                if (searchText.size() > (size_t)(searchW / 7.0f))
+                    searchText = searchText.substr(0, (size_t)(searchW / 7.0f));
+                UIRenderer::DrawString(searchText, searchX + 8.0f, btnY + 17.0f,
+                    m_SearchQuery.empty() ? DirectX::XMFLOAT4{ 0.48f, 0.48f, 0.50f, 1.0f } : DirectX::XMFLOAT4{ 0.86f, 0.86f, 0.86f, 1.0f });
+            }
+            DirectX::XMFLOAT4 typeBg = m_TypeFilter == TypeFilter::All
+                ? DirectX::XMFLOAT4{ 0.18f, 0.18f, 0.19f, 1.0f }
+                : DirectX::XMFLOAT4{ 0.18f, 0.30f, 0.42f, 1.0f };
+            if (m_TypeFilterDropdownVisible)
+                typeBg = { 0.22f, 0.34f, 0.46f, 1.0f };
+            UIRenderer::DrawRectFilled(typeX, btnY, kTypeFilterButtonWidth, btnSize, typeBg);
+            UIRenderer::DrawRect({ typeX, btnY }, { kTypeFilterButtonWidth, btnSize }, m_TypeFilterDropdownVisible
+                ? DirectX::XMFLOAT4{ 0.42f, 0.56f, 0.68f, 1.0f }
+                : DirectX::XMFLOAT4{ 0.24f, 0.24f, 0.25f, 1.0f });
+            UIRenderer::DrawRectFilled(typeX + kTypeFilterButtonWidth - 24.0f, btnY, 24.0f, btnSize, { 0.13f, 0.13f, 0.14f, 1.0f });
+            UIRenderer::DrawString(GetTypeFilterLabel(), typeX + 6.0f, btnY + 17.0f, { 0.88f, 0.88f, 0.90f, 1.0f });
+            UIRenderer::DrawString(m_TypeFilterDropdownVisible ? "^" : "v", typeX + kTypeFilterButtonWidth - 17.0f, btnY + 17.0f, { 0.78f, 0.78f, 0.80f, 1.0f });
+            DirectX::XMFLOAT4 sortBg = m_SortDropdownVisible
+                ? DirectX::XMFLOAT4{ 0.22f, 0.34f, 0.46f, 1.0f }
+                : DirectX::XMFLOAT4{ 0.18f, 0.18f, 0.19f, 1.0f };
+            UIRenderer::DrawRectFilled(sortX, btnY, kSortButtonWidth, btnSize, sortBg);
+            UIRenderer::DrawRect({ sortX, btnY }, { kSortButtonWidth, btnSize }, m_SortDropdownVisible
+                ? DirectX::XMFLOAT4{ 0.42f, 0.56f, 0.68f, 1.0f }
+                : DirectX::XMFLOAT4{ 0.24f, 0.24f, 0.25f, 1.0f });
+            UIRenderer::DrawRectFilled(sortX + kSortButtonWidth - 24.0f, btnY, 24.0f, btnSize, { 0.13f, 0.13f, 0.14f, 1.0f });
+            UIRenderer::DrawString(GetSortModeLabel(), sortX + 6.0f, btnY + 17.0f, { 0.88f, 0.88f, 0.90f, 1.0f });
+            UIRenderer::DrawString(m_SortDropdownVisible ? "^" : "v", sortX + kSortButtonWidth - 17.0f, btnY + 17.0f, { 0.78f, 0.78f, 0.80f, 1.0f });
             UIRenderer::DrawRectFilled(minusX, btnY, btnSize, btnSize, { 0.18f, 0.18f, 0.19f, 1.0f });
             UIRenderer::DrawRectFilled(plusX, btnY, btnSize, btnSize, { 0.18f, 0.18f, 0.19f, 1.0f });
             UIRenderer::DrawString("-", minusX + 8.0f, btnY + 17.0f, { 0.9f, 0.9f, 0.9f, 1.0f });
@@ -2626,21 +3195,34 @@ namespace CCEngine
                     if (hovered)
                         m_HoveredIndex = (int)i;
 
-                    DirectX::XMFLOAT4 rowColor = { 0.13f, 0.13f, 0.14f, 1.0f };
+                    const AssetEntry& viewEntry = m_ViewEntries[i];
+                    bool subAsset = IsVirtualSubAsset(viewEntry);
+                    DirectX::XMFLOAT4 rowColor = subAsset
+                        ? DirectX::XMFLOAT4{ 0.16f, 0.16f, 0.17f, 1.0f }
+                        : DirectX::XMFLOAT4{ 0.13f, 0.13f, 0.14f, 1.0f };
                     if (IsEntrySelected((int)i)) rowColor = { 0.18f, 0.30f, 0.42f, 1.0f };
                     else if (hovered) rowColor = { 0.20f, 0.20f, 0.21f, 1.0f };
 
                     UIRenderer::DrawRectFilled(startX, currentY, rowWidth, m_RowHeight, rowColor);
-                    DrawAssetPreview(m_ViewEntries[i], startX + 7.0f, currentY + 4.0f, 18.0f);
-                    if (IsFbxContainer(m_ViewEntries[i]))
+                    if (subAsset)
                     {
-                        bool expanded = m_ExpandedFbxAssets.find(GetTreeKey(m_ViewEntries[i].Path)) != m_ExpandedFbxAssets.end();
+                        // FBX 내부 항목은 독립 파일이 아니라 부모 FBX 안의 sub-asset이다.
+                        // 리스트 모드에서는 들여쓰기와 연결선으로 부모 아래에 속한 항목임을 보여준다.
+                        UIRenderer::DrawRectFilled(startX + 20.0f, currentY, 2.0f, m_RowHeight + m_RowGap, { 0.34f, 0.34f, 0.36f, 1.0f });
+                        UIRenderer::DrawRectFilled(startX + 20.0f, currentY + m_RowHeight * 0.5f, 18.0f, 2.0f, { 0.34f, 0.34f, 0.36f, 1.0f });
+                    }
+
+                    float iconOffset = subAsset ? 32.0f : 0.0f;
+                    DrawAssetPreview(viewEntry, startX + 7.0f + iconOffset, currentY + 4.0f, 18.0f);
+                    if (IsFbxContainer(viewEntry))
+                    {
+                        bool expanded = m_ExpandedFbxAssets.find(GetTreeKey(viewEntry.Path)) != m_ExpandedFbxAssets.end();
                         UIRenderer::DrawRectFilled(startX + 8.0f, currentY + 6.0f, 14.0f, 14.0f, { 0.23f, 0.24f, 0.26f, 1.0f });
                         UIRenderer::DrawRect({ startX + 8.0f, currentY + 6.0f }, { 14.0f, 14.0f }, { 0.48f, 0.50f, 0.54f, 1.0f });
                         UIRenderer::DrawString(expanded ? "v" : ">", startX + 11.0f, currentY + 18.0f, { 0.88f, 0.88f, 0.90f, 1.0f });
                     }
-                    UIRenderer::DrawString(GetTypeLabel(m_ViewEntries[i].Type), startX + 34.0f, currentY + 18.0f, { 0.82f, 0.78f, 0.58f, 1.0f });
-                    UIRenderer::DrawString(m_ViewEntries[i].DisplayName, startX + 76.0f, currentY + 18.0f, { 0.86f, 0.86f, 0.86f, 1.0f });
+                    UIRenderer::DrawString(GetTypeLabel(viewEntry.Type), startX + 34.0f + iconOffset, currentY + 18.0f, { 0.82f, 0.78f, 0.58f, 1.0f });
+                    UIRenderer::DrawString(viewEntry.DisplayName, startX + 76.0f + iconOffset, currentY + 18.0f, { 0.86f, 0.86f, 0.86f, 1.0f });
                 }
             }
             else
@@ -2651,6 +3233,83 @@ namespace CCEngine
                 float cellW = iconSize + 58.0f;
                 float cellH = iconSize + 42.0f;
                 int columns = (std::max)(1, (int)((contentW - 16.0f) / cellW));
+                int totalRows = (int)std::ceil((float)m_ViewEntries.size() / (float)columns);
+
+                for (int row = 0; row < totalRows; ++row)
+                {
+                    int rowStart = row * columns;
+                    int rowEnd = (std::min)((int)m_ViewEntries.size(), rowStart + columns);
+                    float rowY = startY + (float)row * cellH;
+                    if (rowY + cellH < treeY || rowY > treeY + treeH)
+                        continue;
+
+                    int cursor = rowStart;
+                    while (cursor < rowEnd)
+                    {
+                        if (!IsVirtualSubAsset(m_ViewEntries[cursor]))
+                        {
+                            ++cursor;
+                            continue;
+                        }
+
+                        std::string parentKey = m_ViewEntries[cursor].SubAssetParentKey;
+                        int groupStart = cursor;
+                        while (cursor < rowEnd &&
+                            IsVirtualSubAsset(m_ViewEntries[cursor]) &&
+                            m_ViewEntries[cursor].SubAssetParentKey == parentKey)
+                        {
+                            ++cursor;
+                        }
+
+                        int groupEnd = cursor - 1;
+                        int startCol = groupStart - rowStart;
+                        int endCol = groupEnd - rowStart;
+                        float bandX = startX + (float)startCol * cellW + 2.0f;
+                        float bandY = rowY + 2.0f;
+                        float bandW = (float)(endCol - startCol + 1) * cellW - 10.0f;
+                        float bandH = cellH - 10.0f;
+
+                        DirectX::XMFLOAT4 bandColor = { 0.31f, 0.31f, 0.31f, 1.0f };
+                        DirectX::XMFLOAT4 bandEdgeColor = { 0.36f, 0.36f, 0.36f, 1.0f };
+                        DirectX::XMFLOAT4 contentBgColor = { 0.095f, 0.095f, 0.10f, 1.0f };
+
+                        // Unity처럼 FBX 내부 항목은 한 줄 단위의 회색 컨테이너 안에 묶어 보여준다.
+                        // 같은 FBX가 다음 줄로 이어질 때는 오른쪽 끝을 파고, 다음 줄 왼쪽에 연결 모양을 붙인다.
+                        UIRenderer::DrawRectFilled(bandX, bandY + 3.0f, bandW, bandH - 6.0f, bandColor);
+                        UIRenderer::DrawRectFilled(bandX + 4.0f, bandY, bandW - 8.0f, bandH, bandColor);
+                        UIRenderer::DrawRectFilled(bandX + 2.0f, bandY + 1.0f, bandW - 4.0f, 1.0f, bandEdgeColor);
+                        UIRenderer::DrawRectFilled(bandX + 2.0f, bandY + bandH - 2.0f, bandW - 4.0f, 1.0f, { 0.20f, 0.20f, 0.20f, 1.0f });
+
+                        bool continuesFromPreviousRow = groupStart == rowStart &&
+                            groupStart > 0 &&
+                            IsVirtualSubAsset(m_ViewEntries[groupStart - 1]) &&
+                            m_ViewEntries[groupStart - 1].SubAssetParentKey == parentKey;
+                        bool continuesToNextRow = groupEnd == rowEnd - 1 &&
+                            groupEnd + 1 < (int)m_ViewEntries.size() &&
+                            IsVirtualSubAsset(m_ViewEntries[groupEnd + 1]) &&
+                            m_ViewEntries[groupEnd + 1].SubAssetParentKey == parentKey;
+
+                        if (continuesFromPreviousRow)
+                        {
+                            float cy = bandY + bandH * 0.5f;
+                            UIRenderer::DrawRectFilled(bandX - 10.0f, cy - 4.0f, 10.0f, 8.0f, bandColor);
+                            UIRenderer::DrawRectFilled(bandX - 7.0f, cy - 10.0f, 7.0f, 6.0f, bandColor);
+                            UIRenderer::DrawRectFilled(bandX - 7.0f, cy + 4.0f, 7.0f, 6.0f, bandColor);
+                            UIRenderer::DrawRectFilled(bandX - 3.0f, cy - 15.0f, 3.0f, 5.0f, bandColor);
+                            UIRenderer::DrawRectFilled(bandX - 3.0f, cy + 10.0f, 3.0f, 5.0f, bandColor);
+                        }
+                        if (continuesToNextRow)
+                        {
+                            float cy = bandY + bandH * 0.5f;
+                            float rx = bandX + bandW;
+                            UIRenderer::DrawRectFilled(rx - 10.0f, cy - 4.0f, 10.0f, 8.0f, contentBgColor);
+                            UIRenderer::DrawRectFilled(rx - 7.0f, cy - 10.0f, 7.0f, 6.0f, contentBgColor);
+                            UIRenderer::DrawRectFilled(rx - 7.0f, cy + 4.0f, 7.0f, 6.0f, contentBgColor);
+                            UIRenderer::DrawRectFilled(rx - 3.0f, cy - 15.0f, 3.0f, 5.0f, contentBgColor);
+                            UIRenderer::DrawRectFilled(rx - 3.0f, cy + 10.0f, 3.0f, 5.0f, contentBgColor);
+                        }
+                    }
+                }
 
                 for (size_t i = 0; i < m_ViewEntries.size(); ++i)
                 {
@@ -2731,6 +3390,62 @@ namespace CCEngine
 
                 UIRenderer::DrawRect({ thumbX, m_CalculatedPos.y + m_ContentTop }, { 8.0f, m_ScrollState.ViewportHeight }, { 0.08f, 0.08f, 0.08f, 0.5f });
                 UIRenderer::DrawRect({ thumbX, thumbY }, { 8.0f, thumbH }, { 0.42f, 0.42f, 0.42f, 1.0f });
+            }
+
+            if (m_TypeFilterDropdownVisible)
+            {
+                const ToolbarMetrics dropdownToolbar = GetToolbarMetrics();
+                float x = dropdownToolbar.TypeX;
+                float y = dropdownToolbar.ButtonY + kToolbarButtonHeight + 2.0f;
+                float w = kTypeFilterButtonWidth;
+                float itemH = kDropdownItemHeight;
+                float h = itemH * (float)kTypeFilterItemCount;
+                UIRenderer::DrawRectFilled(x + 3.0f, y + 3.0f, w, h, { 0.03f, 0.03f, 0.035f, 0.55f });
+                UIRenderer::DrawRectFilled(x, y, w, h, { 0.125f, 0.125f, 0.135f, 1.0f });
+                UIRenderer::DrawRect({ x, y }, { w, h }, { 0.42f, 0.42f, 0.45f, 1.0f });
+
+                for (int i = 0; i < kTypeFilterItemCount; ++i)
+                {
+                    TypeFilter filter = (TypeFilter)i;
+                    float itemY = y + (float)i * itemH;
+                    bool hovered = Widget::IsCurrentRenderWindowMouseActive() &&
+                        mouseX >= x && mouseX <= x + w &&
+                        mouseY >= itemY && mouseY <= itemY + itemH;
+                    if (filter == m_TypeFilter)
+                        UIRenderer::DrawRectFilled(x, itemY, w, itemH, { 0.18f, 0.30f, 0.42f, 1.0f });
+                    else if (hovered)
+                        UIRenderer::DrawRectFilled(x, itemY, w, itemH, { 0.22f, 0.22f, 0.23f, 1.0f });
+
+                    UIRenderer::DrawString(GetTypeFilterLabel(filter), x + 8.0f, itemY + 18.0f, { 0.88f, 0.88f, 0.90f, 1.0f });
+                }
+            }
+
+            if (m_SortDropdownVisible)
+            {
+                const ToolbarMetrics dropdownToolbar = GetToolbarMetrics();
+                float x = dropdownToolbar.SortX;
+                float y = dropdownToolbar.ButtonY + kToolbarButtonHeight + 2.0f;
+                float w = kSortButtonWidth;
+                float itemH = kDropdownItemHeight;
+                float h = itemH * (float)kSortItemCount;
+                UIRenderer::DrawRectFilled(x + 3.0f, y + 3.0f, w, h, { 0.03f, 0.03f, 0.035f, 0.55f });
+                UIRenderer::DrawRectFilled(x, y, w, h, { 0.125f, 0.125f, 0.135f, 1.0f });
+                UIRenderer::DrawRect({ x, y }, { w, h }, { 0.42f, 0.42f, 0.45f, 1.0f });
+
+                for (int i = 0; i < kSortItemCount; ++i)
+                {
+                    SortMode mode = (SortMode)i;
+                    float itemY = y + (float)i * itemH;
+                    bool hovered = Widget::IsCurrentRenderWindowMouseActive() &&
+                        mouseX >= x && mouseX <= x + w &&
+                        mouseY >= itemY && mouseY <= itemY + itemH;
+                    if (mode == m_SortMode)
+                        UIRenderer::DrawRectFilled(x, itemY, w, itemH, { 0.18f, 0.30f, 0.42f, 1.0f });
+                    else if (hovered)
+                        UIRenderer::DrawRectFilled(x, itemY, w, itemH, { 0.22f, 0.22f, 0.23f, 1.0f });
+
+                    UIRenderer::DrawString(GetSortModeLabel(mode), x + 8.0f, itemY + 18.0f, { 0.88f, 0.88f, 0.90f, 1.0f });
+                }
             }
 
             if (m_ContextMenuVisible)
@@ -3018,16 +3733,88 @@ namespace CCEngine
 
                 if (me.GetButton() == 0)
                 {
+                    bool clickedDropdownButton =
+                        IsTypeFilterButtonPoint(me.GetX(), me.GetY()) ||
+                        IsSortButtonPoint(me.GetX(), me.GetY());
+
+                    if ((m_TypeFilterDropdownVisible || m_SortDropdownVisible) && !clickedDropdownButton)
+                    {
+                        // 드롭다운이 열려 있으면 먼저 드롭다운이 입력을 가져간다.
+                        // 목록 뒤의 에셋이나 트리 항목이 동시에 선택되면 메뉴 조작이 불안정해진다.
+                        if (m_TypeFilterDropdownVisible)
+                        {
+                            int item = GetTypeFilterDropdownItemAt(me.GetX(), me.GetY());
+                            if (item >= 0)
+                                SetTypeFilter((TypeFilter)item);
+                        }
+                        else if (m_SortDropdownVisible)
+                        {
+                            int item = GetSortDropdownItemAt(me.GetX(), me.GetY());
+                            if (item >= 0)
+                                SetSortMode((SortMode)item);
+                        }
+
+                        m_TypeFilterDropdownVisible = false;
+                        m_SortDropdownVisible = false;
+                        if (IsPointInside(me.GetX(), me.GetY()))
+                        {
+                            e.Handled = true;
+                            return true;
+                        }
+                    }
+
+                    if (me.GetY() >= btnY && me.GetY() <= btnY + btnSize &&
+                        me.GetX() >= minusX && me.GetX() <= minusX + btnSize)
+                    {
+                        StepIconSize(-1);
+                        m_SearchFocused = false;
+                        e.Handled = true;
+                        return true;
+                    }
+
+                    if (me.GetY() >= btnY && me.GetY() <= btnY + btnSize &&
+                        me.GetX() >= plusX && me.GetX() <= plusX + btnSize)
+                    {
+                        StepIconSize(1);
+                        m_SearchFocused = false;
+                        e.Handled = true;
+                        return true;
+                    }
+
+                    if (IsTypeFilterButtonPoint(me.GetX(), me.GetY()))
+                    {
+                        m_TypeFilterDropdownVisible = !m_TypeFilterDropdownVisible;
+                        m_SortDropdownVisible = false;
+                        m_SearchFocused = false;
+                        m_ContextMenuVisible = false;
+                        e.Handled = true;
+                        return true;
+                    }
+
+                    if (IsSortButtonPoint(me.GetX(), me.GetY()))
+                    {
+                        m_SortDropdownVisible = !m_SortDropdownVisible;
+                        m_TypeFilterDropdownVisible = false;
+                        m_SearchFocused = false;
+                        m_ContextMenuVisible = false;
+                        e.Handled = true;
+                        return true;
+                    }
+
                     if (IsSearchBoxPoint(me.GetX(), me.GetY()))
                     {
                         m_SearchFocused = true;
                         m_ContextMenuVisible = false;
+                        m_TypeFilterDropdownVisible = false;
+                        m_SortDropdownVisible = false;
                         e.Handled = true;
                         return true;
                     }
                     else if (IsPointInside(me.GetX(), me.GetY()))
                     {
                         m_SearchFocused = false;
+                        m_TypeFilterDropdownVisible = false;
+                        m_SortDropdownVisible = false;
                     }
                 }
 
@@ -3040,6 +3827,33 @@ namespace CCEngine
                         m_ContextMenuVisible = false;
                         if (command == "Create Folder")
                             BeginCreateFolder();
+                        else if (command == "Refresh")
+                            RefreshCurrentFolder(false);
+                        else if (command == "Refresh All")
+                        {
+                            AssetRefreshReport report = AssetDatabase::RefreshAssets(m_RootDirectory, false);
+                            for (const AssetImportResult& result : report.Results)
+                            {
+                                if (result.Success && result.Type == AssetKind::Script)
+                                {
+                                    ScriptCompiler::RequestCompile();
+                                    break;
+                                }
+                            }
+                            m_TexturePreviewCache.clear();
+                            m_TexturePreviewOrder.clear();
+                            m_TreeChildCache.clear();
+                            Refresh(false);
+                            NotifyAssetDatabaseChanged();
+                        }
+                        else if (command == "Reimport")
+                            ReimportSelectedAssets();
+                        else if (command == "Show in Folder")
+                            ShowSelectedEntryInFolder();
+                        else if (command == "Show in Explorer")
+                            RevealSelectedEntryInExplorer();
+                        else if (command == "Run QA Checks")
+                            RunQualityRegressionChecks();
                         else if (command == "Rename")
                             BeginRenameSelected();
                         else if (command == "Delete")
@@ -3050,24 +3864,6 @@ namespace CCEngine
                     }
 
                     m_ContextMenuVisible = false;
-                }
-
-                if (me.GetButton() == 0 &&
-                    me.GetY() >= btnY && me.GetY() <= btnY + btnSize &&
-                    me.GetX() >= minusX && me.GetX() <= minusX + btnSize)
-                {
-                    StepIconSize(-1);
-                    e.Handled = true;
-                    return true;
-                }
-
-                if (me.GetButton() == 0 &&
-                    me.GetY() >= btnY && me.GetY() <= btnY + btnSize &&
-                    me.GetX() >= plusX && me.GetX() <= plusX + btnSize)
-                {
-                    StepIconSize(1);
-                    e.Handled = true;
-                    return true;
                 }
 
                 if (me.GetButton() == 0 && IsTreeScrollbarPoint(me.GetX(), me.GetY()))
@@ -3197,6 +3993,8 @@ namespace CCEngine
 
                 if (me.GetButton() == 1 && IsContentPoint(me.GetX(), me.GetY()))
                 {
+                    m_TypeFilterDropdownVisible = false;
+                    m_SortDropdownVisible = false;
                     int index = GetEntryIndexAt(me.GetX(), me.GetY());
                     m_ContextMenuItems.clear();
                     if (index >= 0 && index < (int)m_ViewEntries.size())
@@ -3210,7 +4008,12 @@ namespace CCEngine
                         if (entry.DisplayName != ".." && entry.Type != AssetType::Unknown && !IsVirtualSubAsset(entry))
                         {
                             if (GetSelectedEntries().size() == 1)
+                            {
+                                m_ContextMenuItems.push_back("Show in Folder");
+                                m_ContextMenuItems.push_back("Show in Explorer");
                                 m_ContextMenuItems.push_back("Rename");
+                            }
+                            m_ContextMenuItems.push_back("Reimport");
                             m_ContextMenuItems.push_back("Delete");
                         }
                     }
@@ -3218,6 +4021,9 @@ namespace CCEngine
                     {
                         ClearSelection();
                         m_ContextMenuItems.push_back("Create Folder");
+                        m_ContextMenuItems.push_back("Refresh");
+                        m_ContextMenuItems.push_back("Refresh All");
+                        m_ContextMenuItems.push_back("Run QA Checks");
                     }
 
                     m_ContextMenuVisible = !m_ContextMenuItems.empty();
