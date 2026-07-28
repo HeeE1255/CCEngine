@@ -28,6 +28,8 @@ namespace CCEngine
         using ManagedShutdownFn = void(__cdecl*)();
         using ManagedCreateFn = int(__cdecl*)(uint32_t, const char*, const char*);
         using ManagedDestroyFn = void(__cdecl*)(uint32_t);
+        using ManagedLifecycleFn = void(__cdecl*)(uint32_t, int, float);
+        using ManagedPhysicsEventFn = void(__cdecl*)(uint32_t, int, uint32_t);
         using ManagedUpdateFn = void(__cdecl*)(uint32_t, float);
 
         using GetTranslationFn = int(__cdecl*)(uint32_t, float*, float*, float*);
@@ -42,6 +44,8 @@ namespace CCEngine
             ManagedShutdownFn Shutdown = nullptr;
             ManagedCreateFn Create = nullptr;
             ManagedDestroyFn Destroy = nullptr;
+            ManagedLifecycleFn InvokeLifecycle = nullptr;
+            ManagedPhysicsEventFn InvokePhysicsEvent = nullptr;
             ManagedUpdateFn Update = nullptr;
             bool RuntimeLoaded = false;
             bool Running = false;
@@ -259,6 +263,8 @@ namespace CCEngine
                 LoadManagedFunction(loadAssembly, coreAssembly, L"Shutdown", reinterpret_cast<void**>(&s_Data.Shutdown)) &&
                 LoadManagedFunction(loadAssembly, coreAssembly, L"CreateInstance", reinterpret_cast<void**>(&s_Data.Create)) &&
                 LoadManagedFunction(loadAssembly, coreAssembly, L"DestroyInstance", reinterpret_cast<void**>(&s_Data.Destroy)) &&
+                LoadManagedFunction(loadAssembly, coreAssembly, L"InvokeLifecycleInstance", reinterpret_cast<void**>(&s_Data.InvokeLifecycle)) &&
+                LoadManagedFunction(loadAssembly, coreAssembly, L"InvokePhysicsEventInstance", reinterpret_cast<void**>(&s_Data.InvokePhysicsEvent)) &&
                 LoadManagedFunction(loadAssembly, coreAssembly, L"UpdateInstance", reinterpret_cast<void**>(&s_Data.Update));
 
             if (!loaded)
@@ -320,6 +326,18 @@ namespace CCEngine
     {
         if (s_Data.Running)
             s_Data.Destroy(entityID);
+    }
+
+    void ScriptEngine::InvokeLifecycle(uint32_t entityID, ScriptLifecycleEvent eventType, float deltaTime)
+    {
+        if (s_Data.Running && s_Data.InvokeLifecycle)
+            s_Data.InvokeLifecycle(entityID, static_cast<int>(eventType), deltaTime);
+    }
+
+    void ScriptEngine::InvokePhysicsEvent(uint32_t entityID, ScriptPhysicsEvent eventType, uint32_t otherEntityID)
+    {
+        if (s_Data.Running && s_Data.InvokePhysicsEvent)
+            s_Data.InvokePhysicsEvent(entityID, static_cast<int>(eventType), otherEntityID);
     }
 
     void ScriptEngine::UpdateInstance(uint32_t entityID, float deltaTime)

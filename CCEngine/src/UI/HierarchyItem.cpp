@@ -121,6 +121,8 @@ namespace CCEngine
                     DirectX::XMFLOAT4 arrowColor = hoveringArrow ?
                         DirectX::XMFLOAT4{ 220.0f / 255.0f, 220.0f / 255.0f, 220.0f / 255.0f, 1.0f } :
                         DirectX::XMFLOAT4{ 150.0f / 255.0f, 150.0f / 255.0f, 150.0f / 255.0f, 1.0f };
+                    if (!m_IsActiveInHierarchy)
+                        arrowColor = { 95.0f / 255.0f, 95.0f / 255.0f, 95.0f / 255.0f, 1.0f };
 
                     if (m_IsExpanded) UIRenderer::DrawString("v", indentX + 2.0f, centerY + 5.0f, arrowColor);
                     else UIRenderer::DrawString(">", indentX + 4.0f, centerY + 6.0f, arrowColor);
@@ -128,7 +130,9 @@ namespace CCEngine
 
                 float textX = indentX + 18.0f;
                 float textY = m_CalculatedPos.y + headerHeight * 0.7f;
-                DirectX::XMFLOAT4 textColor = { 210.0f / 255.0f, 210.0f / 255.0f, 210.0f / 255.0f, 1.0f };
+                DirectX::XMFLOAT4 textColor = m_IsActiveInHierarchy ?
+                    DirectX::XMFLOAT4{ 210.0f / 255.0f, 210.0f / 255.0f, 210.0f / 255.0f, 1.0f } :
+                    DirectX::XMFLOAT4{ 105.0f / 255.0f, 105.0f / 255.0f, 105.0f / 255.0f, 1.0f };
                 UIRenderer::DrawString(m_Text, textX, textY, textColor);
             }
 

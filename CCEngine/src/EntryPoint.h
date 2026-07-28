@@ -13,12 +13,14 @@
 
 #include <clocale>
 #include <filesystem>
+#include <vector>
+#include <string>
 #include <Windows.h>
 
 // 엔트리 포인트 헤더: 플랫폼별로 메인 함수를 정의하는 헤더
 // 설명 : 엔진이 실행될 때 가장 먼저 호출되는 함수인 main 함수를 정의하는 헤더
 // 샌드박스에서 이 이름으로 사용자가 코드를 작성하면, 엔진이 이 함수를 호출하여 게임을 시작
-extern CCEngine::Application* CCEngine::CreateApplication();
+extern CCEngine::Application* CCEngine::CreateApplication(const std::vector<std::string>& commandLineArgs);
 
 namespace
 {
@@ -81,9 +83,16 @@ int main(int argc, char** argv)
     }
 
     // 엔진 애플리케이션 생성 및 실행
-    {   
-        auto app = CCEngine::CreateApplication();
+    int exitCode = 0;
+    {
+        std::vector<std::string> commandLineArgs;
+        commandLineArgs.reserve(argc > 1 ? (size_t)argc - 1 : 0);
+        for (int i = 1; i < argc; ++i)
+            commandLineArgs.emplace_back(argv[i]);
+
+        auto app = CCEngine::CreateApplication(commandLineArgs);
         app->Run();
+        exitCode = app->GetExitCode();
 
         delete app;
     }
@@ -91,7 +100,7 @@ int main(int argc, char** argv)
     // 메모리 누수 확인
     //_CrtDumpMemoryLeaks();
 
-    return 0;
+    return exitCode;
 }
 
 #endif

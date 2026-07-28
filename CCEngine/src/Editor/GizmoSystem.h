@@ -5,6 +5,7 @@
 #include "Events/MouseEvent.h"
 #include "Renderer/Shader.h"
 #include <DirectXMath.h>
+#include <vector>
 
 namespace CCEngine {
 
@@ -23,6 +24,12 @@ namespace CCEngine {
         Local
     };
 
+    enum class GizmoPivotMode
+    {
+        Pivot = 0,
+        Center
+    };
+
     class CC_API GizmoSystem 
     {
     public:
@@ -39,6 +46,7 @@ namespace CCEngine {
         // 에디터 뷰포트 렌더링 전용
         //void OnRender(Entity selectedEntity);
         void OnRender(Entity selectedEntity, DirectX::XMMATRIX viewMatrix, DirectX::XMMATRIX projMatrix);
+        void OnRender(const std::vector<Entity>& selectedEntities, Entity activeEntity, DirectX::XMMATRIX viewMatrix, DirectX::XMMATRIX projMatrix);
         void OnRenderSkeleton(Entity selectedEntity);
 
         // 마우스 레이캐스팅 및 드래그 조작을 위한 이벤트 처리
@@ -46,15 +54,33 @@ namespace CCEngine {
             DirectX::XMMATRIX viewMatrix, DirectX::XMMATRIX projMatrix,
             float viewportWidth, float viewportHeight,
             float viewportX, float viewportY);
+        bool OnEvent(Event& e, const std::vector<Entity>& selectedEntities, Entity activeEntity,
+            DirectX::XMMATRIX viewMatrix, DirectX::XMMATRIX projMatrix,
+            float viewportWidth, float viewportHeight,
+            float viewportX, float viewportY);
 
         void SetSpace(GizmoSpace space) { m_Space = space; }
         GizmoSpace GetSpace() const { return m_Space; }
+        void ToggleSpace() { m_Space = (m_Space == GizmoSpace::Local) ? GizmoSpace::World : GizmoSpace::Local; }
+
+        void SetPivotMode(GizmoPivotMode mode) { m_PivotMode = mode; }
+        GizmoPivotMode GetPivotMode() const { return m_PivotMode; }
+        void TogglePivotMode() { m_PivotMode = (m_PivotMode == GizmoPivotMode::Pivot) ? GizmoPivotMode::Center : GizmoPivotMode::Pivot; }
+
+        void SetSnappingEnabled(bool enabled) { m_SnappingEnabled = enabled; }
+        bool IsSnappingEnabled() const { return m_SnappingEnabled; }
+        void ToggleSnapping() { m_SnappingEnabled = !m_SnappingEnabled; }
 
     private:
         std::shared_ptr<Shader> m_GizmoShader;
 
         GizmoMode m_Mode = GizmoMode::Translate;
         GizmoSpace m_Space = GizmoSpace::Local;
+        GizmoPivotMode m_PivotMode = GizmoPivotMode::Pivot;
+        bool m_SnappingEnabled = false;
+        float m_TranslateSnapStep = 0.5f;
+        float m_RotateSnapStepRadians = DirectX::XMConvertToRadians(15.0f);
+        float m_ScaleSnapStep = 0.25f;
 
         // 향후 마우스 드래그를 위해 저장해둘 변수들
         bool m_IsDragging = false;
@@ -66,6 +92,16 @@ namespace CCEngine {
         DirectX::XMFLOAT3 m_InitialRotVec = { 0.0f, 0.0f, 0.0f };
 
         DirectX::XMFLOAT3 m_DragAxis = { 0.0f, 0.0f, 0.0f };
+
+        struct DragTarget
+        {
+            Entity Target;
+            DirectX::XMFLOAT3 OriginalWorldPosition = { 0.0f, 0.0f, 0.0f };
+            DirectX::XMFLOAT3 OriginalScale = { 1.0f, 1.0f, 1.0f };
+            DirectX::XMFLOAT4 OriginalQuat = { 0.0f, 0.0f, 0.0f, 1.0f };
+            DirectX::XMMATRIX ParentWorld = DirectX::XMMatrixIdentity();
+        };
+        std::vector<DragTarget> m_DragTargets;
 
     };
 

@@ -38,7 +38,20 @@ namespace CCEngine
             virtual void UpdateLayout(const DirectX::XMFLOAT2& parentPos, const DirectX::XMFLOAT2& parentSize) override;
 
         private:
-            enum class AddComponentType { Mesh, Light, Camera, SpriteRenderer, Rigidbody2D, BoxCollider2D, Script };
+            enum class AddComponentType
+            {
+                Mesh,
+                Light,
+                Camera,
+                SpriteRenderer,
+                Rigidbody2D,
+                BoxCollider2D,
+                BoxCollider3D,
+                SphereCollider3D,
+                CylinderCollider3D,
+                MeshCollider3D,
+                Script
+            };
             void RebuildInspector();
             void BuildAddComponentMenu();
             void AddComponent(AddComponentType type);

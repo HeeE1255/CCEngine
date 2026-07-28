@@ -24,6 +24,7 @@ namespace CCEngine
             uint32_t GetEntityID() const { return m_EntityID; }
             void SetExpanded(bool expanded) { m_IsExpanded = expanded; }
             void SetHasChildren(bool has) { m_HasChildren = has; }
+            void SetActiveInHierarchy(bool active) { m_IsActiveInHierarchy = active; }
             bool GetExpanded() const { return m_IsExpanded; }
             void SetRenderClipRange(float top, float bottom);
 
@@ -37,6 +38,7 @@ namespace CCEngine
             bool m_IsSelected = false;
             bool m_IsExpanded = false;
             bool m_HasChildren = false;
+            bool m_IsActiveInHierarchy = true;
             float m_RenderClipTop = 0.0f;
             float m_RenderClipBottom = 0.0f;
 

@@ -4,6 +4,8 @@
 #include "Scene/Scene.h"
 #include "Scene/Entity.h"
 #include <map>
+#include <unordered_set>
+#include <vector>
 
 namespace CCEngine 
 {
@@ -16,8 +18,13 @@ namespace CCEngine
 
             void SetContext(Scene* context);
             void SetSelectedEntity(Entity entity);
+            void SetSelectedEntities(const std::vector<Entity>& entities, Entity activeEntity = {});
+            void ClearSelection();
             void UpdateSelectionVisuals(Widget* widget);
+            void UpdateActiveVisuals(Widget* widget);
             Entity GetSelectedEntity() const { return m_SelectionContext; }
+            std::vector<Entity> GetSelectedEntities() const;
+            bool IsSelected(Entity entity) const;
             Entity GetEntityAt(float mouseX, float mouseY) const;
 
             void Refresh();
@@ -31,10 +38,16 @@ namespace CCEngine
             // 트리 구조를 만들 때 부모 위젯을 인자로 받습니다.
             void BuildEntityTree(Entity entity, int depth, Widget* parentWidget);
             Entity FindEntityAtRecursive(Widget* widget, float mouseX, float mouseY) const;
+            void SelectEntityFromClick(Entity entity);
+            void CollectVisibleEntities(Widget* widget, std::vector<entt::entity>& outEntities) const;
+            void SanitizeSelection();
 
         private:
             Scene* m_Context = nullptr;
             Entity m_SelectionContext = {};
+            std::vector<entt::entity> m_SelectedEntities;
+            std::unordered_set<entt::entity> m_SelectedEntitySet;
+            entt::entity m_SelectionAnchor = entt::null;
             std::map<uint32_t, bool> m_ExpandedStates;
             bool m_NeedsRefresh = false;
             bool m_NeedsSelectionUpdate = false;

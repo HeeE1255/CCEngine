@@ -131,12 +131,13 @@ namespace CCEngine
         }
     }
 
-    Application::Application(const std::string& commandLineArg)
+    Application::Application(const std::vector<std::string>& commandLineArgs)
+        : m_CommandLineArgs(commandLineArgs)
     {
         // 실행 시점의 명령줄 인수로 렌더링 API를 선택합니다.
-        if (commandLineArg == "-opengl")
+        if (HasCommandLineFlag("-opengl"))
             RendererAPI::SetAPI(RendererAPI::API::OpenGL);
-        else if (commandLineArg == "-vulkan")
+        else if (HasCommandLineFlag("-vulkan"))
             RendererAPI::SetAPI(RendererAPI::API::Vulkan);
         else
             RendererAPI::SetAPI(RendererAPI::API::DirectX11);
@@ -269,6 +270,11 @@ namespace CCEngine
             return false;
 
         return window == m_ActiveInputWindow;
+    }
+
+    bool Application::HasCommandLineFlag(const std::string& flag) const
+    {
+        return std::find(m_CommandLineArgs.begin(), m_CommandLineArgs.end(), flag) != m_CommandLineArgs.end();
     }
 
     void Application::ForgetInputWindow(Window* window)

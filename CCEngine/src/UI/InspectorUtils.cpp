@@ -8,6 +8,7 @@
 #include "UI/InspectorPanel.h"
 #include "UI/ScriptFieldWidget.h"
 #include "UI/TextInput.h"
+#include <algorithm>
 #include <iostream>
 #include <cmath>
 #include <filesystem>
@@ -90,7 +91,16 @@ namespace CCEngine {
                         if constexpr (std::is_same_v<T, CameraComponent>)
                             removedPrimaryCamera = entity.GetComponent<CameraComponent>().Primary;
 
-                        entity.RemoveComponent<T>();
+                        if constexpr (std::is_same_v<T, ScriptComponent>)
+                        {
+                            // 스크립트 제거는 registry에서 컴포넌트만 빼면 끝나지 않는다.
+                            // Play 중에는 관리 객체의 OnDisable/OnDestroy까지 호출해야 런타임 상태가 남지 않는다.
+                            entity.GetScene()->RemoveScriptComponent(entity);
+                        }
+                        else
+                        {
+                            entity.RemoveComponent<T>();
+                        }
 
                         if constexpr (std::is_same_v<T, CameraComponent>)
                         {
@@ -198,6 +208,41 @@ namespace CCEngine {
 
         void InspectorUtils::InitStandardComponents()
         {
+            UI::InspectorRegistry::RegisterComponent<ActiveComponent>(
+                [](UI::Widget* parent, CCEngine::Entity entity, ActiveComponent& active)
+                {
+                    auto item = new UI::InspectorItem("GameObjectActiveItem", "GameObject");
+                    item->SetAnchorMin(0.0f, 0.0f);
+                    item->SetAnchorMax(1.0f, 0.0f);
+                    parent->AddChild(item);
+
+                    bool activeSelf = active.ActiveSelf;
+                    bool activeInHierarchy = entity.GetScene() ? entity.GetScene()->IsEntityActiveInHierarchy(entity) : activeSelf;
+                    auto btnActive = new UI::Button("BtnGameObjectActive", activeSelf ? "Active: On" : "Active: Off");
+                    btnActive->SetActive(activeSelf);
+                    btnActive->SetOnClick([entity, btnActive]() mutable
+                        {
+                            if (!entity || !entity.GetScene())
+                                return;
+
+                            bool nextActive = !entity.GetScene()->IsEntityActiveSelf(entity);
+                            // 인스펙터 토글은 사용자가 직접 설정한 ActiveSelf만 바꾼다.
+                            // 부모 때문에 꺼진 상태까지 저장값에 섞으면 프리팹/씬 복원 때 원인을 추적하기 어렵다.
+                            entity.GetScene()->SetEntityActiveSelf(entity, nextActive);
+                            btnActive->SetActive(nextActive);
+                            btnActive->SetText(nextActive ? "Active: On" : "Active: Off");
+                        });
+                    item->AddChild(btnActive);
+
+                    if (activeSelf && !activeInHierarchy)
+                    {
+                        auto inheritedOff = new UI::Button("BtnInactiveByParent", "Inactive by Parent");
+                        inheritedOff->SetNormalColor({ 0.16f, 0.16f, 0.16f, 1.0f });
+                        inheritedOff->SetHoverColor({ 0.16f, 0.16f, 0.16f, 1.0f });
+                        item->AddChild(inheritedOff);
+                    }
+                });
+
             // ==========================================================
             // 1. Transform 컴포넌트 (가장 기본이므로 가장 먼저 등록!)
             // ==========================================================
@@ -436,7 +481,143 @@ namespace CCEngine {
                     UI::InspectorUtils::AddDragFloat(item, "Restitution", "Restitution",
                         [entity]() mutable { return entity.GetComponent<BoxCollider2DComponent>().Restitution; },
                         [entity](float v) mutable { entity.GetComponent<BoxCollider2DComponent>().Restitution = v; });
+
+                    auto btnTrigger = new UI::Button("BoxCollider2DTrigger", collider.IsTrigger ? "Is Trigger: On" : "Is Trigger: Off");
+                    btnTrigger->SetActive(collider.IsTrigger);
+                    btnTrigger->SetOnClick([entity, btnTrigger]() mutable
+                        {
+                            auto& current = entity.GetComponent<BoxCollider2DComponent>();
+                            current.IsTrigger = !current.IsTrigger;
+                            btnTrigger->SetActive(current.IsTrigger);
+                            btnTrigger->SetText(current.IsTrigger ? "Is Trigger: On" : "Is Trigger: Off");
+                        });
+                    item->AddChild(btnTrigger);
+
                     AddRemoveComponentButton<BoxCollider2DComponent>(parent, item, entity, "BoxCollider2D");
+                });
+
+            UI::InspectorRegistry::RegisterComponent<BoxCollider3DComponent>(
+                [](UI::Widget* parent, CCEngine::Entity entity, BoxCollider3DComponent& collider)
+                {
+                    auto item = new UI::InspectorItem("BoxCollider3DItem", "Box Collider 3D");
+                    item->SetAnchorMin(0.0f, 0.0f); item->SetAnchorMax(1.0f, 0.0f);
+                    parent->AddChild(item);
+
+                    // 3D 충돌체는 Transform과 별도로 로컬 Offset/Size를 가진다.
+                    // 이렇게 분리해야 메시 크기는 그대로 두고 충돌 범위만 보정할 수 있다.
+                    UI::InspectorUtils::AddDragFloat3(item, "BoxCollider3DOffset", "Offset",
+                        [entity]() mutable { return entity.GetComponent<BoxCollider3DComponent>().Offset; },
+                        [entity](DirectX::XMFLOAT3 v) mutable { entity.GetComponent<BoxCollider3DComponent>().Offset = v; });
+                    UI::InspectorUtils::AddDragFloat3(item, "BoxCollider3DSize", "Size",
+                        [entity]() mutable { return entity.GetComponent<BoxCollider3DComponent>().Size; },
+                        [entity](DirectX::XMFLOAT3 v) mutable { entity.GetComponent<BoxCollider3DComponent>().Size = v; });
+
+                    auto btnTrigger = new UI::Button("BoxCollider3DTrigger", collider.IsTrigger ? "Is Trigger: On" : "Is Trigger: Off");
+                    btnTrigger->SetActive(collider.IsTrigger);
+                    btnTrigger->SetOnClick([entity, btnTrigger]() mutable
+                        {
+                            auto& current = entity.GetComponent<BoxCollider3DComponent>();
+                            current.IsTrigger = !current.IsTrigger;
+                            btnTrigger->SetActive(current.IsTrigger);
+                            btnTrigger->SetText(current.IsTrigger ? "Is Trigger: On" : "Is Trigger: Off");
+                        });
+                    item->AddChild(btnTrigger);
+                    AddRemoveComponentButton<BoxCollider3DComponent>(parent, item, entity, "BoxCollider3D");
+                });
+
+            UI::InspectorRegistry::RegisterComponent<SphereCollider3DComponent>(
+                [](UI::Widget* parent, CCEngine::Entity entity, SphereCollider3DComponent& collider)
+                {
+                    auto item = new UI::InspectorItem("SphereCollider3DItem", "Sphere Collider 3D");
+                    item->SetAnchorMin(0.0f, 0.0f); item->SetAnchorMax(1.0f, 0.0f);
+                    parent->AddChild(item);
+
+                    UI::InspectorUtils::AddDragFloat3(item, "SphereCollider3DOffset", "Offset",
+                        [entity]() mutable { return entity.GetComponent<SphereCollider3DComponent>().Offset; },
+                        [entity](DirectX::XMFLOAT3 v) mutable { entity.GetComponent<SphereCollider3DComponent>().Offset = v; });
+                    UI::InspectorUtils::AddDragFloat(item, "SphereCollider3DRadius", "Radius",
+                        [entity]() mutable { return entity.GetComponent<SphereCollider3DComponent>().Radius; },
+                        [entity](float v) mutable { entity.GetComponent<SphereCollider3DComponent>().Radius = std::max(0.01f, v); });
+
+                    auto btnTrigger = new UI::Button("SphereCollider3DTrigger", collider.IsTrigger ? "Is Trigger: On" : "Is Trigger: Off");
+                    btnTrigger->SetActive(collider.IsTrigger);
+                    btnTrigger->SetOnClick([entity, btnTrigger]() mutable
+                        {
+                            auto& current = entity.GetComponent<SphereCollider3DComponent>();
+                            current.IsTrigger = !current.IsTrigger;
+                            btnTrigger->SetActive(current.IsTrigger);
+                            btnTrigger->SetText(current.IsTrigger ? "Is Trigger: On" : "Is Trigger: Off");
+                        });
+                    item->AddChild(btnTrigger);
+                    AddRemoveComponentButton<SphereCollider3DComponent>(parent, item, entity, "SphereCollider3D");
+                });
+
+            UI::InspectorRegistry::RegisterComponent<CylinderCollider3DComponent>(
+                [](UI::Widget* parent, CCEngine::Entity entity, CylinderCollider3DComponent& collider)
+                {
+                    auto item = new UI::InspectorItem("CylinderCollider3DItem", "Cylinder Collider 3D");
+                    item->SetAnchorMin(0.0f, 0.0f); item->SetAnchorMax(1.0f, 0.0f);
+                    parent->AddChild(item);
+
+                    UI::InspectorUtils::AddDragFloat3(item, "CylinderCollider3DOffset", "Offset",
+                        [entity]() mutable { return entity.GetComponent<CylinderCollider3DComponent>().Offset; },
+                        [entity](DirectX::XMFLOAT3 v) mutable { entity.GetComponent<CylinderCollider3DComponent>().Offset = v; });
+                    UI::InspectorUtils::AddDragFloat(item, "CylinderCollider3DRadius", "Radius",
+                        [entity]() mutable { return entity.GetComponent<CylinderCollider3DComponent>().Radius; },
+                        [entity](float v) mutable { entity.GetComponent<CylinderCollider3DComponent>().Radius = std::max(0.01f, v); });
+                    UI::InspectorUtils::AddDragFloat(item, "CylinderCollider3DHeight", "Height",
+                        [entity]() mutable { return entity.GetComponent<CylinderCollider3DComponent>().Height; },
+                        [entity](float v) mutable { entity.GetComponent<CylinderCollider3DComponent>().Height = std::max(0.01f, v); });
+
+                    auto btnTrigger = new UI::Button("CylinderCollider3DTrigger", collider.IsTrigger ? "Is Trigger: On" : "Is Trigger: Off");
+                    btnTrigger->SetActive(collider.IsTrigger);
+                    btnTrigger->SetOnClick([entity, btnTrigger]() mutable
+                        {
+                            auto& current = entity.GetComponent<CylinderCollider3DComponent>();
+                            current.IsTrigger = !current.IsTrigger;
+                            btnTrigger->SetActive(current.IsTrigger);
+                            btnTrigger->SetText(current.IsTrigger ? "Is Trigger: On" : "Is Trigger: Off");
+                        });
+                    item->AddChild(btnTrigger);
+                    AddRemoveComponentButton<CylinderCollider3DComponent>(parent, item, entity, "CylinderCollider3D");
+                });
+
+            UI::InspectorRegistry::RegisterComponent<MeshCollider3DComponent>(
+                [](UI::Widget* parent, CCEngine::Entity entity, MeshCollider3DComponent& collider)
+                {
+                    auto item = new UI::InspectorItem("MeshCollider3DItem", "Mesh Collider 3D");
+                    item->SetAnchorMin(0.0f, 0.0f); item->SetAnchorMax(1.0f, 0.0f);
+                    parent->AddChild(item);
+
+                    UI::InspectorUtils::AddDragFloat3(item, "MeshCollider3DOffset", "Offset",
+                        [entity]() mutable { return entity.GetComponent<MeshCollider3DComponent>().Offset; },
+                        [entity](DirectX::XMFLOAT3 v) mutable { entity.GetComponent<MeshCollider3DComponent>().Offset = v; });
+                    UI::InspectorUtils::AddDragFloat3(item, "MeshCollider3DSize", "Bounds Size",
+                        [entity]() mutable { return entity.GetComponent<MeshCollider3DComponent>().Size; },
+                        [entity](DirectX::XMFLOAT3 v) mutable { entity.GetComponent<MeshCollider3DComponent>().Size = v; });
+
+                    auto btnConvex = new UI::Button("MeshCollider3DConvex", collider.Convex ? "Convex: On" : "Convex: Off");
+                    btnConvex->SetActive(collider.Convex);
+                    btnConvex->SetOnClick([entity, btnConvex]() mutable
+                        {
+                            auto& current = entity.GetComponent<MeshCollider3DComponent>();
+                            current.Convex = !current.Convex;
+                            btnConvex->SetActive(current.Convex);
+                            btnConvex->SetText(current.Convex ? "Convex: On" : "Convex: Off");
+                        });
+                    item->AddChild(btnConvex);
+
+                    auto btnTrigger = new UI::Button("MeshCollider3DTrigger", collider.IsTrigger ? "Is Trigger: On" : "Is Trigger: Off");
+                    btnTrigger->SetActive(collider.IsTrigger);
+                    btnTrigger->SetOnClick([entity, btnTrigger]() mutable
+                        {
+                            auto& current = entity.GetComponent<MeshCollider3DComponent>();
+                            current.IsTrigger = !current.IsTrigger;
+                            btnTrigger->SetActive(current.IsTrigger);
+                            btnTrigger->SetText(current.IsTrigger ? "Is Trigger: On" : "Is Trigger: Off");
+                        });
+                    item->AddChild(btnTrigger);
+                    AddRemoveComponentButton<MeshCollider3DComponent>(parent, item, entity, "MeshCollider3D");
                 });
 
             UI::InspectorRegistry::RegisterComponent<ScriptComponent>(

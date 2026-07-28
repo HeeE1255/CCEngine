@@ -85,6 +85,9 @@ namespace CCEngine
                 entityData["TagComponent"]["Tag"] = entity.GetComponent<TagComponent>().Tag;
             }
 
+            if (entity.HasComponent<ActiveComponent>())
+                entityData["ActiveComponent"]["ActiveSelf"] = entity.GetComponent<ActiveComponent>().ActiveSelf;
+
             if (entity.HasComponent<TransformComponent>())
             {
                 auto& tc = entity.GetComponent<TransformComponent>();
@@ -161,9 +164,44 @@ namespace CCEngine
                 auto& collider = entity.GetComponent<BoxCollider2DComponent>();
                 entityData["BoxCollider2DComponent"]["Offset"] = Float2ToJson(collider.Offset);
                 entityData["BoxCollider2DComponent"]["Size"] = Float2ToJson(collider.Size);
+                entityData["BoxCollider2DComponent"]["IsTrigger"] = collider.IsTrigger;
                 entityData["BoxCollider2DComponent"]["Density"] = collider.Density;
                 entityData["BoxCollider2DComponent"]["Friction"] = collider.Friction;
                 entityData["BoxCollider2DComponent"]["Restitution"] = collider.Restitution;
+            }
+
+            if (entity.HasComponent<BoxCollider3DComponent>())
+            {
+                auto& collider = entity.GetComponent<BoxCollider3DComponent>();
+                entityData["BoxCollider3DComponent"]["Offset"] = Float3ToJson(collider.Offset);
+                entityData["BoxCollider3DComponent"]["Size"] = Float3ToJson(collider.Size);
+                entityData["BoxCollider3DComponent"]["IsTrigger"] = collider.IsTrigger;
+            }
+
+            if (entity.HasComponent<SphereCollider3DComponent>())
+            {
+                auto& collider = entity.GetComponent<SphereCollider3DComponent>();
+                entityData["SphereCollider3DComponent"]["Offset"] = Float3ToJson(collider.Offset);
+                entityData["SphereCollider3DComponent"]["Radius"] = collider.Radius;
+                entityData["SphereCollider3DComponent"]["IsTrigger"] = collider.IsTrigger;
+            }
+
+            if (entity.HasComponent<CylinderCollider3DComponent>())
+            {
+                auto& collider = entity.GetComponent<CylinderCollider3DComponent>();
+                entityData["CylinderCollider3DComponent"]["Offset"] = Float3ToJson(collider.Offset);
+                entityData["CylinderCollider3DComponent"]["Radius"] = collider.Radius;
+                entityData["CylinderCollider3DComponent"]["Height"] = collider.Height;
+                entityData["CylinderCollider3DComponent"]["IsTrigger"] = collider.IsTrigger;
+            }
+
+            if (entity.HasComponent<MeshCollider3DComponent>())
+            {
+                auto& collider = entity.GetComponent<MeshCollider3DComponent>();
+                entityData["MeshCollider3DComponent"]["Offset"] = Float3ToJson(collider.Offset);
+                entityData["MeshCollider3DComponent"]["Size"] = Float3ToJson(collider.Size);
+                entityData["MeshCollider3DComponent"]["Convex"] = collider.Convex;
+                entityData["MeshCollider3DComponent"]["IsTrigger"] = collider.IsTrigger;
             }
 
             if (entity.HasComponent<LightComponent>())
@@ -192,6 +230,13 @@ namespace CCEngine
         void ApplyComponents(Entity entity, const nlohmann::json& entityData)
         {
             // 엔티티와 부모관계는 별도 단계에서 만든다. 여기서는 값 컴포넌트만 복원한다.
+            if (entityData.contains("ActiveComponent"))
+            {
+                auto& active = entity.HasComponent<ActiveComponent>() ?
+                    entity.GetComponent<ActiveComponent>() : entity.AddComponent<ActiveComponent>();
+                active.ActiveSelf = entityData["ActiveComponent"].value("ActiveSelf", true);
+            }
+
             if (entityData.contains("TransformComponent"))
             {
                 auto& tc = entity.GetComponent<TransformComponent>();
@@ -299,9 +344,48 @@ namespace CCEngine
                 auto& collider = entity.HasComponent<BoxCollider2DComponent>() ? entity.GetComponent<BoxCollider2DComponent>() : entity.AddComponent<BoxCollider2DComponent>();
                 collider.Offset = JsonToFloat2(colliderData["Offset"]);
                 collider.Size = JsonToFloat2(colliderData["Size"]);
+                collider.IsTrigger = colliderData.contains("IsTrigger") ? colliderData["IsTrigger"].get<bool>() : false;
                 collider.Density = colliderData["Density"].get<float>();
                 collider.Friction = colliderData["Friction"].get<float>();
                 collider.Restitution = colliderData["Restitution"].get<float>();
+            }
+
+            if (entityData.contains("BoxCollider3DComponent"))
+            {
+                auto& colliderData = entityData["BoxCollider3DComponent"];
+                auto& collider = entity.HasComponent<BoxCollider3DComponent>() ? entity.GetComponent<BoxCollider3DComponent>() : entity.AddComponent<BoxCollider3DComponent>();
+                collider.Offset = JsonToFloat3(colliderData["Offset"]);
+                collider.Size = JsonToFloat3(colliderData["Size"]);
+                collider.IsTrigger = colliderData.value("IsTrigger", false);
+            }
+
+            if (entityData.contains("SphereCollider3DComponent"))
+            {
+                auto& colliderData = entityData["SphereCollider3DComponent"];
+                auto& collider = entity.HasComponent<SphereCollider3DComponent>() ? entity.GetComponent<SphereCollider3DComponent>() : entity.AddComponent<SphereCollider3DComponent>();
+                collider.Offset = JsonToFloat3(colliderData["Offset"]);
+                collider.Radius = colliderData.value("Radius", 0.5f);
+                collider.IsTrigger = colliderData.value("IsTrigger", false);
+            }
+
+            if (entityData.contains("CylinderCollider3DComponent"))
+            {
+                auto& colliderData = entityData["CylinderCollider3DComponent"];
+                auto& collider = entity.HasComponent<CylinderCollider3DComponent>() ? entity.GetComponent<CylinderCollider3DComponent>() : entity.AddComponent<CylinderCollider3DComponent>();
+                collider.Offset = JsonToFloat3(colliderData["Offset"]);
+                collider.Radius = colliderData.value("Radius", 0.5f);
+                collider.Height = colliderData.value("Height", 1.0f);
+                collider.IsTrigger = colliderData.value("IsTrigger", false);
+            }
+
+            if (entityData.contains("MeshCollider3DComponent"))
+            {
+                auto& colliderData = entityData["MeshCollider3DComponent"];
+                auto& collider = entity.HasComponent<MeshCollider3DComponent>() ? entity.GetComponent<MeshCollider3DComponent>() : entity.AddComponent<MeshCollider3DComponent>();
+                collider.Offset = JsonToFloat3(colliderData["Offset"]);
+                collider.Size = JsonToFloat3(colliderData["Size"]);
+                collider.Convex = colliderData.value("Convex", false);
+                collider.IsTrigger = colliderData.value("IsTrigger", false);
             }
 
             if (entityData.contains("LightComponent"))
@@ -331,6 +415,9 @@ namespace CCEngine
                         script.FieldOverrides[it.key()] = it.value().get<std::string>();
                 }
                 script.RuntimeInstanceCreated = false;
+                script.RuntimeAwakeCalled = false;
+                script.RuntimeEnabledCalled = false;
+                script.RuntimeStartCalled = false;
             }
         }
 

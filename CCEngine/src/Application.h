@@ -12,8 +12,9 @@ namespace CCEngine
     class CC_API Application
     {
     public:
-        // RHI 동적 스위칭을 위해 명령줄 인수를 받을 수 있도록 변경
-        Application(const std::string& commandLineArg = "");
+        // RHI와 에디터 QA처럼 실행 모드를 바꾸는 옵션은 앱 시작 때 한 번만 받는다.
+        // 실행 중 전역 문자열을 다시 파싱하지 않도록 Application이 원본 인자를 보관한다.
+        Application(const std::vector<std::string>& commandLineArgs = {});
         virtual ~Application();
 
         void Run();
@@ -34,6 +35,10 @@ namespace CCEngine
         void SetModalInputWindow(Window* window);
         void ClearModalInputWindow(Window* window = nullptr);
         bool IsInputEnabledForWindow(Window* window) const;
+        bool HasCommandLineFlag(const std::string& flag) const;
+        const std::vector<std::string>& GetCommandLineArgs() const { return m_CommandLineArgs; }
+        void SetExitCode(int exitCode) { m_ExitCode = exitCode; }
+        int GetExitCode() const { return m_ExitCode; }
 
         inline static Application* Get() { return s_Instance; }
 
@@ -56,8 +61,10 @@ namespace CCEngine
 		std::vector<Window*> m_SecondaryWindows; // 서브 창들 (스왑체인과 렌더 타겟이 없는 창, UI 용도)
         Window* m_ActiveInputWindow = nullptr;
         std::vector<Window*> m_ModalInputWindows;
+        std::vector<std::string> m_CommandLineArgs;
+        int m_ExitCode = 0;
     };
 
     // 클라이언트(Sandbox 등)에서 정의해서 엔진에 넘겨줄 팩토리 함수
-    Application* CreateApplication();
+    Application* CreateApplication(const std::vector<std::string>& commandLineArgs);
 }

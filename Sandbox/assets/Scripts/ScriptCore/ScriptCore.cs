@@ -72,13 +72,45 @@ namespace CCEngine
 
         public void Log(string message) => Internal.NativeApi.Log(message);
 
+        protected virtual void Awake() => OnCreate();
+        protected virtual void OnEnable() { }
+        protected virtual void Start() { }
+        protected virtual void FixedUpdate(float deltaTime) { }
+        protected virtual void Update(float deltaTime) => OnUpdate(deltaTime);
+        protected virtual void LateUpdate(float deltaTime) { }
+        protected virtual void OnDisable() { }
         protected virtual void OnCreate() { }
         protected virtual void OnUpdate(float deltaTime) { }
         protected virtual void OnDestroy() { }
+        protected virtual void OnCollisionEnter2D(uint otherEntityID) { }
+        protected virtual void OnCollisionStay2D(uint otherEntityID) { }
+        protected virtual void OnCollisionExit2D(uint otherEntityID) { }
+        protected virtual void OnTriggerEnter2D(uint otherEntityID) { }
+        protected virtual void OnTriggerStay2D(uint otherEntityID) { }
+        protected virtual void OnTriggerExit2D(uint otherEntityID) { }
 
-        internal void InvokeCreate() => OnCreate();
-        internal void InvokeUpdate(float deltaTime) => OnUpdate(deltaTime);
+        internal void InvokeAwake() => Awake();
+        internal void InvokeOnEnable() => OnEnable();
+        internal void InvokeStart() => Start();
+        internal void InvokeFixedUpdate(float deltaTime) => FixedUpdate(deltaTime);
+        internal void InvokeUpdate(float deltaTime) => Update(deltaTime);
+        internal void InvokeLateUpdate(float deltaTime) => LateUpdate(deltaTime);
+        internal void InvokeOnDisable() => OnDisable();
         internal void InvokeDestroy() => OnDestroy();
+        internal void InvokePhysicsEvent(int eventType, uint otherEntityID)
+        {
+            // 네이티브 물리 큐가 전달한 이벤트 번호를 사용자 스크립트의 가상 메서드로 바꿔 호출한다.
+            // 이렇게 두면 엔진 쪽 이벤트 순서와 C# 작성 방식이 서로 느슨하게 분리된다.
+            switch (eventType)
+            {
+                case 0: OnCollisionEnter2D(otherEntityID); break;
+                case 1: OnCollisionStay2D(otherEntityID); break;
+                case 2: OnCollisionExit2D(otherEntityID); break;
+                case 3: OnTriggerEnter2D(otherEntityID); break;
+                case 4: OnTriggerStay2D(otherEntityID); break;
+                case 5: OnTriggerExit2D(otherEntityID); break;
+            }
+        }
     }
 }
 
@@ -131,7 +163,17 @@ namespace CCEngine.Internal
 
     internal static unsafe class ScriptHost
     {
-        private static readonly Dictionary<uint, CCEngine.GameScript> s_Instances = new();
+        private sealed class ScriptInstanceState
+        {
+            internal CCEngine.GameScript Instance;
+
+            internal ScriptInstanceState(CCEngine.GameScript instance)
+            {
+                Instance = instance;
+            }
+        }
+
+        private static readonly Dictionary<uint, ScriptInstanceState> s_Instances = new();
         private static GameAssemblyLoadContext? s_LoadContext;
         private static Assembly? s_GameAssembly;
 
@@ -179,9 +221,8 @@ namespace CCEngine.Internal
                     return -1;
 
                 instance.EntityID = entityID;
-                s_Instances[entityID] = instance;
+                s_Instances[entityID] = new ScriptInstanceState(instance);
                 ApplyFieldOverrides(instance, overridesJson);
-                instance.InvokeCreate();
                 return 0;
             }
             catch (Exception exception)
@@ -194,29 +235,62 @@ namespace CCEngine.Internal
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
         public static void DestroyInstance(uint entityID)
         {
-            if (!s_Instances.Remove(entityID, out CCEngine.GameScript? instance))
+            // OnDestroy 호출 순서는 네이티브 Scene이 관리한다.
+            // 여기서는 관리 객체를 테이블에서 제거만 해야 같은 이벤트가 두 번 호출되지 않는다.
+            s_Instances.Remove(entityID);
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        public static void InvokeLifecycleInstance(uint entityID, int eventType, float deltaTime)
+        {
+            if (!s_Instances.TryGetValue(entityID, out ScriptInstanceState? state))
                 return;
 
-            try { instance.InvokeDestroy(); }
+            try
+            {
+                // 네이티브 쪽이 라이프사이클 순서를 관리한다.
+                // C#은 전달받은 이벤트 번호를 실제 사용자 메서드 호출로만 바꾼다.
+                switch (eventType)
+                {
+                    case 0: state.Instance.InvokeAwake(); break;
+                    case 1: state.Instance.InvokeOnEnable(); break;
+                    case 2: state.Instance.InvokeStart(); break;
+                    case 3: state.Instance.InvokeFixedUpdate(deltaTime); break;
+                    case 4: state.Instance.InvokeUpdate(deltaTime); break;
+                    case 5: state.Instance.InvokeLateUpdate(deltaTime); break;
+                    case 6: state.Instance.InvokeOnDisable(); break;
+                    case 7: state.Instance.InvokeDestroy(); break;
+                }
+            }
+            catch (Exception exception) { NativeApi.Log(exception.ToString()); }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        public static void InvokePhysicsEventInstance(uint entityID, int eventType, uint otherEntityID)
+        {
+            if (!s_Instances.TryGetValue(entityID, out ScriptInstanceState? state))
+                return;
+
+            try { state.Instance.InvokePhysicsEvent(eventType, otherEntityID); }
             catch (Exception exception) { NativeApi.Log(exception.ToString()); }
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
         public static void UpdateInstance(uint entityID, float deltaTime)
         {
-            if (!s_Instances.TryGetValue(entityID, out CCEngine.GameScript? instance))
+            if (!s_Instances.TryGetValue(entityID, out ScriptInstanceState? state))
                 return;
 
-            try { instance.InvokeUpdate(deltaTime); }
+            try { state.Instance.InvokeUpdate(deltaTime); }
             catch (Exception exception) { NativeApi.Log(exception.ToString()); }
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
         public static void Shutdown()
         {
-            foreach (CCEngine.GameScript instance in s_Instances.Values)
+            foreach (ScriptInstanceState state in s_Instances.Values)
             {
-                try { instance.InvokeDestroy(); }
+                try { state.Instance.InvokeDestroy(); }
                 catch (Exception exception) { NativeApi.Log(exception.ToString()); }
             }
             s_Instances.Clear();

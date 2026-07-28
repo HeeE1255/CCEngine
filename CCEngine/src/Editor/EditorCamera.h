@@ -19,6 +19,7 @@ namespace CCEngine
         const DirectX::XMFLOAT4& GetRotation() const { return m_RotationQuat; }
 
         void ResetCamera();
+        void FrameSelection(const DirectX::XMFLOAT3& target, float radius);
 
     private:
         DirectX::XMFLOAT3 m_Position = { 0.0f, 0.0f, -5.0f };

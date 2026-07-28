@@ -25,6 +25,7 @@
 #include "UI/KeyBindingPickerPanel.h"
 #include "Core/AssetDatabase.h"
 #include <windows.h>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -261,6 +262,212 @@ namespace CCEngine {
 
             for (entt::entity childID : entity.GetComponent<RelationshipComponent>().Children)
                 AccumulateFrameBounds(Entity{ childID, entity.GetScene() }, minPoint, maxPoint, hasPoint);
+        }
+
+        DirectX::XMFLOAT3 TransformPoint(const DirectX::XMFLOAT3& point, DirectX::XMMATRIX transform)
+        {
+            DirectX::XMFLOAT3 result;
+            DirectX::XMStoreFloat3(&result, DirectX::XMVector3TransformCoord(DirectX::XMLoadFloat3(&point), transform));
+            return result;
+        }
+
+        void DrawWorldDebugLine(const DirectX::XMFLOAT3& a, const DirectX::XMFLOAT3& b, float thickness, const DirectX::XMFLOAT4& color)
+        {
+            float dx = b.x - a.x;
+            float dy = b.y - a.y;
+            float length = std::sqrt(dx * dx + dy * dy);
+            if (length <= 0.0001f)
+                return;
+
+            DirectX::XMFLOAT3 center = {
+                (a.x + b.x) * 0.5f,
+                (a.y + b.y) * 0.5f,
+                (a.z + b.z) * 0.5f
+            };
+
+            float angle = std::atan2(dy, dx);
+            DirectX::XMMATRIX transform =
+                DirectX::XMMatrixScaling(length, thickness, 1.0f) *
+                DirectX::XMMatrixRotationZ(angle) *
+                DirectX::XMMatrixTranslation(center.x, center.y, center.z);
+
+            Renderer2D::DrawQuad(transform, color, -1);
+        }
+
+        void DrawWorldDebugLine3D(const DirectX::XMFLOAT3& a, const DirectX::XMFLOAT3& b, const DirectX::XMFLOAT3& cameraPosition, float thickness, const DirectX::XMFLOAT4& color)
+        {
+            DirectX::XMVECTOR start = DirectX::XMLoadFloat3(&a);
+            DirectX::XMVECTOR end = DirectX::XMLoadFloat3(&b);
+            DirectX::XMVECTOR line = DirectX::XMVectorSubtract(end, start);
+            float length = DirectX::XMVectorGetX(DirectX::XMVector3Length(line));
+            if (length <= 0.0001f)
+                return;
+
+            DirectX::XMVECTOR center = DirectX::XMVectorScale(DirectX::XMVectorAdd(start, end), 0.5f);
+            DirectX::XMVECTOR lineAxis = DirectX::XMVector3Normalize(line);
+            DirectX::XMVECTOR camera = DirectX::XMLoadFloat3(&cameraPosition);
+            DirectX::XMVECTOR toCamera = DirectX::XMVectorSubtract(camera, center);
+            if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(toCamera)) <= 0.0001f)
+                toCamera = DirectX::XMVectorSet(0.0f, 0.0f, -1.0f, 0.0f);
+
+            DirectX::XMVECTOR side = DirectX::XMVector3Cross(lineAxis, toCamera);
+            if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(side)) <= 0.0001f)
+                side = DirectX::XMVector3Cross(lineAxis, DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f));
+            if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(side)) <= 0.0001f)
+                side = DirectX::XMVector3Cross(lineAxis, DirectX::XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f));
+            side = DirectX::XMVector3Normalize(side);
+
+            DirectX::XMVECTOR normal = DirectX::XMVector3Normalize(DirectX::XMVector3Cross(side, lineAxis));
+            DirectX::XMVECTOR xAxis = DirectX::XMVectorScale(lineAxis, length);
+            DirectX::XMVECTOR yAxis = DirectX::XMVectorScale(side, thickness);
+            DirectX::XMVECTOR zAxis = DirectX::XMVectorScale(normal, thickness);
+
+            DirectX::XMFLOAT3 x, y, z, c;
+            DirectX::XMStoreFloat3(&x, xAxis);
+            DirectX::XMStoreFloat3(&y, yAxis);
+            DirectX::XMStoreFloat3(&z, zAxis);
+            DirectX::XMStoreFloat3(&c, center);
+
+            // 3D 와이어는 선분마다 카메라를 향하는 얇은 사각형으로 그린다.
+            // 실제 선 렌더러를 새로 만들지 않아도 깊이 테스트와 카메라 회전을 자연스럽게 따른다.
+            DirectX::XMMATRIX transform(
+                x.x, x.y, x.z, 0.0f,
+                y.x, y.y, y.z, 0.0f,
+                z.x, z.y, z.z, 0.0f,
+                c.x, c.y, c.z, 1.0f);
+
+            Renderer2D::DrawQuad(transform, color, -1);
+        }
+
+        void DrawColliderBoxOutline(DirectX::XMMATRIX entityWorld, const BoxCollider2DComponent& collider, const DirectX::XMFLOAT4& color)
+        {
+            DirectX::XMMATRIX colliderLocal =
+                DirectX::XMMatrixScaling(collider.Size.x, collider.Size.y, 1.0f) *
+                DirectX::XMMatrixTranslation(collider.Offset.x, collider.Offset.y, 0.0f);
+            DirectX::XMMATRIX colliderWorld = colliderLocal * entityWorld;
+
+            DirectX::XMFLOAT3 corners[4] =
+            {
+                TransformPoint({ -0.5f, -0.5f, 0.0f }, colliderWorld),
+                TransformPoint({  0.5f, -0.5f, 0.0f }, colliderWorld),
+                TransformPoint({  0.5f,  0.5f, 0.0f }, colliderWorld),
+                TransformPoint({ -0.5f,  0.5f, 0.0f }, colliderWorld)
+            };
+
+            constexpr float lineThickness = 0.025f;
+            DrawWorldDebugLine(corners[0], corners[1], lineThickness, color);
+            DrawWorldDebugLine(corners[1], corners[2], lineThickness, color);
+            DrawWorldDebugLine(corners[2], corners[3], lineThickness, color);
+            DrawWorldDebugLine(corners[3], corners[0], lineThickness, color);
+        }
+
+        void DrawWireBox3D(DirectX::XMMATRIX colliderWorld, const DirectX::XMFLOAT3& cameraPosition, const DirectX::XMFLOAT4& color)
+        {
+            DirectX::XMFLOAT3 corners[8] =
+            {
+                TransformPoint({ -0.5f, -0.5f, -0.5f }, colliderWorld),
+                TransformPoint({  0.5f, -0.5f, -0.5f }, colliderWorld),
+                TransformPoint({  0.5f,  0.5f, -0.5f }, colliderWorld),
+                TransformPoint({ -0.5f,  0.5f, -0.5f }, colliderWorld),
+                TransformPoint({ -0.5f, -0.5f,  0.5f }, colliderWorld),
+                TransformPoint({  0.5f, -0.5f,  0.5f }, colliderWorld),
+                TransformPoint({  0.5f,  0.5f,  0.5f }, colliderWorld),
+                TransformPoint({ -0.5f,  0.5f,  0.5f }, colliderWorld)
+            };
+
+            constexpr std::array<std::pair<int, int>, 12> edges =
+            {
+                std::pair<int, int>{0, 1}, {1, 2}, {2, 3}, {3, 0},
+                {4, 5}, {5, 6}, {6, 7}, {7, 4},
+                {0, 4}, {1, 5}, {2, 6}, {3, 7}
+            };
+
+            constexpr float lineThickness = 0.018f;
+            for (const auto& edge : edges)
+                DrawWorldDebugLine3D(corners[edge.first], corners[edge.second], cameraPosition, lineThickness, color);
+        }
+
+        void DrawBoxCollider3DOutline(DirectX::XMMATRIX entityWorld, const BoxCollider3DComponent& collider, const DirectX::XMFLOAT3& cameraPosition, const DirectX::XMFLOAT4& color)
+        {
+            DirectX::XMMATRIX colliderWorld =
+                DirectX::XMMatrixScaling(collider.Size.x, collider.Size.y, collider.Size.z) *
+                DirectX::XMMatrixTranslation(collider.Offset.x, collider.Offset.y, collider.Offset.z) *
+                entityWorld;
+            DrawWireBox3D(colliderWorld, cameraPosition, color);
+        }
+
+        void DrawSphereCollider3DOutline(DirectX::XMMATRIX entityWorld, const SphereCollider3DComponent& collider, const DirectX::XMFLOAT3& cameraPosition, const DirectX::XMFLOAT4& color)
+        {
+            DirectX::XMMATRIX colliderWorld =
+                DirectX::XMMatrixScaling(collider.Radius, collider.Radius, collider.Radius) *
+                DirectX::XMMatrixTranslation(collider.Offset.x, collider.Offset.y, collider.Offset.z) *
+                entityWorld;
+
+            constexpr int segments = 36;
+            constexpr float pi = 3.1415926535f;
+            constexpr float lineThickness = 0.018f;
+
+            for (int plane = 0; plane < 3; ++plane)
+            {
+                DirectX::XMFLOAT3 previous{};
+                for (int i = 0; i <= segments; ++i)
+                {
+                    float angle = (float)i / (float)segments * pi * 2.0f;
+                    float c = std::cos(angle);
+                    float s = std::sin(angle);
+                    DirectX::XMFLOAT3 local =
+                        plane == 0 ? DirectX::XMFLOAT3{ c, s, 0.0f } :
+                        plane == 1 ? DirectX::XMFLOAT3{ c, 0.0f, s } :
+                                     DirectX::XMFLOAT3{ 0.0f, c, s };
+                    DirectX::XMFLOAT3 current = TransformPoint(local, colliderWorld);
+                    if (i > 0)
+                        DrawWorldDebugLine3D(previous, current, cameraPosition, lineThickness, color);
+                    previous = current;
+                }
+            }
+        }
+
+        void DrawCylinderCollider3DOutline(DirectX::XMMATRIX entityWorld, const CylinderCollider3DComponent& collider, const DirectX::XMFLOAT3& cameraPosition, const DirectX::XMFLOAT4& color)
+        {
+            DirectX::XMMATRIX colliderWorld =
+                DirectX::XMMatrixTranslation(collider.Offset.x, collider.Offset.y, collider.Offset.z) *
+                entityWorld;
+
+            constexpr int segments = 36;
+            constexpr float pi = 3.1415926535f;
+            constexpr float lineThickness = 0.018f;
+            const float halfHeight = collider.Height * 0.5f;
+
+            DirectX::XMFLOAT3 previousTop{};
+            DirectX::XMFLOAT3 previousBottom{};
+            for (int i = 0; i <= segments; ++i)
+            {
+                float angle = (float)i / (float)segments * pi * 2.0f;
+                float x = std::cos(angle) * collider.Radius;
+                float z = std::sin(angle) * collider.Radius;
+                DirectX::XMFLOAT3 top = TransformPoint({ x, halfHeight, z }, colliderWorld);
+                DirectX::XMFLOAT3 bottom = TransformPoint({ x, -halfHeight, z }, colliderWorld);
+                if (i > 0)
+                {
+                    DrawWorldDebugLine3D(previousTop, top, cameraPosition, lineThickness, color);
+                    DrawWorldDebugLine3D(previousBottom, bottom, cameraPosition, lineThickness, color);
+                }
+                if (i % 9 == 0)
+                    DrawWorldDebugLine3D(top, bottom, cameraPosition, lineThickness, color);
+                previousTop = top;
+                previousBottom = bottom;
+            }
+        }
+
+        DirectX::XMFLOAT4 GetRigidbodyDebugColor(Rigidbody2DComponent::BodyType type)
+        {
+            switch (type)
+            {
+                case Rigidbody2DComponent::BodyType::Dynamic: return { 0.35f, 0.55f, 1.0f, 0.9f };
+                case Rigidbody2DComponent::BodyType::Kinematic: return { 0.75f, 0.45f, 1.0f, 0.9f };
+                case Rigidbody2DComponent::BodyType::Static:
+                default: return { 0.72f, 0.72f, 0.72f, 0.9f };
+            }
         }
     }
 
@@ -560,6 +767,7 @@ namespace CCEngine {
         // 자체 기즈모 시스템 구현
         auto selectedEntity = m_HierarchyPanel->GetSelectedEntity();
         auto selectedEntities = m_HierarchyPanel->GetSelectedEntities();
+        RenderPhysicsDebugView(m_Camera, selectedEntities);
         m_GizmoSystem.OnRenderSkeleton(selectedEntity);
         m_GizmoSystem.OnRender(selectedEntities, selectedEntity, m_Camera.GetViewMatrix(), m_Camera.GetProjectionMatrix());
 
@@ -576,9 +784,9 @@ namespace CCEngine {
         for (auto entity : view)
         {
             auto& cameraComp = view.get<CameraComponent>(entity);
-            if (cameraComp.Primary)
+            CCEngine::Entity cameraEntity(entity, m_ActiveScene);
+            if (cameraComp.Primary && m_ActiveScene->IsEntityActiveInHierarchy(cameraEntity))
             {
-                CCEngine::Entity cameraEntity(entity, m_ActiveScene);
                 auto& transformComp = cameraEntity.GetComponent<TransformComponent>();
 
                 float aspect = 16.0f / 9.0f;
@@ -1511,6 +1719,177 @@ namespace CCEngine {
 
         if (m_BtnToolSnap)
             m_BtnToolSnap->SetActive(m_GizmoSystem.IsSnappingEnabled());
+
+        UpdatePhysicsDebugButton();
+    }
+
+    void EditorLayer::CyclePhysicsDebugViewMode()
+    {
+        m_PhysicsDebugViewMode = (m_PhysicsDebugViewMode + 1) % 7;
+        UpdatePhysicsDebugButton();
+    }
+
+    void EditorLayer::UpdatePhysicsDebugButton()
+    {
+        if (!m_BtnPhysicsDebug)
+            return;
+
+        switch (m_PhysicsDebugViewMode)
+        {
+            case 1:
+                m_BtnPhysicsDebug->SetText("Phys 2D: Sel");
+                m_BtnPhysicsDebug->SetActive(true);
+                break;
+            case 2:
+                m_BtnPhysicsDebug->SetText("Phys 2D: All");
+                m_BtnPhysicsDebug->SetActive(true);
+                break;
+            case 3:
+                m_BtnPhysicsDebug->SetText("Phys 3D: Sel");
+                m_BtnPhysicsDebug->SetActive(true);
+                break;
+            case 4:
+                m_BtnPhysicsDebug->SetText("Phys 3D: All");
+                m_BtnPhysicsDebug->SetActive(true);
+                break;
+            case 5:
+                m_BtnPhysicsDebug->SetText("Phys Both: Sel");
+                m_BtnPhysicsDebug->SetActive(true);
+                break;
+            case 6:
+                m_BtnPhysicsDebug->SetText("Phys Both: All");
+                m_BtnPhysicsDebug->SetActive(true);
+                break;
+            default:
+                m_BtnPhysicsDebug->SetText("Physics: Off");
+                m_BtnPhysicsDebug->SetActive(false);
+                break;
+        }
+    }
+
+    void EditorLayer::RenderPhysicsDebugView(const PerspectiveCamera& camera, const std::vector<Entity>& selectedEntities)
+    {
+        if (!m_ActiveScene || m_PhysicsDebugViewMode == 0)
+            return;
+
+        const bool draw2D = m_PhysicsDebugViewMode == 1 || m_PhysicsDebugViewMode == 2 || m_PhysicsDebugViewMode == 5 || m_PhysicsDebugViewMode == 6;
+        const bool draw3D = m_PhysicsDebugViewMode == 3 || m_PhysicsDebugViewMode == 4 || m_PhysicsDebugViewMode == 5 || m_PhysicsDebugViewMode == 6;
+        const bool selectedOnly = m_PhysicsDebugViewMode == 1 || m_PhysicsDebugViewMode == 3 || m_PhysicsDebugViewMode == 5;
+
+        std::vector<Entity> targets;
+        if (selectedOnly)
+        {
+            targets = selectedEntities;
+        }
+        else
+        {
+            std::unordered_set<entt::entity> uniqueTargets;
+            auto addTarget = [&](entt::entity entityID)
+                {
+                    if (uniqueTargets.insert(entityID).second)
+                        targets.emplace_back(entityID, m_ActiveScene);
+                };
+
+            if (draw2D)
+            {
+                auto view = m_ActiveScene->GetRegistry().view<TransformComponent, BoxCollider2DComponent>();
+                targets.reserve(targets.size() + (size_t)view.size_hint());
+                for (auto entityID : view)
+                    addTarget(entityID);
+            }
+
+            if (draw3D)
+            {
+                m_ActiveScene->GetRegistry().view<TransformComponent, BoxCollider3DComponent>().each([&](auto entityID, auto&, auto&) { addTarget(entityID); });
+                m_ActiveScene->GetRegistry().view<TransformComponent, SphereCollider3DComponent>().each([&](auto entityID, auto&, auto&) { addTarget(entityID); });
+                m_ActiveScene->GetRegistry().view<TransformComponent, CylinderCollider3DComponent>().each([&](auto entityID, auto&, auto&) { addTarget(entityID); });
+                m_ActiveScene->GetRegistry().view<TransformComponent, MeshCollider3DComponent>().each([&](auto entityID, auto&, auto&) { addTarget(entityID); });
+            }
+        }
+
+        if (targets.empty())
+            return;
+
+        Renderer2D::BeginScene(camera);
+
+        for (Entity entity : targets)
+        {
+            if (!entity || entity.GetScene() != m_ActiveScene)
+                continue;
+
+            entt::entity handle = (entt::entity)entity;
+            if (!m_ActiveScene->GetRegistry().valid(handle) ||
+                !entity.HasComponent<TransformComponent>() ||
+                !m_ActiveScene->IsEntityActiveInHierarchy(entity))
+            {
+                continue;
+            }
+
+            DirectX::XMMATRIX entityWorld = GetEditorWorldTransform(entity);
+            if (draw2D && entity.HasComponent<BoxCollider2DComponent>())
+            {
+                const auto& collider = entity.GetComponent<BoxCollider2DComponent>();
+                DirectX::XMFLOAT4 colliderColor = collider.IsTrigger ?
+                    DirectX::XMFLOAT4{ 1.0f, 0.63f, 0.18f, 0.92f } :
+                    DirectX::XMFLOAT4{ 0.25f, 0.95f, 0.48f, 0.92f };
+
+                // 물리 디버그 뷰는 RuntimeBodyId를 읽지 않는다.
+                // 에디터에서는 Play 전에도 배치 상태를 봐야 하므로 Transform/Collider 원본 데이터가 기준이다.
+                DrawColliderBoxOutline(entityWorld, collider, colliderColor);
+
+                if (entity.HasComponent<Rigidbody2DComponent>())
+                {
+                    const auto& rb = entity.GetComponent<Rigidbody2DComponent>();
+                    DirectX::XMFLOAT3 center = TransformPoint(
+                        { collider.Offset.x, collider.Offset.y, 0.02f },
+                        entityWorld);
+
+                    DirectX::XMMATRIX markerTransform =
+                        DirectX::XMMatrixScaling(0.12f, 0.12f, 1.0f) *
+                        DirectX::XMMatrixTranslation(center.x, center.y, center.z);
+
+                    Renderer2D::DrawQuad(markerTransform, GetRigidbodyDebugColor(rb.Type), -1);
+                }
+            }
+
+            if (draw3D)
+            {
+                const DirectX::XMFLOAT3 cameraPosition = camera.GetPosition();
+                if (entity.HasComponent<BoxCollider3DComponent>())
+                {
+                    const auto& collider = entity.GetComponent<BoxCollider3DComponent>();
+                    DirectX::XMFLOAT4 color = collider.IsTrigger ? DirectX::XMFLOAT4{ 1.0f, 0.62f, 0.24f, 0.92f } : DirectX::XMFLOAT4{ 0.35f, 0.85f, 1.0f, 0.92f };
+                    DrawBoxCollider3DOutline(entityWorld, collider, cameraPosition, color);
+                }
+
+                if (entity.HasComponent<SphereCollider3DComponent>())
+                {
+                    const auto& collider = entity.GetComponent<SphereCollider3DComponent>();
+                    DirectX::XMFLOAT4 color = collider.IsTrigger ? DirectX::XMFLOAT4{ 1.0f, 0.62f, 0.24f, 0.92f } : DirectX::XMFLOAT4{ 0.35f, 0.85f, 1.0f, 0.92f };
+                    DrawSphereCollider3DOutline(entityWorld, collider, cameraPosition, color);
+                }
+
+                if (entity.HasComponent<CylinderCollider3DComponent>())
+                {
+                    const auto& collider = entity.GetComponent<CylinderCollider3DComponent>();
+                    DirectX::XMFLOAT4 color = collider.IsTrigger ? DirectX::XMFLOAT4{ 1.0f, 0.62f, 0.24f, 0.92f } : DirectX::XMFLOAT4{ 0.35f, 0.85f, 1.0f, 0.92f };
+                    DrawCylinderCollider3DOutline(entityWorld, collider, cameraPosition, color);
+                }
+
+                if (entity.HasComponent<MeshCollider3DComponent>())
+                {
+                    const auto& collider = entity.GetComponent<MeshCollider3DComponent>();
+                    DirectX::XMFLOAT4 color = collider.IsTrigger ? DirectX::XMFLOAT4{ 1.0f, 0.62f, 0.24f, 0.92f } : DirectX::XMFLOAT4{ 0.7f, 0.55f, 1.0f, 0.92f };
+                    DirectX::XMMATRIX colliderWorld =
+                        DirectX::XMMatrixScaling(collider.Size.x, collider.Size.y, collider.Size.z) *
+                        DirectX::XMMatrixTranslation(collider.Offset.x, collider.Offset.y, collider.Offset.z) *
+                        entityWorld;
+                    DrawWireBox3D(colliderWorld, cameraPosition, color);
+                }
+            }
+        }
+
+        Renderer2D::EndScene();
     }
 
     void EditorLayer::ConfigureUndoManager()
@@ -1833,6 +2212,230 @@ namespace CCEngine {
 
                 result.Passed = std::abs(originalX - 1.0f) < 0.0001f;
                 result.Message = result.Passed ? "Runtime scene edits stayed isolated from the editor scene." : "Runtime scene edit changed the editor scene.";
+                return result;
+            });
+
+        runner.AddTest("RuntimeLifecycle.ScriptOrderAndState", []()
+            {
+                EditorQATestResult result;
+                result.Name = "RuntimeLifecycle.ScriptOrderAndState";
+
+                Scene scene;
+                Entity entity = scene.CreateEntity("QA Runtime Script");
+                auto& transform = entity.GetComponent<TransformComponent>();
+                transform.Translation = { 0.0f, 0.0f, 0.0f };
+
+                auto& script = entity.AddComponent<ScriptComponent>();
+                script.ClassName = "Game.MoveUp";
+                script.Enabled = true;
+                script.FieldOverrides["Speed"] = "1.0";
+
+                scene.OnRuntimeStart();
+
+                if (!script.RuntimeInstanceCreated || !script.RuntimeAwakeCalled || !script.RuntimeEnabledCalled || !script.RuntimeStartCalled)
+                {
+                    scene.OnRuntimeStop();
+                    result.Passed = false;
+                    result.Message = "Script did not pass Awake -> OnEnable -> Start setup. Make sure C# scripts are built.";
+                    return result;
+                }
+
+                scene.OnUpdate(1.0f / 60.0f);
+                const float afterUpdateY = transform.Translation.y;
+
+                scene.SetSceneState(SceneState::Pause);
+                scene.OnUpdate(1.0f);
+                const float afterPauseY = transform.Translation.y;
+
+                scene.SetSceneState(SceneState::Play);
+                script.Enabled = false;
+                scene.OnUpdate(1.0f);
+                const float afterDisabledY = transform.Translation.y;
+                const bool disabledStateSent = !script.RuntimeEnabledCalled;
+
+                script.Enabled = true;
+                scene.OnUpdate(1.0f / 60.0f);
+                const float afterReenabledY = transform.Translation.y;
+                const bool reenabledStateSent = script.RuntimeEnabledCalled;
+
+                scene.OnRuntimeStop();
+                const bool runtimeFlagsCleared =
+                    !script.RuntimeInstanceCreated &&
+                    !script.RuntimeAwakeCalled &&
+                    !script.RuntimeEnabledCalled &&
+                    !script.RuntimeStartCalled;
+
+                const bool updateMoved = afterUpdateY > 0.0f;
+                const bool pauseHeld = std::abs(afterPauseY - afterUpdateY) < 0.0001f;
+                const bool disabledHeld = std::abs(afterDisabledY - afterPauseY) < 0.0001f;
+                const bool reenabledMoved = afterReenabledY > afterDisabledY;
+
+                result.Passed = updateMoved && pauseHeld && disabledHeld && disabledStateSent && reenabledMoved && reenabledStateSent && runtimeFlagsCleared;
+                result.Message = result.Passed
+                    ? "Script lifecycle setup, pause, disable/enable, update, and stop cleanup passed."
+                    : "Script lifecycle state or movement did not match the expected Play/Pause/Enabled behavior.";
+                return result;
+            });
+
+        runner.AddTest("RuntimeLifecycle.GameObjectActiveHierarchy", []()
+            {
+                EditorQATestResult result;
+                result.Name = "RuntimeLifecycle.GameObjectActiveHierarchy";
+
+                Scene scene;
+                Entity parent = scene.CreateEntity("QA Active Parent");
+                Entity child = scene.CreateEntity("QA Active Child");
+
+                auto& parentRel = parent.AddComponent<RelationshipComponent>();
+                auto& childRel = child.AddComponent<RelationshipComponent>();
+                parentRel.Children.push_back((entt::entity)child);
+                childRel.Parent = (entt::entity)parent;
+
+                auto& transform = child.GetComponent<TransformComponent>();
+                transform.Translation = { 0.0f, 0.0f, 0.0f };
+
+                auto& script = child.AddComponent<ScriptComponent>();
+                script.ClassName = "Game.MoveUp";
+                script.Enabled = true;
+                script.FieldOverrides["Speed"] = "10.0";
+
+                scene.SetEntityActiveSelf(parent, false);
+                const bool childInactiveByParent = !scene.IsEntityActiveInHierarchy(child);
+
+                scene.OnRuntimeStart();
+                scene.OnUpdate(1.0f / 60.0f);
+                const bool scriptNotCreatedWhileInactive = !script.RuntimeInstanceCreated;
+                const bool noMoveWhileInactive = std::abs(transform.Translation.y) < 0.0001f;
+
+                scene.SetEntityActiveSelf(parent, true);
+                scene.OnUpdate(1.0f / 60.0f);
+                const bool scriptCreatedAfterEnable = script.RuntimeInstanceCreated && script.RuntimeAwakeCalled && script.RuntimeEnabledCalled && script.RuntimeStartCalled;
+                const bool movedAfterEnable = transform.Translation.y > 0.0f;
+
+                const float yAfterEnable = transform.Translation.y;
+                scene.SetEntityActiveSelf(child, false);
+                scene.OnUpdate(1.0f / 60.0f);
+                const bool disabledStoppedUpdate = std::abs(transform.Translation.y - yAfterEnable) < 0.0001f && !script.RuntimeEnabledCalled;
+
+                scene.OnRuntimeStop();
+
+                result.Passed = childInactiveByParent && scriptNotCreatedWhileInactive && noMoveWhileInactive && scriptCreatedAfterEnable && movedAfterEnable && disabledStoppedUpdate;
+                result.Message = result.Passed
+                    ? "ActiveSelf and parent ActiveInHierarchy gate script creation, enable, start, and update correctly."
+                    : "Active hierarchy did not gate script lifecycle or movement as expected.";
+                return result;
+            });
+
+        runner.AddTest("RuntimeLifecycle.ScriptAddRemoveDestroyQueue", []()
+            {
+                EditorQATestResult result;
+                result.Name = "RuntimeLifecycle.ScriptAddRemoveDestroyQueue";
+
+                Scene scene;
+                Entity scriptEntity = scene.CreateEntity("QA Runtime Add Remove");
+                auto& scriptTransform = scriptEntity.GetComponent<TransformComponent>();
+                scriptTransform.Translation = { 0.0f, 0.0f, 0.0f };
+
+                scene.OnRuntimeStart();
+
+                auto& script = scene.AddScriptComponent(scriptEntity, "Game.MoveUp", true);
+                script.FieldOverrides["Speed"] = "10.0";
+
+                const bool awakeAndEnableNow =
+                    script.RuntimeInstanceCreated &&
+                    script.RuntimeAwakeCalled &&
+                    script.RuntimeEnabledCalled &&
+                    !script.RuntimeStartCalled;
+
+                scene.OnUpdate(1.0f / 60.0f);
+                const bool startAndUpdateRan = script.RuntimeStartCalled && scriptTransform.Translation.y > 0.0f;
+
+                const float yAfterRemove = scriptTransform.Translation.y;
+                scene.RemoveScriptComponent(scriptEntity);
+                const bool removedComponent = !scriptEntity.HasComponent<ScriptComponent>();
+
+                scene.OnUpdate(1.0f / 60.0f);
+                const bool removedScriptStopped = std::abs(scriptTransform.Translation.y - yAfterRemove) < 0.0001f;
+
+                Entity destroyEntity = scene.CreateEntity("QA Runtime Destroy Queue");
+                scene.AddScriptComponent(destroyEntity, "Game.MoveUp", true);
+                scene.OnUpdate(1.0f / 60.0f);
+
+                const entt::entity destroyHandle = (entt::entity)destroyEntity;
+                scene.DestroyEntity(destroyEntity);
+                const bool queuedUntilFrameEnd = scene.GetRegistry().valid(destroyHandle);
+
+                // Destroy는 프레임 중간에 바로 registry를 지우지 않는다.
+                // 다음 Update 끝에서 큐를 비워야 view 반복 중 삭제로 인한 크래시를 피할 수 있다.
+                scene.OnUpdate(1.0f / 60.0f);
+                const bool destroyedAfterFlush = !scene.GetRegistry().valid(destroyHandle);
+
+                scene.OnRuntimeStop();
+
+                result.Passed = awakeAndEnableNow && startAndUpdateRan && removedComponent && removedScriptStopped && queuedUntilFrameEnd && destroyedAfterFlush;
+                result.Message = result.Passed
+                    ? "Runtime script add/remove and queued destroy behaved safely in Play Mode."
+                    : "Runtime script add/remove or destroy queue did not match the expected lifecycle behavior.";
+                return result;
+            });
+
+        runner.AddTest("RuntimeLifecycle.PhysicsCollisionTriggerQueue", []()
+            {
+                EditorQATestResult result;
+                result.Name = "RuntimeLifecycle.PhysicsCollisionTriggerQueue";
+
+                auto addPhysicsBody = [](Entity entity, Rigidbody2DComponent::BodyType type, bool isTrigger)
+                    {
+                        auto& rb = entity.AddComponent<Rigidbody2DComponent>();
+                        rb.Type = type;
+
+                        auto& collider = entity.AddComponent<BoxCollider2DComponent>();
+                        collider.Size = { 1.0f, 1.0f };
+                        collider.IsTrigger = isTrigger;
+                    };
+
+                Scene scene;
+
+                Entity collisionProbe = scene.CreateEntity("QA Collision Probe");
+                collisionProbe.GetComponent<TransformComponent>().Translation = { 0.0f, 0.0f, 0.0f };
+                addPhysicsBody(collisionProbe, Rigidbody2DComponent::BodyType::Dynamic, false);
+                auto& collisionScript = collisionProbe.AddComponent<ScriptComponent>();
+                collisionScript.ClassName = "Game.PhysicsEventProbe";
+
+                Entity collisionWall = scene.CreateEntity("QA Collision Wall");
+                collisionWall.GetComponent<TransformComponent>().Translation = { 0.0f, 0.0f, 0.0f };
+                addPhysicsBody(collisionWall, Rigidbody2DComponent::BodyType::Static, false);
+
+                Entity triggerProbe = scene.CreateEntity("QA Trigger Probe");
+                triggerProbe.GetComponent<TransformComponent>().Translation = { 3.0f, 0.0f, 0.0f };
+                addPhysicsBody(triggerProbe, Rigidbody2DComponent::BodyType::Dynamic, false);
+                auto& triggerScript = triggerProbe.AddComponent<ScriptComponent>();
+                triggerScript.ClassName = "Game.PhysicsEventProbe";
+
+                Entity triggerZone = scene.CreateEntity("QA Trigger Zone");
+                triggerZone.GetComponent<TransformComponent>().Translation = { 3.0f, 0.0f, 0.0f };
+                addPhysicsBody(triggerZone, Rigidbody2DComponent::BodyType::Static, true);
+
+                scene.OnRuntimeStart();
+
+                scene.OnUpdate(1.0f / 60.0f);
+                const auto collisionAfterEnter = collisionProbe.GetComponent<TransformComponent>().Translation;
+                const auto triggerAfterEnter = triggerProbe.GetComponent<TransformComponent>().Translation;
+                const bool collisionEnter = collisionAfterEnter.x > 9.0f;
+                const bool triggerEnter = triggerAfterEnter.x > 39.0f;
+
+                scene.OnUpdate(1.0f / 60.0f);
+                const auto collisionAfterStay = collisionProbe.GetComponent<TransformComponent>().Translation;
+                const auto triggerAfterStay = triggerProbe.GetComponent<TransformComponent>().Translation;
+                const bool collisionStay = collisionAfterStay.y > 19.0f;
+                const bool triggerStay = triggerAfterStay.y > 49.0f;
+
+                scene.OnRuntimeStop();
+
+                result.Passed = collisionEnter && collisionStay && triggerEnter && triggerStay;
+                result.Message = result.Passed
+                    ? "Collision and trigger events were queued after physics and dispatched to C# scripts."
+                    : "Collision or trigger queued event dispatch did not reach the C# probe script.";
                 return result;
             });
 
@@ -3151,6 +3754,11 @@ namespace CCEngine {
         m_BtnToolFrame->SetOffsetMin(362.0f, -12.0f); m_BtnToolFrame->SetOffsetMax(424.0f, 12.0f);
         m_ToolbarPanel->AddChild(m_BtnToolFrame);
 
+        m_BtnPhysicsDebug = new UI::Button("BtnPhysicsDebug", "Physics: Off");
+        m_BtnPhysicsDebug->SetAnchorMin(0.0f, 0.5f); m_BtnPhysicsDebug->SetAnchorMax(0.0f, 0.5f);
+        m_BtnPhysicsDebug->SetOffsetMin(432.0f, -12.0f); m_BtnPhysicsDebug->SetOffsetMax(580.0f, 12.0f);
+        m_ToolbarPanel->AddChild(m_BtnPhysicsDebug);
+
         m_BtnPlay = new UI::Button("BtnPlay", "Play");
         m_BtnPlay->SetAnchorMin(1.0f, 0.5f); m_BtnPlay->SetAnchorMax(1.0f, 0.5f);
         m_BtnPlay->SetOffsetMin(-220.0f, -12.0f); m_BtnPlay->SetOffsetMax(-160.0f, 12.0f);
@@ -3497,6 +4105,7 @@ namespace CCEngine {
         m_BtnToolPivot->SetOnClick([this]() { m_GizmoSystem.TogglePivotMode(); UpdateSceneToolButtons(); });
         m_BtnToolSnap->SetOnClick([this]() { m_GizmoSystem.ToggleSnapping(); UpdateSceneToolButtons(); });
         m_BtnToolFrame->SetOnClick([this]() { FrameSelectedEntity(); });
+        m_BtnPhysicsDebug->SetOnClick([this]() { CyclePhysicsDebugViewMode(); });
 
         m_BtnPlay->SetOnClick([this]() {
             if (!m_ActiveScene)

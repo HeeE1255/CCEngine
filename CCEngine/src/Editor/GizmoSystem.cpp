@@ -5,6 +5,8 @@
 #include "Renderer/MeshFactory.h"
 #include "Utils/MathUtils.h"
 #include <algorithm>
+#include <cfloat>
+#include <cmath>
 #include <functional>
 
 namespace CCEngine {
@@ -56,6 +58,61 @@ namespace CCEngine {
             return DirectX::XMMatrixIdentity();
         }
 
+        std::vector<Entity> BuildValidGizmoSelection(const std::vector<Entity>& selectedEntities, Entity activeEntity)
+        {
+            std::vector<Entity> result;
+            auto addIfValid = [&result](Entity entity)
+                {
+                    if (!entity || !entity.HasComponent<TransformComponent>())
+                        return;
+
+                    auto existing = std::find_if(result.begin(), result.end(),
+                        [entity](Entity selected) { return selected == entity; });
+                    if (existing == result.end())
+                        result.push_back(entity);
+                };
+
+            for (Entity entity : selectedEntities)
+                addIfValid(entity);
+
+            addIfValid(activeEntity);
+            return result;
+        }
+
+        DirectX::XMFLOAT3 CalculateSelectionCenter(const std::vector<Entity>& entities, Entity activeEntity, GizmoPivotMode pivotMode)
+        {
+            if (pivotMode == GizmoPivotMode::Pivot || entities.size() <= 1)
+                return GetWorldPosition(activeEntity);
+
+            DirectX::XMVECTOR minPoint = DirectX::XMVectorSet(FLT_MAX, FLT_MAX, FLT_MAX, 0.0f);
+            DirectX::XMVECTOR maxPoint = DirectX::XMVectorSet(-FLT_MAX, -FLT_MAX, -FLT_MAX, 0.0f);
+            bool hasPoint = false;
+
+            for (Entity entity : entities)
+            {
+                DirectX::XMFLOAT3 worldPosition = GetWorldPosition(entity);
+                DirectX::XMVECTOR point = DirectX::XMLoadFloat3(&worldPosition);
+                minPoint = DirectX::XMVectorMin(minPoint, point);
+                maxPoint = DirectX::XMVectorMax(maxPoint, point);
+                hasPoint = true;
+            }
+
+            DirectX::XMFLOAT3 center = GetWorldPosition(activeEntity);
+            if (hasPoint)
+                DirectX::XMStoreFloat3(&center, DirectX::XMVectorScale(DirectX::XMVectorAdd(minPoint, maxPoint), 0.5f));
+            return center;
+        }
+
+        void StoreEulerFromQuaternion(TransformComponent& transform, DirectX::XMVECTOR quaternion)
+        {
+            DirectX::XMFLOAT4 qv;
+            DirectX::XMStoreFloat4(&qv, quaternion);
+            float sinp = 2.0f * (qv.w * qv.x - qv.y * qv.z);
+            transform.Rotation.x = std::abs(sinp) >= 1.0f ? std::copysign(DirectX::XM_PI / 2.0f, sinp) : std::asin(sinp);
+            transform.Rotation.y = std::atan2(2.0f * (qv.w * qv.y + qv.z * qv.x), 1.0f - 2.0f * (qv.x * qv.x + qv.y * qv.y));
+            transform.Rotation.z = std::atan2(2.0f * (qv.w * qv.z + qv.x * qv.y), 1.0f - 2.0f * (qv.x * qv.x + qv.z * qv.z));
+        }
+
         DirectX::XMMATRIX BuildBoneLineTransform(const DirectX::XMFLOAT3& start, const DirectX::XMFLOAT3& end, float thickness)
         {
             DirectX::XMVECTOR p0 = DirectX::XMLoadFloat3(&start);
@@ -91,6 +148,14 @@ namespace CCEngine {
             return DirectX::XMMatrixScaling(length, thickness, thickness) *
                 rotation *
                 DirectX::XMMatrixTranslation(midpoint.x, midpoint.y, midpoint.z);
+        }
+
+        float SnapFloat(float value, float step)
+        {
+            if (step <= 0.0001f)
+                return value;
+
+            return std::round(value / step) * step;
         }
 
         Entity FindModelRoot(Entity entity)
@@ -237,12 +302,23 @@ namespace CCEngine {
 
     void GizmoSystem::OnRender(Entity selectedEntity, DirectX::XMMATRIX viewMatrix, DirectX::XMMATRIX projMatrix)
     {
-        if (!selectedEntity || m_Mode == GizmoMode::None) return;
-        if (!selectedEntity.HasComponent<TransformComponent>()) return;
+        std::vector<Entity> singleSelection;
+        if (selectedEntity)
+            singleSelection.push_back(selectedEntity);
+        OnRender(singleSelection, selectedEntity, viewMatrix, projMatrix);
+    }
 
-        auto& tc = selectedEntity.GetComponent<TransformComponent>();
-        DirectX::XMMATRIX worldTransform = GetWorldTransform(selectedEntity);
-        DirectX::XMFLOAT3 worldPosition = GetWorldPosition(selectedEntity);
+    void GizmoSystem::OnRender(const std::vector<Entity>& selectedEntities, Entity activeEntity, DirectX::XMMATRIX viewMatrix, DirectX::XMMATRIX projMatrix)
+    {
+        if (!activeEntity || m_Mode == GizmoMode::None) return;
+        if (!activeEntity.HasComponent<TransformComponent>()) return;
+
+        std::vector<Entity> validSelection = BuildValidGizmoSelection(selectedEntities, activeEntity);
+        if (validSelection.empty())
+            return;
+
+        DirectX::XMMATRIX worldTransform = GetWorldTransform(activeEntity);
+        DirectX::XMFLOAT3 worldPosition = CalculateSelectionCenter(validSelection, activeEntity, m_PivotMode);
         DirectX::XMVECTOR objPos = DirectX::XMLoadFloat3(&worldPosition);
 
         // =========================================================
@@ -272,7 +348,8 @@ namespace CCEngine {
             }
         }
 
-        // 최종 기즈모의 기준 트랜스폼 (오브젝트 위치 + 거리 비례 스케일 + 회전)
+        // 최종 기즈모 기준점이다.
+        // Pivot 모드는 활성 오브젝트 위치, Center 모드는 선택 묶음의 중앙을 사용한다.
         DirectX::XMMATRIX baseTransform = scaleMat * rotationMat * DirectX::XMMatrixTranslation(worldPosition.x, worldPosition.y, worldPosition.z);
 
         // =========================================================
@@ -343,12 +420,23 @@ namespace CCEngine {
 
     bool GizmoSystem::OnEvent(Event& e, Entity selectedEntity, DirectX::XMMATRIX viewMatrix, DirectX::XMMATRIX projMatrix, float viewportWidth, float viewportHeight, float viewportX, float viewportY)
     {
-        if (!selectedEntity || m_Mode == GizmoMode::None) return false;
-        if (!selectedEntity.HasComponent<TransformComponent>()) return false;
+        std::vector<Entity> singleSelection;
+        if (selectedEntity)
+            singleSelection.push_back(selectedEntity);
+        return OnEvent(e, singleSelection, selectedEntity, viewMatrix, projMatrix, viewportWidth, viewportHeight, viewportX, viewportY);
+    }
 
-        auto& tc = selectedEntity.GetComponent<TransformComponent>();
-        DirectX::XMMATRIX worldTransform = GetWorldTransform(selectedEntity);
-        DirectX::XMFLOAT3 worldPosition = GetWorldPosition(selectedEntity);
+    bool GizmoSystem::OnEvent(Event& e, const std::vector<Entity>& selectedEntities, Entity activeEntity, DirectX::XMMATRIX viewMatrix, DirectX::XMMATRIX projMatrix, float viewportWidth, float viewportHeight, float viewportX, float viewportY)
+    {
+        if (!activeEntity || m_Mode == GizmoMode::None) return false;
+        if (!activeEntity.HasComponent<TransformComponent>()) return false;
+
+        std::vector<Entity> validSelection = BuildValidGizmoSelection(selectedEntities, activeEntity);
+        if (validSelection.empty())
+            return false;
+
+        DirectX::XMMATRIX worldTransform = GetWorldTransform(activeEntity);
+        DirectX::XMFLOAT3 worldPosition = CalculateSelectionCenter(validSelection, activeEntity, m_PivotMode);
 
         bool isLocal = (m_Space == GizmoSpace::Local) || (m_Mode == GizmoMode::Scale);
         DirectX::XMFLOAT3 localAxes[3] = { {1,0,0}, {0,1,0}, {0,0,1} };
@@ -450,8 +538,22 @@ namespace CCEngine {
                 m_IsDragging = true;
                 m_ActiveAxis = hitAxis;
                 m_OriginalPosition = worldPosition;
-                m_OriginalScale = tc.Scale;
-                m_OriginalQuat = tc.QuaternionRotation;
+                m_OriginalScale = activeEntity.GetComponent<TransformComponent>().Scale;
+                m_OriginalQuat = activeEntity.GetComponent<TransformComponent>().QuaternionRotation;
+                m_DragTargets.clear();
+                m_DragTargets.reserve(validSelection.size());
+
+                for (Entity entity : validSelection)
+                {
+                    auto& transform = entity.GetComponent<TransformComponent>();
+                    DragTarget target;
+                    target.Target = entity;
+                    target.OriginalWorldPosition = GetWorldPosition(entity);
+                    target.OriginalScale = transform.Scale;
+                    target.OriginalQuat = transform.QuaternionRotation;
+                    target.ParentWorld = GetParentWorldTransform(entity);
+                    m_DragTargets.push_back(target);
+                }
 
                 // 회전 시 축이 실시간으로 비틀리는 현상을 막기 위해 클릭 시점의 축을 영구 박제!
                 m_DragAxis = axisDirs[m_ActiveAxis];
@@ -509,12 +611,20 @@ namespace CCEngine {
                     float currentPoint = DirectX::XMVectorGetX(DirectX::XMVector3Dot(DirectX::XMVectorSubtract(hitPoint, DirectX::XMLoadFloat3(&m_OriginalPosition)), D));
 
                     float delta = currentPoint - m_InitialDragOffset;
-                    DirectX::XMVECTOR newWorldPos = DirectX::XMVectorAdd(DirectX::XMLoadFloat3(&m_OriginalPosition), DirectX::XMVectorScale(D, delta));
-                    DirectX::XMMATRIX parentWorld = GetParentWorldTransform(selectedEntity);
-                    DirectX::XMVECTOR det;
-                    DirectX::XMMATRIX invParentWorld = DirectX::XMMatrixInverse(&det, parentWorld);
-                    DirectX::XMVECTOR newLocalPos = DirectX::XMVector3TransformCoord(newWorldPos, invParentWorld);
-                    DirectX::XMStoreFloat3(&tc.Translation, newLocalPos);
+                    if (m_SnappingEnabled)
+                        delta = SnapFloat(delta, m_TranslateSnapStep);
+
+                    for (DragTarget& target : m_DragTargets)
+                    {
+                        if (!target.Target || !target.Target.HasComponent<TransformComponent>())
+                            continue;
+
+                        DirectX::XMVECTOR newWorldPos = DirectX::XMVectorAdd(DirectX::XMLoadFloat3(&target.OriginalWorldPosition), DirectX::XMVectorScale(D, delta));
+                        DirectX::XMVECTOR det;
+                        DirectX::XMMATRIX invParentWorld = DirectX::XMMatrixInverse(&det, target.ParentWorld);
+                        DirectX::XMVECTOR newLocalPos = DirectX::XMVector3TransformCoord(newWorldPos, invParentWorld);
+                        DirectX::XMStoreFloat3(&target.Target.GetComponent<TransformComponent>().Translation, newLocalPos);
+                    }
                 }
             }
             else if (m_Mode == GizmoMode::Scale)
@@ -530,11 +640,20 @@ namespace CCEngine {
                     float currentPoint = DirectX::XMVectorGetX(DirectX::XMVector3Dot(DirectX::XMVectorSubtract(hitPoint, DirectX::XMLoadFloat3(&m_OriginalPosition)), D));
 
                     float delta = currentPoint - m_InitialDragOffset;
+                    if (m_SnappingEnabled)
+                        delta = SnapFloat(delta, m_ScaleSnapStep);
 
-                    tc.Scale = m_OriginalScale;
-                    if (m_ActiveAxis == 0) tc.Scale.x += delta;
-                    else if (m_ActiveAxis == 1) tc.Scale.y += delta;
-                    else if (m_ActiveAxis == 2) tc.Scale.z += delta;
+                    for (DragTarget& target : m_DragTargets)
+                    {
+                        if (!target.Target || !target.Target.HasComponent<TransformComponent>())
+                            continue;
+
+                        auto& transform = target.Target.GetComponent<TransformComponent>();
+                        transform.Scale = target.OriginalScale;
+                        if (m_ActiveAxis == 0) transform.Scale.x += delta;
+                        else if (m_ActiveAxis == 1) transform.Scale.y += delta;
+                        else if (m_ActiveAxis == 2) transform.Scale.z += delta;
+                    }
                 }
             }
             else if (m_Mode == GizmoMode::Rotate)
@@ -552,19 +671,21 @@ namespace CCEngine {
                     float sinAngle = DirectX::XMVectorGetX(DirectX::XMVector3Dot(crossVec, D));
                     float cosAngle = DirectX::XMVectorGetX(DirectX::XMVector3Dot(initVec, currentVec));
                     float angleDelta = std::atan2(sinAngle, cosAngle);
+                    if (m_SnappingEnabled)
+                        angleDelta = SnapFloat(angleDelta, m_RotateSnapStepRadians);
 
                     // 짐벌 락 방어용 쿼터니언 회전 적용
                     DirectX::XMVECTOR deltaQuat = DirectX::XMQuaternionRotationAxis(D, angleDelta);
-                    DirectX::XMVECTOR newQuat = DirectX::XMQuaternionMultiply(DirectX::XMLoadFloat4(&m_OriginalQuat), deltaQuat);
-                    DirectX::XMStoreFloat4(&tc.QuaternionRotation, newQuat);
+                    for (DragTarget& target : m_DragTargets)
+                    {
+                        if (!target.Target || !target.Target.HasComponent<TransformComponent>())
+                            continue;
 
-                    // 엔진 인스펙터 출력을 위한 오일러 변환
-                    DirectX::XMFLOAT4 qv;
-                    DirectX::XMStoreFloat4(&qv, newQuat);
-                    float sinp = 2.0f * (qv.w * qv.x - qv.y * qv.z);
-                    tc.Rotation.x = std::abs(sinp) >= 1.0f ? std::copysign(DirectX::XM_PI / 2.0f, sinp) : std::asin(sinp);
-                    tc.Rotation.y = std::atan2(2.0f * (qv.w * qv.y + qv.z * qv.x), 1.0f - 2.0f * (qv.x * qv.x + qv.y * qv.y));
-                    tc.Rotation.z = std::atan2(2.0f * (qv.w * qv.z + qv.x * qv.y), 1.0f - 2.0f * (qv.x * qv.x + qv.z * qv.z));
+                        auto& transform = target.Target.GetComponent<TransformComponent>();
+                        DirectX::XMVECTOR newQuat = DirectX::XMQuaternionMultiply(DirectX::XMLoadFloat4(&target.OriginalQuat), deltaQuat);
+                        DirectX::XMStoreFloat4(&transform.QuaternionRotation, newQuat);
+                        StoreEulerFromQuaternion(transform, newQuat);
+                    }
                 }
             }
 
@@ -573,6 +694,7 @@ namespace CCEngine {
         else if (e.GetEventType() == EventType::MouseButtonReleased) {
             m_IsDragging = false;
             m_ActiveAxis = -1;
+            m_DragTargets.clear();
             return false;
         }
 

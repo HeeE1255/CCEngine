@@ -24,6 +24,16 @@ namespace CCEngine
         }
     };
 
+    struct ActiveComponent
+    {
+        // 사용자가 직접 켜고 끄는 값이다. 부모 상태는 여기에 섞지 않는다.
+        // 실제 런타임 활성 여부는 Scene::IsEntityActiveInHierarchy에서 부모 체인까지 계산한다.
+        bool ActiveSelf = true;
+
+        ActiveComponent() = default;
+        ActiveComponent(const ActiveComponent&) = default;
+    };
+
     // 위치/크기/회전 컴포넌트 (Transform)
     struct TransformComponent
     {
@@ -88,7 +98,13 @@ namespace CCEngine
         // 인스펙터에서 바꾼 public 필드 값만 저장한다. 스크립트 기본값은 C# 코드와 manifest가 기준이다.
         std::unordered_map<std::string, std::string> FieldOverrides;
         bool Enabled = true;
+
+        // 아래 값들은 Play 모드 복사본에서만 쓰는 실행 상태다.
+        // 저장 파일에는 남기지 않고, Stop 때 복사본과 함께 버린다.
         bool RuntimeInstanceCreated = false;
+        bool RuntimeAwakeCalled = false;
+        bool RuntimeEnabledCalled = false;
+        bool RuntimeStartCalled = false;
     };
 
     // 2D 강체 컴포넌트 (물리적인 몸체)
@@ -110,6 +126,10 @@ namespace CCEngine
         DirectX::XMFLOAT2 Offset = { 0.0f, 0.0f };
         DirectX::XMFLOAT2 Size = { 0.5f, 0.5f };
 
+        // true면 물리 충돌로 밀어내지 않고 겹침 이벤트만 보낸다.
+        // Unity의 Is Trigger와 같은 역할이다.
+        bool IsTrigger = false;
+
         float Density = 1.0f;
         float Friction = 0.5f;
         float Restitution = 0.0f;
@@ -118,6 +138,54 @@ namespace CCEngine
 
         BoxCollider2DComponent() = default;
         BoxCollider2DComponent(const BoxCollider2DComponent&) = default;
+    };
+
+    // 3D 박스 충돌체 컴포넌트.
+    // 2D 박스와 분리해 둬야 큐브/스피어/원통 같은 3D 메시를 XY 평면 기준으로 잘못 해석하지 않는다.
+    struct BoxCollider3DComponent
+    {
+        DirectX::XMFLOAT3 Offset = { 0.0f, 0.0f, 0.0f };
+        DirectX::XMFLOAT3 Size = { 1.0f, 1.0f, 1.0f };
+        bool IsTrigger = false;
+
+        BoxCollider3DComponent() = default;
+        BoxCollider3DComponent(const BoxCollider3DComponent&) = default;
+    };
+
+    // 3D 구 충돌체 컴포넌트. Transform 스케일이 비균등이면 디버그 표시도 타원체처럼 보인다.
+    struct SphereCollider3DComponent
+    {
+        DirectX::XMFLOAT3 Offset = { 0.0f, 0.0f, 0.0f };
+        float Radius = 0.5f;
+        bool IsTrigger = false;
+
+        SphereCollider3DComponent() = default;
+        SphereCollider3DComponent(const SphereCollider3DComponent&) = default;
+    };
+
+    // 3D 원통 충돌체 컴포넌트. 기본 축은 Y축이며, Transform 회전/스케일을 그대로 따라간다.
+    struct CylinderCollider3DComponent
+    {
+        DirectX::XMFLOAT3 Offset = { 0.0f, 0.0f, 0.0f };
+        float Radius = 0.5f;
+        float Height = 1.0f;
+        bool IsTrigger = false;
+
+        CylinderCollider3DComponent() = default;
+        CylinderCollider3DComponent(const CylinderCollider3DComponent&) = default;
+    };
+
+    // 복잡한 메시 충돌체용 표시 컴포넌트.
+    // 실제 삼각형 충돌은 별도 3D 물리 엔진 단계에서 다루고, 에디터에서는 먼저 bounds를 확인한다.
+    struct MeshCollider3DComponent
+    {
+        DirectX::XMFLOAT3 Offset = { 0.0f, 0.0f, 0.0f };
+        DirectX::XMFLOAT3 Size = { 1.0f, 1.0f, 1.0f };
+        bool Convex = false;
+        bool IsTrigger = false;
+
+        MeshCollider3DComponent() = default;
+        MeshCollider3DComponent(const MeshCollider3DComponent&) = default;
     };
 
     //NativeScriptComponent 대신 ECS를 테스트하기 위해 추가

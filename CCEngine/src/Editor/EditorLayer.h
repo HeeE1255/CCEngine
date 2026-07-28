@@ -104,6 +104,9 @@ namespace CCEngine {
         void OpenAssetReferenceValidatorWindow();
         void OpenKeyBindingPickerWindow(UI::KeyBindingInput* targetInput);
         void BringEditorOverlaysToFront();
+        void RenderPhysicsDebugView(const PerspectiveCamera& camera, const std::vector<Entity>& selectedEntities);
+        void CyclePhysicsDebugViewMode();
+        void UpdatePhysicsDebugButton();
         bool RunEditorQualityAssurance(bool closeWhenFinished);
 
     private:
@@ -199,6 +202,7 @@ namespace CCEngine {
         UI::Button* m_BtnToolPivot = nullptr;
         UI::Button* m_BtnToolSnap = nullptr;
         UI::Button* m_BtnToolFrame = nullptr;
+        UI::Button* m_BtnPhysicsDebug = nullptr;
         UI::Panel* m_ObjectContextMenuPanel = nullptr;
         UI::Panel* m_MeshObjectSubmenuPanel = nullptr;
         UI::Button* m_BtnCreateEmpty = nullptr;
@@ -241,6 +245,7 @@ namespace CCEngine {
         std::chrono::steady_clock::time_point m_LastViewportRightClickTime = {};
         float m_LastViewportRightClickX = 0.0f;
         float m_LastViewportRightClickY = 0.0f;
+        int m_PhysicsDebugViewMode = 0; // 0: Off, 1/2: 2D Selected/All, 3/4: 3D Selected/All, 5/6: Both Selected/All
 
     };
 

@@ -96,6 +96,9 @@
     <ClInclude Include="src\Editor\EditorCamera.h">
       <Filter>src\Editor</Filter>
     </ClInclude>
+    <ClInclude Include="src\Editor\EditorQATestRunner.h">
+      <Filter>src\Editor</Filter>
+    </ClInclude>
     <ClInclude Include="src\Editor\EditorLayer.h">
       <Filter>src\Editor</Filter>
     </ClInclude>
@@ -357,6 +360,9 @@
       <Filter>src\Editor</Filter>
     </ClCompile>
     <ClCompile Include="src\Editor\EditorCamera.cpp">
+      <Filter>src\Editor</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Editor\EditorQATestRunner.cpp">
       <Filter>src\Editor</Filter>
     </ClCompile>
     <ClCompile Include="src\Editor\EditorLayer.cpp">

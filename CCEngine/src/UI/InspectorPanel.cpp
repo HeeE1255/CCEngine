@@ -131,6 +131,10 @@ namespace CCEngine
             addCandidate("Sprite Renderer", AddComponentType::SpriteRenderer, m_SelectedEntity.HasComponent<SpriteRendererComponent>());
             addCandidate("Rigidbody 2D", AddComponentType::Rigidbody2D, m_SelectedEntity.HasComponent<Rigidbody2DComponent>());
             addCandidate("Box Collider 2D", AddComponentType::BoxCollider2D, m_SelectedEntity.HasComponent<BoxCollider2DComponent>());
+            addCandidate("Box Collider 3D", AddComponentType::BoxCollider3D, m_SelectedEntity.HasComponent<BoxCollider3DComponent>());
+            addCandidate("Sphere Collider 3D", AddComponentType::SphereCollider3D, m_SelectedEntity.HasComponent<SphereCollider3DComponent>());
+            addCandidate("Cylinder Collider 3D", AddComponentType::CylinderCollider3D, m_SelectedEntity.HasComponent<CylinderCollider3DComponent>());
+            addCandidate("Mesh Collider 3D", AddComponentType::MeshCollider3D, m_SelectedEntity.HasComponent<MeshCollider3DComponent>());
             addCandidate("New C# Script...", AddComponentType::Script, m_SelectedEntity.HasComponent<ScriptComponent>());
 
             if (!m_SelectedEntity.HasComponent<ScriptComponent>())
@@ -171,6 +175,10 @@ namespace CCEngine
                     case AddComponentType::SpriteRenderer: return "Sprite Renderer";
                     case AddComponentType::Rigidbody2D: return "Rigidbody 2D";
                     case AddComponentType::BoxCollider2D: return "Box Collider 2D";
+                    case AddComponentType::BoxCollider3D: return "Box Collider 3D";
+                    case AddComponentType::SphereCollider3D: return "Sphere Collider 3D";
+                    case AddComponentType::CylinderCollider3D: return "Cylinder Collider 3D";
+                    case AddComponentType::MeshCollider3D: return "Mesh Collider 3D";
                     case AddComponentType::Script: return "C# Script";
                     default: return "Component";
                 }
@@ -217,6 +225,10 @@ namespace CCEngine
                 case AddComponentType::SpriteRenderer: m_SelectedEntity.AddComponent<SpriteRendererComponent>(); break;
                 case AddComponentType::Rigidbody2D: m_SelectedEntity.AddComponent<Rigidbody2DComponent>(); break;
                 case AddComponentType::BoxCollider2D: m_SelectedEntity.AddComponent<BoxCollider2DComponent>(); break;
+                case AddComponentType::BoxCollider3D: m_SelectedEntity.AddComponent<BoxCollider3DComponent>(); break;
+                case AddComponentType::SphereCollider3D: m_SelectedEntity.AddComponent<SphereCollider3DComponent>(); break;
+                case AddComponentType::CylinderCollider3D: m_SelectedEntity.AddComponent<CylinderCollider3DComponent>(); break;
+                case AddComponentType::MeshCollider3D: m_SelectedEntity.AddComponent<MeshCollider3DComponent>(); break;
                 case AddComponentType::Script: break;
             }
 
@@ -284,11 +296,15 @@ namespace CCEngine
                 "    {\n"
                 "        // [Range(0.0f, 10.0f)]처럼 붙이면 인스펙터 표시 방식이 바뀝니다.\n"
                 "        public float Speed = 1.0f;\n\n"
-                "        protected override void OnCreate()\n"
+                "        protected override void Awake()\n"
                 "        {\n"
-                "            // Play가 시작되어 이 스크립트가 생성될 때 한 번 호출됩니다.\n"
+                "            // Play가 시작되어 스크립트 인스턴스가 준비될 때 한 번 호출됩니다.\n"
                 "        }\n\n"
-                "        protected override void OnUpdate(float deltaTime)\n"
+                "        protected override void Start()\n"
+                "        {\n"
+                "            // 모든 Awake와 OnEnable이 끝난 뒤, 첫 Update 전에 한 번 호출됩니다.\n"
+                "        }\n\n"
+                "        protected override void Update(float deltaTime)\n"
                 "        {\n"
                 "            // Play 중 매 프레임 호출되며 deltaTime은 이전 프레임부터 흐른 시간입니다.\n"
                 "        }\n\n"
@@ -301,10 +317,7 @@ namespace CCEngine
             output.close();
 
             BeginStructureChange("Add C# Script");
-            auto& script = m_SelectedEntity.AddComponent<ScriptComponent>();
-            script.ClassName = "Game." + className;
-            script.Enabled = true;
-            script.RuntimeInstanceCreated = false;
+            m_SelectedEntity.GetScene()->AddScriptComponent(m_SelectedEntity, "Game." + className, true);
 
             AssetDatabase::EnsureMetaFile(scriptPath);
             AssetDatabase::MarkDirty(assetsRoot);
@@ -317,18 +330,19 @@ namespace CCEngine
         {
             if (!m_SelectedEntity || m_SelectedEntity.HasComponent<ScriptComponent>())
                 return;
-            if (m_SelectedEntity.GetScene()->GetState() != SceneState::Edit)
-            {
-                ConsoleLog::Warning("Stop Play Mode before attaching a C# script.");
-                return;
-            }
 
-            BeginStructureChange("Add C# Script");
-            auto& script = m_SelectedEntity.AddComponent<ScriptComponent>();
-            script.ClassName = className;
-            script.Enabled = true;
-            script.RuntimeInstanceCreated = false;
-            CommitStructureChange();
+            Scene* scene = m_SelectedEntity.GetScene();
+            const bool editMode = scene && scene->GetState() == SceneState::Edit;
+
+            if (editMode)
+                BeginStructureChange("Add C# Script");
+
+            // 기존 스크립트 부착은 Play 중에도 허용한다.
+            // 런타임 씬에 붙이면 즉시 Awake/OnEnable 준비를 하고, Stop하면 에디터 원본 씬에는 남지 않는다.
+            scene->AddScriptComponent(m_SelectedEntity, className, true);
+
+            if (editMode)
+                CommitStructureChange();
 
             m_AddComponentMenu->SetVisible(false);
             ScriptCompiler::RequestCompile();

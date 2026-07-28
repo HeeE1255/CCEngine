@@ -179,4 +179,24 @@ namespace CCEngine
         PerspectiveCamera::SetPosition(m_Position);
         PerspectiveCamera::SetRotation(m_RotationQuat);
     }
+
+    void EditorCamera::FrameSelection(const DirectX::XMFLOAT3& target, float radius)
+    {
+        radius = (std::max)(radius, 0.5f);
+
+        DirectX::XMVECTOR rotation = DirectX::XMLoadFloat4(&m_RotationQuat);
+        DirectX::XMMATRIX rotationMatrix = DirectX::XMMatrixRotationQuaternion(rotation);
+        DirectX::XMVECTOR forward = DirectX::XMVector3Normalize(
+            DirectX::XMVector3TransformNormal(DirectX::XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f), rotationMatrix));
+
+        // 프레임 선택은 카메라 회전은 유지하고 위치만 옮긴다.
+        // 사용자가 보고 있던 방향을 깨지 않으면, 연속으로 여러 오브젝트를 훑을 때 시점이 덜 튄다.
+        float distance = (std::max)(radius * 3.0f, 3.0f);
+        DirectX::XMVECTOR targetPos = DirectX::XMLoadFloat3(&target);
+        DirectX::XMVECTOR cameraPos = DirectX::XMVectorSubtract(targetPos, DirectX::XMVectorScale(forward, distance));
+
+        DirectX::XMStoreFloat3(&m_Position, cameraPos);
+        PerspectiveCamera::SetPosition(m_Position);
+        PerspectiveCamera::SetRotation(m_RotationQuat);
+    }
 }
