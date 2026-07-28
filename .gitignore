@@ -30,6 +30,24 @@ mono_crash.*
 !/Sandbox/assets/Scripts/Game/
 !/Sandbox/assets/Scripts/Game/**
 
+# Local/private workspace notes and verification artifacts
+/AGENTS.md
+/HEARTBEAT.md
+/IDENTITY.md
+/SOUL.md
+/TOOLS.md
+/USER.md
+/TTS.txt
+/tt.txt
+/desktop-*.png
+/work/
+/outputs/
+/bin-int/
+/Sandbox/.ccengine/
+/Sandbox/imgui.ini
+*.inspect.ndjson
+~$*
+
 # Build results
 [Dd]ebug/
 [Dd]ebugPublic/
