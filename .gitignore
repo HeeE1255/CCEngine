@@ -48,6 +48,16 @@ mono_crash.*
 *.inspect.ndjson
 ~$*
 
+# Codex/local-only collaboration space.
+# 테스트 로그, 임시 체크리스트, 스크린샷, 개인 메모는 이 아래에 둔다.
+# Git에서 완전히 제외되므로 Visual Studio로 푸시해도 올라가지 않는다.
+/local/
+/qa-local/
+/.codex/
+/.openclaw/
+/memory/
+/MEMORY.md
+
 # Public sandbox baseline. Keep only engine-owned sample assets in Git.
 !/Sandbox/assets/fonts/
 !/Sandbox/assets/fonts/NotoSansKR-VariableFont_wght.ttf
