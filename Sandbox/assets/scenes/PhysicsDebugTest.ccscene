@@ -1,0 +1,529 @@
+{
+    "Entities": [
+        {
+            "ActiveComponent": {
+                "ActiveSelf": true
+            },
+            "CameraComponent": {
+                "FOV": 45.0,
+                "FarClip": 1000.0,
+                "NearClip": 0.10000000149011612,
+                "Primary": true
+            },
+            "Entity": 1048576,
+            "TagComponent": {
+                "Tag": "Main Camera"
+            },
+            "TransformComponent": {
+                "QuaternionRotation": [
+                    0.1736481785774231,
+                    0.0,
+                    0.0,
+                    0.9848077297210693
+                ],
+                "Rotation": [
+                    0.3490658402442932,
+                    0.0,
+                    0.0
+                ],
+                "Scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "Translation": [
+                    0.0,
+                    3.0,
+                    -8.0
+                ]
+            }
+        },
+        {
+            "ActiveComponent": {
+                "ActiveSelf": true
+            },
+            "Entity": 1048577,
+            "LightComponent": {
+                "Intensity": 1.0,
+                "LightColor": [
+                    1.0,
+                    0.8999999761581421,
+                    0.75
+                ]
+            },
+            "TagComponent": {
+                "Tag": "Main Light (Warm)"
+            },
+            "TransformComponent": {
+                "QuaternionRotation": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                ],
+                "Rotation": [
+                    -0.6108652353286743,
+                    0.5235987901687622,
+                    0.0
+                ],
+                "Scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "Translation": [
+                    2.0,
+                    5.0,
+                    -2.0
+                ]
+            }
+        },
+        {
+            "ActiveComponent": {
+                "ActiveSelf": true
+            },
+            "BoxCollider2DComponent": {
+                "Density": 1.0,
+                "Friction": 0.5,
+                "IsTrigger": false,
+                "Offset": [
+                    0.0,
+                    0.0
+                ],
+                "Restitution": 0.0,
+                "Size": [
+                    1.0,
+                    1.0
+                ]
+            },
+            "Entity": 1048578,
+            "MeshComponent": {
+                "BaseColor": [
+                    0.25,
+                    0.28,
+                    0.35,
+                    1.0
+                ],
+                "Type": 4
+            },
+            "Rigidbody2DComponent": {
+                "FixedRotation": true,
+                "Type": 0
+            },
+            "TagComponent": {
+                "Tag": "Static Floor Collider"
+            },
+            "TransformComponent": {
+                "QuaternionRotation": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                ],
+                "Rotation": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "Scale": [
+                    4.0,
+                    0.6,
+                    1.0
+                ],
+                "Translation": [
+                    0.0,
+                    -1.5,
+                    0.0
+                ]
+            }
+        },
+        {
+            "ActiveComponent": {
+                "ActiveSelf": true
+            },
+            "BoxCollider2DComponent": {
+                "Density": 1.0,
+                "Friction": 0.5,
+                "IsTrigger": false,
+                "Offset": [
+                    0.0,
+                    0.0
+                ],
+                "Restitution": 0.0,
+                "Size": [
+                    1.0,
+                    1.0
+                ]
+            },
+            "Entity": 1048579,
+            "MeshComponent": {
+                "BaseColor": [
+                    0.2,
+                    0.35,
+                    0.9,
+                    1.0
+                ],
+                "Type": 4
+            },
+            "Rigidbody2DComponent": {
+                "FixedRotation": false,
+                "Type": 1
+            },
+            "TagComponent": {
+                "Tag": "Dynamic Box Collider"
+            },
+            "TransformComponent": {
+                "QuaternionRotation": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                ],
+                "Rotation": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "Scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "Translation": [
+                    -1.6,
+                    0.2,
+                    0.0
+                ]
+            }
+        },
+        {
+            "ActiveComponent": {
+                "ActiveSelf": true
+            },
+            "BoxCollider2DComponent": {
+                "Density": 1.0,
+                "Friction": 0.5,
+                "IsTrigger": true,
+                "Offset": [
+                    0.0,
+                    0.0
+                ],
+                "Restitution": 0.0,
+                "Size": [
+                    1.0,
+                    1.0
+                ]
+            },
+            "Entity": 1048580,
+            "MeshComponent": {
+                "BaseColor": [
+                    0.8,
+                    0.45,
+                    0.15,
+                    0.45
+                ],
+                "Type": 4
+            },
+            "Rigidbody2DComponent": {
+                "FixedRotation": true,
+                "Type": 0
+            },
+            "TagComponent": {
+                "Tag": "Trigger Zone"
+            },
+            "TransformComponent": {
+                "QuaternionRotation": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                ],
+                "Rotation": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "Scale": [
+                    1.8,
+                    1.8,
+                    1.0
+                ],
+                "Translation": [
+                    1.4,
+                    0.2,
+                    0.0
+                ]
+            }
+        },
+        {
+            "ActiveComponent": {
+                "ActiveSelf": true
+            },
+            "BoxCollider2DComponent": {
+                "Density": 1.0,
+                "Friction": 0.5,
+                "IsTrigger": false,
+                "Offset": [
+                    0.0,
+                    0.0
+                ],
+                "Restitution": 0.0,
+                "Size": [
+                    1.0,
+                    1.0
+                ]
+            },
+            "Entity": 1048581,
+            "MeshComponent": {
+                "BaseColor": [
+                    0.55,
+                    0.25,
+                    0.85,
+                    1.0
+                ],
+                "Type": 4
+            },
+            "Rigidbody2DComponent": {
+                "FixedRotation": true,
+                "Type": 2
+            },
+            "TagComponent": {
+                "Tag": "Kinematic Platform Collider"
+            },
+            "TransformComponent": {
+                "QuaternionRotation": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                ],
+                "Rotation": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "Scale": [
+                    1.2,
+                    0.35,
+                    1.0
+                ],
+                "Translation": [
+                    0.0,
+                    1.65,
+                    0.0
+                ]
+            }
+        },
+        {
+            "ActiveComponent": {
+                "ActiveSelf": true
+            },
+            "BoxCollider3DComponent": {
+                "IsTrigger": false,
+                "Offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "Size": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            },
+            "Entity": 1048582,
+            "MeshComponent": {
+                "BaseColor": [
+                    0.15,
+                    0.45,
+                    0.95,
+                    1.0
+                ],
+                "Type": 1
+            },
+            "TagComponent": {
+                "Tag": "3D Box Collider"
+            },
+            "TransformComponent": {
+                "QuaternionRotation": [
+                    0.0,
+                    0.2164396196603775,
+                    0.0,
+                    0.9762960071199334
+                ],
+                "Rotation": [
+                    0.0,
+                    0.4363323152065277,
+                    0.0
+                ],
+                "Scale": [
+                    1.1,
+                    1.1,
+                    1.1
+                ],
+                "Translation": [
+                    -3.2,
+                    0.2,
+                    2.0
+                ]
+            }
+        },
+        {
+            "ActiveComponent": {
+                "ActiveSelf": true
+            },
+            "Entity": 1048583,
+            "MeshComponent": {
+                "BaseColor": [
+                    0.9,
+                    0.45,
+                    0.2,
+                    1.0
+                ],
+                "Type": 2
+            },
+            "SphereCollider3DComponent": {
+                "IsTrigger": false,
+                "Offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "Radius": 0.5
+            },
+            "TagComponent": {
+                "Tag": "3D Sphere Collider"
+            },
+            "TransformComponent": {
+                "QuaternionRotation": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                ],
+                "Rotation": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "Scale": [
+                    1.2,
+                    1.2,
+                    1.2
+                ],
+                "Translation": [
+                    -1.35,
+                    0.2,
+                    2.0
+                ]
+            }
+        },
+        {
+            "ActiveComponent": {
+                "ActiveSelf": true
+            },
+            "CylinderCollider3DComponent": {
+                "Height": 1.4,
+                "IsTrigger": true,
+                "Offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "Radius": 0.5
+            },
+            "Entity": 1048584,
+            "MeshComponent": {
+                "BaseColor": [
+                    0.35,
+                    0.75,
+                    0.35,
+                    1.0
+                ],
+                "Type": 6
+            },
+            "TagComponent": {
+                "Tag": "3D Cylinder Trigger"
+            },
+            "TransformComponent": {
+                "QuaternionRotation": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                ],
+                "Rotation": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "Scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "Translation": [
+                    0.45,
+                    0.2,
+                    2.0
+                ]
+            }
+        },
+        {
+            "ActiveComponent": {
+                "ActiveSelf": true
+            },
+            "Entity": 1048585,
+            "MeshCollider3DComponent": {
+                "Convex": false,
+                "IsTrigger": false,
+                "Offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "Size": [
+                    1.3,
+                    1.3,
+                    0.45
+                ]
+            },
+            "MeshComponent": {
+                "BaseColor": [
+                    0.6,
+                    0.3,
+                    0.95,
+                    1.0
+                ],
+                "Type": 7
+            },
+            "TagComponent": {
+                "Tag": "3D Torus Mesh Collider"
+            },
+            "TransformComponent": {
+                "QuaternionRotation": [
+                    0.0,
+                    0.3826834323650898,
+                    0.0,
+                    0.9238795325112867
+                ],
+                "Rotation": [
+                    0.0,
+                    0.7853981852531433,
+                    0.0
+                ],
+                "Scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "Translation": [
+                    2.35,
+                    0.2,
+                    2.0
+                ]
+            }
+        }
+    ],
+    "Scene": "Physics Debug Test"
+}

@@ -48,6 +48,24 @@ mono_crash.*
 *.inspect.ndjson
 ~$*
 
+# Public sandbox baseline. Keep only engine-owned sample assets in Git.
+!/Sandbox/assets/fonts/
+!/Sandbox/assets/fonts/NotoSansKR-VariableFont_wght.ttf
+!/Sandbox/assets/shaders/
+!/Sandbox/assets/shaders/*.hlsl
+!/Sandbox/assets/scenes/
+/Sandbox/assets/scenes/*
+!/Sandbox/assets/scenes/ActiveLifecycleTest.ccscene
+!/Sandbox/assets/scenes/PhysicsDebugTest.ccscene
+!/Sandbox/assets/Scripts/
+!/Sandbox/assets/Scripts/BuildScripts.ps1
+!/Sandbox/assets/Scripts/Build/
+!/Sandbox/assets/Scripts/Build/CCEngine.ScriptCore.runtimeconfig.json
+!/Sandbox/assets/Scripts/Game/
+!/Sandbox/assets/Scripts/Game/*.cs
+!/Sandbox/assets/Scripts/ScriptCore/
+!/Sandbox/assets/Scripts/ScriptCore/*.cs
+
 # Build results
 [Dd]ebug/
 [Dd]ebugPublic/

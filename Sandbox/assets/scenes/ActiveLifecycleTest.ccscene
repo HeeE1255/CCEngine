@@ -1,0 +1,258 @@
+{
+    "Entities": [
+        {
+            "ActiveComponent": {
+                "ActiveSelf": true
+            },
+            "Entity": 1048581,
+            "MeshComponent": {
+                "BaseColor": [
+                    0.20000000298023224,
+                    0.75,
+                    0.30000001192092896,
+                    1.0
+                ],
+                "Type": 1
+            },
+            "TagComponent": {
+                "Tag": "QA Reference Cube"
+            },
+            "TransformComponent": {
+                "QuaternionRotation": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                ],
+                "Rotation": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "Scale": [
+                    0.75,
+                    0.25,
+                    0.75
+                ],
+                "Translation": [
+                    0.0,
+                    -0.75,
+                    0.0
+                ]
+            }
+        },
+        {
+            "ActiveComponent": {
+                "ActiveSelf": true
+            },
+            "Entity": 1048580,
+            "MeshComponent": {
+                "BaseColor": [
+                    0.800000011920929,
+                    0.25,
+                    0.20000000298023224,
+                    1.0
+                ],
+                "Type": 1
+            },
+            "RelationshipComponent": {
+                "Parent": 1048578
+            },
+            "ScriptComponent": {
+                "ClassName": "Game.MoveUp",
+                "Enabled": true,
+                "Fields": {
+                    "Speed": "1.5"
+                }
+            },
+            "TagComponent": {
+                "Tag": "QA Inactive Cube (Child)"
+            },
+            "TransformComponent": {
+                "QuaternionRotation": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                ],
+                "Rotation": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "Scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "Translation": [
+                    1.5,
+                    0.0,
+                    0.0
+                ]
+            }
+        },
+        {
+            "ActiveComponent": {
+                "ActiveSelf": true
+            },
+            "Entity": 1048579,
+            "MeshComponent": {
+                "BaseColor": [
+                    0.20000000298023224,
+                    0.30000001192092896,
+                    0.800000011920929,
+                    1.0
+                ],
+                "Type": 1
+            },
+            "RelationshipComponent": {
+                "Parent": 1048578
+            },
+            "ScriptComponent": {
+                "ClassName": "Game.MoveUp",
+                "Enabled": true,
+                "Fields": {
+                    "Speed": "1.5"
+                }
+            },
+            "TagComponent": {
+                "Tag": "QA Moving Cube (Child)"
+            },
+            "TransformComponent": {
+                "QuaternionRotation": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                ],
+                "Rotation": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "Scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "Translation": [
+                    -1.5,
+                    0.0,
+                    0.0
+                ]
+            }
+        },
+        {
+            "ActiveComponent": {
+                "ActiveSelf": true
+            },
+            "Entity": 1048578,
+            "TagComponent": {
+                "Tag": "QA Active Parent"
+            },
+            "TransformComponent": {
+                "QuaternionRotation": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                ],
+                "Rotation": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "Scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "Translation": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
+            }
+        },
+        {
+            "ActiveComponent": {
+                "ActiveSelf": true
+            },
+            "Entity": 1048577,
+            "LightComponent": {
+                "Intensity": 1.0,
+                "LightColor": [
+                    1.0,
+                    0.8999999761581421,
+                    0.75
+                ]
+            },
+            "TagComponent": {
+                "Tag": "Main Light (Warm)"
+            },
+            "TransformComponent": {
+                "QuaternionRotation": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                ],
+                "Rotation": [
+                    -0.6108652353286743,
+                    0.5235987901687622,
+                    0.0
+                ],
+                "Scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "Translation": [
+                    2.0,
+                    5.0,
+                    -2.0
+                ]
+            }
+        },
+        {
+            "ActiveComponent": {
+                "ActiveSelf": true
+            },
+            "CameraComponent": {
+                "FOV": 45.0,
+                "FarClip": 1000.0,
+                "NearClip": 0.10000000149011612,
+                "Primary": true
+            },
+            "Entity": 1048576,
+            "TagComponent": {
+                "Tag": "Main Camera"
+            },
+            "TransformComponent": {
+                "QuaternionRotation": [
+                    0.1736481785774231,
+                    0.0,
+                    0.0,
+                    0.9848077297210693
+                ],
+                "Rotation": [
+                    0.3490658402442932,
+                    0.0,
+                    0.0
+                ],
+                "Scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "Translation": [
+                    0.0,
+                    3.0,
+                    -7.0
+                ]
+            }
+        }
+    ],
+    "Scene": "Untitled Scene"
+}
