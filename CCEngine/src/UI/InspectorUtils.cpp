@@ -318,6 +318,90 @@ namespace CCEngine {
                         [entity]() mutable { return entity.GetComponent<MeshComponent>().BaseColor; },
                         [entity](DirectX::XMFLOAT4 v) mutable { entity.GetComponent<MeshComponent>().BaseColor = v; });
 
+                    std::filesystem::path currentMaterialPath(mesh.MaterialPath);
+                    std::string materialButtonText = currentMaterialPath.empty()
+                        ? "Material: (none)"
+                        : "Material: " + currentMaterialPath.filename().string();
+
+                    auto btnMaterial = new UI::Button("BtnChangeMaterial", materialButtonText);
+                    btnMaterial->SetAnchorMin(0.0f, 0.0f); btnMaterial->SetAnchorMax(1.0f, 0.0f);
+                    btnMaterial->SetOffsetMin(15.0f, 0.0f); btnMaterial->SetOffsetMax(-10.0f, 28.0f);
+                    btnMaterial->SetOnClick([entity, btnMaterial]() mutable
+                        {
+                            std::string filepath = PlatformUtils::OpenFile("CC Material (*.ccmat)\0*.ccmat\0");
+                            if (!filepath.empty())
+                            {
+                                auto material = std::make_shared<MaterialAsset>();
+                                if (!material->LoadFromFile(filepath))
+                                    return;
+
+                                auto& mesh = entity.GetComponent<MeshComponent>();
+                                mesh.Material = material;
+                                // Material 역시 저장 시에는 포인터가 아니라 GUID/경로를 남긴다.
+                                // 그래야 파일명을 바꾸거나 위치를 옮겨도 meta 기준으로 다시 연결된다.
+                                mesh.MaterialPath = filepath;
+                                mesh.MaterialAssetGuid = AssetDatabase::GetGuidFromPath(filepath);
+                                btnMaterial->SetText("Material: " + std::filesystem::path(filepath).filename().string());
+                            }
+                        });
+                    item->AddChild(btnMaterial);
+
+                    if (mesh.Material)
+                    {
+                        UI::InspectorUtils::AddColor4(item, "MaterialAlbedoColor", "Mat Albedo",
+                            [entity]() mutable
+                            {
+                                auto& mesh = entity.GetComponent<MeshComponent>();
+                                return mesh.Material ? mesh.Material->AlbedoColor : mesh.BaseColor;
+                            },
+                            [entity](DirectX::XMFLOAT4 v) mutable
+                            {
+                                auto& mesh = entity.GetComponent<MeshComponent>();
+                                if (!mesh.Material)
+                                    return;
+
+                                mesh.Material->AlbedoColor = v;
+                                if (!mesh.MaterialPath.empty())
+                                    mesh.Material->SaveToFile(mesh.MaterialPath);
+                            });
+
+                        UI::InspectorUtils::AddDragFloat(item, "MaterialRoughness", "Roughness",
+                            [entity]() mutable
+                            {
+                                auto& mesh = entity.GetComponent<MeshComponent>();
+                                return mesh.Material ? mesh.Material->Roughness : 0.5f;
+                            },
+                            [entity](float v) mutable
+                            {
+                                auto& mesh = entity.GetComponent<MeshComponent>();
+                                if (!mesh.Material)
+                                    return;
+
+                                mesh.Material->Roughness = std::clamp(v, 0.0f, 1.0f);
+                                if (!mesh.MaterialPath.empty())
+                                    mesh.Material->SaveToFile(mesh.MaterialPath);
+                            });
+
+                        UI::InspectorUtils::AddDragFloat(item, "MaterialMetallic", "Metallic",
+                            [entity]() mutable
+                            {
+                                auto& mesh = entity.GetComponent<MeshComponent>();
+                                return mesh.Material ? mesh.Material->Metallic : 0.0f;
+                            },
+                            [entity](float v) mutable
+                            {
+                                auto& mesh = entity.GetComponent<MeshComponent>();
+                                if (!mesh.Material)
+                                    return;
+
+                                // 현재 기본 셰이더는 Metallic/Roughness를 아직 조명 계산에 쓰지 않는다.
+                                // 그래도 파일 포맷과 UI 값을 먼저 고정해 두면 PBR 셰이더로 넘어갈 때 저장 구조를 다시 바꾸지 않아도 된다.
+                                mesh.Material->Metallic = std::clamp(v, 0.0f, 1.0f);
+                                if (!mesh.MaterialPath.empty())
+                                    mesh.Material->SaveToFile(mesh.MaterialPath);
+                            });
+                    }
+
                     std::filesystem::path currentTexturePath(mesh.AlbedoPath);
                     std::string textureButtonText = currentTexturePath.empty()
                         ? "Albedo Texture: (none)"

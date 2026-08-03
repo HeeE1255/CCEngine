@@ -13,6 +13,7 @@ namespace CCEngine
         Unknown = 0,
         Scene,
         Prefab,
+        Material,
         Model,
         Texture,
         Script

@@ -9,8 +9,8 @@ namespace CCEngine
         std::string ProjectName = "CCEngine Project";
         std::string StartScenePath;
         std::string StartSceneGuid;
-        uint32_t GameWidth = 1280;
-        uint32_t GameHeight = 720;
+        uint32_t GameWidth = 1920;
+        uint32_t GameHeight = 1080;
         std::string MoveForwardKey = "W";
         std::string MoveBackwardKey = "S";
         std::string MoveLeftKey = "A";

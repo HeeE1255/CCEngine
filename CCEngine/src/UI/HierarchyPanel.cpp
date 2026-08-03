@@ -468,6 +468,8 @@ namespace CCEngine {
                             m_IsDraggingScrollbar = true;
                             m_DragMouseStartY = mouseY;
                             m_DragScrollStartY = m_ScrollState.ScrollY;
+                            Widget::BeginMouseInteraction(this);
+                            e.Handled = true;
                             return true;
                         }
                     }
@@ -477,18 +479,8 @@ namespace CCEngine {
             if (e.GetEventType() == EventType::MouseMoved && m_IsDraggingScrollbar)
             {
                 auto& me = static_cast<MouseMovedEvent&>(e);
-                float deltaY = me.GetY() - m_DragMouseStartY;
-                float trackSpace = m_ScrollState.ViewportHeight - m_ScrollState.GetThumbHeight();
-
-                if (trackSpace > 0.0f)
-                {
-                    float scrollDelta = (deltaY / trackSpace) * m_ScrollState.GetMaxScroll();
-                    m_ScrollState.ScrollY = m_DragScrollStartY + scrollDelta;
-
-                    if (m_ScrollState.ScrollY < 0.0f) m_ScrollState.ScrollY = 0.0f;
-                    if (m_ScrollState.ScrollY > m_ScrollState.GetMaxScroll()) m_ScrollState.ScrollY = m_ScrollState.GetMaxScroll();
-
-                }
+                m_ScrollState.SetFromThumbDrag(me.GetY(), m_DragMouseStartY, m_DragScrollStartY);
+                e.Handled = true;
                 return true;
             }
 
@@ -498,6 +490,8 @@ namespace CCEngine {
                 if (me.GetButton() == 0 && m_IsDraggingScrollbar)
                 {
                     m_IsDraggingScrollbar = false;
+                    Widget::EndMouseInteraction(this);
+                    e.Handled = true;
                     return true;
                 }
             }

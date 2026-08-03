@@ -40,6 +40,12 @@ namespace CCEngine {
             return -1;
         }
 
+        virtual bool ReadColorPixels(std::vector<uint32_t>& outPixels) override
+        {
+            outPixels.clear();
+            return false;
+        }
+
         virtual void ClearAttachment(uint32_t attachmentIndex, int value) override
         {
             // 나중에 glClearTexImage 등의 로직이 들어갈 자리

@@ -2,6 +2,8 @@
 
 #include "Core.h"
 #include "Editor/AssetUndoManager.h"
+#include "Renderer/Framebuffer.h"
+#include "Renderer/MaterialAsset.h"
 #include "UI/WindowPanel.h"
 #include <filesystem>
 #include <functional>
@@ -18,6 +20,7 @@
 
 namespace CCEngine
 {
+    class Mesh;
     class Texture2D;
 
     namespace UI
@@ -38,12 +41,16 @@ namespace CCEngine
             void SetOnPrefabSelected(std::function<void(const std::string&)> callback) { m_OnPrefabSelected = callback; }
             void SetOnModelSelected(std::function<void(const std::string&)> callback) { m_OnModelSelected = callback; }
             void SetOnSceneSelected(std::function<void(const std::string&)> callback) { m_OnSceneSelected = callback; }
+            void SetOnAssetSelected(std::function<void(const std::string&, const std::string&)> callback) { m_OnAssetSelected = std::move(callback); }
             void SetOnAssetDropped(std::function<void(const std::string&, const std::string&, float, float)> callback) { m_OnAssetDropped = callback; }
             void SetOnAssetDatabaseChanged(std::function<void()> callback) { m_OnAssetDatabaseChanged = std::move(callback); }
             void SetOnAssetHistoryChanged(std::function<void()> callback) { m_OnAssetHistoryChanged = std::move(callback); }
             void SetAssetUndoManager(AssetUndoManager* manager) { m_AssetUndoManager = manager; }
             void SetExternalWatcherActive(bool active) { m_ExternalWatcherActive = active; }
             void OnExternalAssetFilesChanged();
+            void ApplyMaterialPreviewOverride(const std::filesystem::path& materialPath, const MaterialAsset& material);
+            void ApplyMaterialPreviewCapture(const std::filesystem::path& materialPath, uint32_t width, uint32_t height, const std::vector<uint32_t>& pixels);
+            void ApplyMaterialPreviewTexture(const std::filesystem::path& materialPath, RendererHandle previewTexture);
             std::vector<std::string> GetAssetHistoryLabels() const;
             size_t GetAppliedAssetHistoryCount() const;
             bool SeekAssetHistory(size_t targetAppliedCount);
@@ -54,6 +61,7 @@ namespace CCEngine
             bool RunQualityRegressionChecks();
 
             virtual void UpdateLayout(const DirectX::XMFLOAT2& parentPos, const DirectX::XMFLOAT2& parentSize) override;
+            virtual void OnUpdate(float deltaTime) override;
             virtual void OnRender() override;
             virtual bool OnEvent(Event& e) override;
             virtual bool WantsMouseCapture() const override { return WindowPanel::WantsMouseCapture() || m_IsDraggingScrollbar || m_IsDraggingTreeScrollbar || m_IsDraggingSplitter || m_IsDraggingAsset || m_IsDraggingSelectionBox || m_IsMouseDownOnEmptyContent; }
@@ -65,6 +73,7 @@ namespace CCEngine
                 Folder,
                 Scene,
                 Prefab,
+                Material,
                 Model,
                 FbxMesh,
                 Texture,
@@ -85,12 +94,14 @@ namespace CCEngine
             };
 
             struct FbxMeshInfo;
+            struct MaterialPreviewCacheEntry;
 
             enum class TypeFilter
             {
                 All = 0,
                 Texture,
                 Model,
+                Material,
                 Prefab,
                 Scene,
                 Script
@@ -128,6 +139,7 @@ namespace CCEngine
             bool ReimportSelectedAssets();
             bool RefreshCurrentFolder(bool forceReimport);
             bool CreateFolderInCurrentDirectory();
+            bool CreateMaterialInCurrentDirectory();
             bool RenameSelectedAsset(const std::string& newName);
             void BeginCreateFolder();
             void BeginRenameSelected();
@@ -189,7 +201,14 @@ namespace CCEngine
             bool ShowSelectedEntryInFolder();
             bool RevealSelectedEntryInExplorer();
             Texture2D* GetAssetPreviewTexture(const AssetEntry& entry);
+            const DirectX::XMFLOAT4* GetMaterialPreviewColor(const AssetEntry& entry);
+            void PrepareMaterialPreviewRequests();
+            void UpdateMaterialPreviewThumbnails();
+            RendererHandle GetMaterialPreviewTexture(const AssetEntry& entry);
+            void RenderMaterialPreviewThumbnail(MaterialPreviewCacheEntry& preview);
+            void InvalidateMaterialPreviewCache(bool discardCapturedPixels);
             void DrawAssetPreview(const AssetEntry& entry, float x, float y, float size);
+            void DrawMaterialPreview(const AssetEntry& entry, float x, float y, float size);
             void DrawFallbackAssetIcon(const AssetEntry& entry, float x, float y, float size);
             uint64_t ComputeDirectorySignature(const std::filesystem::path& directory) const;
             void UpdateDirectoryWatchState();
@@ -221,8 +240,57 @@ namespace CCEngine
                 std::unique_ptr<Texture2D> Texture;
             };
 
+            struct MaterialPreviewCacheEntry
+            {
+                DirectX::XMFLOAT4 AlbedoColor = { 0.62f, 0.62f, 0.66f, 1.0f };
+                std::filesystem::path SourcePath;
+                std::filesystem::file_time_type LastWriteTime = {};
+                MaterialAsset Material;
+                std::unique_ptr<Framebuffer> PreviewFramebuffer;
+                std::unique_ptr<Texture2D> CapturedTexture;
+                std::vector<uint32_t> CapturedPixels;
+                int CapturedPixelWidth = 0;
+                int CapturedPixelHeight = 0;
+                bool CapturedFromInspector = false;
+                bool Valid = false;
+                bool Dirty = true;
+                bool Rendered = false;
+                bool CaptureFailed = false;
+                bool CapturePending = false;
+                uint8_t CaptureAttempts = 0;
+            };
+
+            struct BorrowedMaterialPreview
+            {
+                std::filesystem::path SourcePath;
+                RendererHandle Texture = nullptr;
+            };
+
+            struct PrefabPreviewRenderItem
+            {
+                DirectX::XMMATRIX Transform = DirectX::XMMatrixIdentity();
+                DirectX::XMFLOAT4 Color = { 1.0f, 1.0f, 1.0f, 1.0f };
+                std::shared_ptr<Mesh> MeshData;
+                std::shared_ptr<Texture2D> Texture;
+            };
+
+            struct PrefabPreviewCacheEntry
+            {
+                std::filesystem::file_time_type LastWriteTime = {};
+                std::vector<PrefabPreviewRenderItem> Items;
+                std::unique_ptr<Framebuffer> PreviewFramebuffer;
+                std::unique_ptr<Texture2D> CapturedTexture;
+                bool Valid = false;
+                bool Dirty = true;
+                bool Rendered = false;
+                bool CaptureFailed = false;
+            };
+
             void PushAssetUndoCommand(const AssetUndoManager::Command& command);
             void RefreshAfterAssetUndo(const std::filesystem::path& preferredDirectory);
+            void UpdatePrefabPreviewThumbnails();
+            RendererHandle GetPrefabPreviewTexture(const AssetEntry& entry);
+            void RenderPrefabPreviewThumbnail(PrefabPreviewCacheEntry& preview);
 
         private:
             std::filesystem::path m_RootDirectory;
@@ -239,6 +307,10 @@ namespace CCEngine
             std::unordered_map<std::string, std::vector<FbxMeshInfo>> m_FbxMeshCache;
             std::unordered_map<std::string, std::shared_ptr<TexturePreviewJob>> m_TexturePreviewCache;
             std::vector<std::string> m_TexturePreviewOrder;
+            std::unordered_map<std::string, MaterialPreviewCacheEntry> m_MaterialPreviewCache;
+            std::unordered_map<std::string, BorrowedMaterialPreview> m_BorrowedMaterialPreviews;
+            std::unordered_map<std::string, PrefabPreviewCacheEntry> m_PrefabPreviewCache;
+            std::shared_ptr<Mesh> m_MaterialPreviewMesh;
             int m_TexturePreviewUploadsThisFrame = 0;
             int m_TexturePreviewLoadsStartedThisFrame = 0;
             ScrollState m_ScrollState;
@@ -312,6 +384,7 @@ namespace CCEngine
             std::function<void(const std::string&)> m_OnPrefabSelected = nullptr;
             std::function<void(const std::string&)> m_OnModelSelected = nullptr;
             std::function<void(const std::string&)> m_OnSceneSelected = nullptr;
+            std::function<void(const std::string&, const std::string&)> m_OnAssetSelected = nullptr;
             std::function<void(const std::string&, const std::string&, float, float)> m_OnAssetDropped = nullptr;
             std::function<void()> m_OnAssetDatabaseChanged = nullptr;
             std::function<void()> m_OnAssetHistoryChanged = nullptr;

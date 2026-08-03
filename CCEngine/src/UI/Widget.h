@@ -42,6 +42,19 @@ namespace CCEngine
                 float trackSpace = ViewportHeight - GetThumbHeight();
                 return trackStartY + (scrollRatio * trackSpace);
             }
+
+            void SetFromThumbDrag(float mouseY, float dragStartMouseY, float dragStartScrollY)
+            {
+                float trackSpace = ViewportHeight - GetThumbHeight();
+                if (trackSpace <= 0.0f)
+                    return;
+
+                // 스크롤바 드래그는 마우스 이동량을 실제 콘텐츠 스크롤 범위로 환산한다.
+                // 이 계산을 한 곳에 두면 패널마다 스크롤 감각이 달라지는 문제를 줄일 수 있다.
+                float deltaY = mouseY - dragStartMouseY;
+                float scrollDelta = (deltaY / trackSpace) * GetMaxScroll();
+                ScrollY = (std::clamp)(dragStartScrollY + scrollDelta, 0.0f, GetMaxScroll());
+            }
         };
 
         class CC_API Widget

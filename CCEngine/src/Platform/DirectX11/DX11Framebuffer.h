@@ -29,6 +29,8 @@ namespace CCEngine {
         // 마우스 좌표 픽셀의 엔티티 ID 읽기
         virtual int ReadPixel(uint32_t x, uint32_t y) override;
 
+        virtual bool ReadColorPixels(std::vector<uint32_t>& outPixels) override;
+
         // 특정 버퍼를 원하는 값으로 지우기 (주로 ID 버퍼를 -1로 지울 때 사용)
         virtual void ClearAttachment(uint32_t attachmentIndex, int value) override;
 

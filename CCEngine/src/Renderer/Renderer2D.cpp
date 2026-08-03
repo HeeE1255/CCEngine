@@ -126,6 +126,8 @@ namespace CCEngine
         s_Data.QuadIndexCount = 0;
         s_Data.QuadVertexBufferPtr = s_Data.QuadVertexBufferBase;
         s_Data.TextureSlotIndex = 0;
+        for (uint32_t i = 0; i < Renderer2DData::MaxTextureSlots; ++i)
+            s_Data.TextureSlots[i] = nullptr;
     }
 
     void Renderer2D::Flush()
@@ -149,6 +151,11 @@ namespace CCEngine
         s_Data.QuadIndexBuffer->Bind();
 
         RenderCommand::DrawIndexed(s_Data.QuadIndexCount);
+
+        // UI 렌더러는 한 프레임 안에서 폰트, 아이콘, 썸네일 같은 SRV를 여러 슬롯에 묶는다.
+        // 렌더가 끝난 뒤 슬롯을 비워 두어야 다음 프레임의 프레임버퍼 썸네일 렌더가
+        // 같은 텍스처를 RTV로 다시 묶을 때 DirectX11 리소스 충돌이 나지 않는다.
+        RenderCommand::UnbindTextures(0, Renderer2DData::MaxTextureSlots);
     }
 
     // =========================================================================

@@ -1,5 +1,6 @@
 #include "DX11Framebuffer.h"
 #include "Platform/DirectX11/DX11Context.h"
+#include <cstring>
 
 namespace CCEngine {
 
@@ -90,9 +91,12 @@ namespace CCEngine {
     {
         auto context = DX11Context::Get()->GetDeviceContext();
 
-        // 픽셀 셰이더에서 사용 중이던 텍스처(SRV) 강제 해제 (리소스 충돌 방지)
-        ID3D11ShaderResourceView* nullSRVs[2] = { nullptr, nullptr };
-        context->PSSetShaderResources(0, 2, nullSRVs);
+        // 프레임버퍼 색상 버퍼는 UI에서 썸네일 텍스처(SRV)로 쓰인 뒤,
+        // 다음 프레임에는 다시 렌더 타겟(RTV)으로 묶일 수 있다.
+        // DirectX11은 같은 리소스를 SRV와 RTV로 동시에 쓰는 것을 허용하지 않으므로
+        // 렌더 타겟을 장착하기 전에 픽셀 셰이더의 텍스처 슬롯을 넓게 비운다.
+        ID3D11ShaderResourceView* nullSRVs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
+        context->PSSetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, nullSRVs);
 
         D3D11_VIEWPORT viewport = { 0.0f, 0.0f, (float)m_Specification.Width, (float)m_Specification.Height, 0.0f, 1.0f };
         context->RSSetViewports(1, &viewport);
@@ -176,6 +180,51 @@ namespace CCEngine {
         stagingTexture->Release();
 
         return pixelData;
+    }
+
+    bool DX11Framebuffer::ReadColorPixels(std::vector<uint32_t>& outPixels)
+    {
+        outPixels.clear();
+        if (!m_RenderTargetTexture || m_Specification.Width == 0 || m_Specification.Height == 0)
+            return false;
+
+        auto device = DX11Context::Get()->GetDevice();
+        auto context = DX11Context::Get()->GetDeviceContext();
+
+        D3D11_TEXTURE2D_DESC stagingDesc = {};
+        m_RenderTargetTexture->GetDesc(&stagingDesc);
+        stagingDesc.Usage = D3D11_USAGE_STAGING;
+        stagingDesc.BindFlags = 0;
+        stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        stagingDesc.MiscFlags = 0;
+
+        ID3D11Texture2D* stagingTexture = nullptr;
+        HRESULT hr = device->CreateTexture2D(&stagingDesc, nullptr, &stagingTexture);
+        if (FAILED(hr) || !stagingTexture)
+            return false;
+
+        context->CopyResource(stagingTexture, m_RenderTargetTexture);
+
+        D3D11_MAPPED_SUBRESOURCE mapped = {};
+        hr = context->Map(stagingTexture, 0, D3D11_MAP_READ, 0, &mapped);
+        if (FAILED(hr))
+        {
+            stagingTexture->Release();
+            return false;
+        }
+
+        outPixels.resize((size_t)m_Specification.Width * (size_t)m_Specification.Height);
+        const uint8_t* source = static_cast<const uint8_t*>(mapped.pData);
+        for (uint32_t y = 0; y < m_Specification.Height; ++y)
+        {
+            const uint32_t* sourceRow = reinterpret_cast<const uint32_t*>(source + (size_t)y * mapped.RowPitch);
+            uint32_t* targetRow = outPixels.data() + (size_t)y * m_Specification.Width;
+            std::memcpy(targetRow, sourceRow, (size_t)m_Specification.Width * sizeof(uint32_t));
+        }
+
+        context->Unmap(stagingTexture, 0);
+        stagingTexture->Release();
+        return true;
     }
 
     void DX11Framebuffer::ClearAttachment(uint32_t attachmentIndex, int value)

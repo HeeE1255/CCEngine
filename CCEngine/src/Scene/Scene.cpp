@@ -1284,6 +1284,17 @@ namespace CCEngine
                     }
                 }
 
+                DirectX::XMFLOAT4 renderColor = mesh.BaseColor;
+                std::shared_ptr<Texture2D> renderTexture = mesh.AlbedoMap;
+                if (mesh.Material)
+                {
+                    // Material이 연결된 메시만 재질 값을 우선한다.
+                    // 기존 씬은 BaseColor/AlbedoMap을 그대로 쓰기 때문에 구버전 데이터가 깨지지 않는다.
+                    renderColor = mesh.Material->AlbedoColor;
+                    if (mesh.Material->AlbedoTexture)
+                        renderTexture = mesh.Material->AlbedoTexture;
+                }
+
                 if (animatorComp)
                 {
                     DirectX::XMMATRIX rootWorldTransform = getTransform(rootEntity);
@@ -1292,8 +1303,8 @@ namespace CCEngine
                     Renderer3D::DrawSkinnedMesh(
                         rootWorldTransform,
                         mesh.MeshData,
-                        mesh.AlbedoMap,
-                        mesh.BaseColor,
+                        renderTexture,
+                        renderColor,
                         (int)entityID,
                         animator.GetFinalBoneMatrices()
                     );
@@ -1301,7 +1312,7 @@ namespace CCEngine
                 else
                 {
                     DirectX::XMMATRIX worldTransform = getTransform(entity);
-                    Renderer3D::DrawMesh(worldTransform, mesh.MeshData, mesh.AlbedoMap, mesh.BaseColor, (int)entityID);
+                    Renderer3D::DrawMesh(worldTransform, mesh.MeshData, renderTexture, renderColor, (int)entityID);
                 }
             });
 

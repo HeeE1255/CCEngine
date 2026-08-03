@@ -1,6 +1,6 @@
 {
-    "GameHeight": 720,
-    "GameWidth": 1280,
+    "GameHeight": 1080,
+    "GameWidth": 1920,
     "MoveBackwardKey": "S",
     "MoveDownKey": "Q",
     "MoveForwardKey": "W",

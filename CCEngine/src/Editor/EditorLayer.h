@@ -3,6 +3,7 @@
 #include "Core/Layer.h"
 #include "Scene/Scene.h"
 #include "Renderer/Framebuffer.h"
+#include "Renderer/MaterialAsset.h"
 #include "Editor/EditorCamera.h"
 #include "Editor/AssetFileWatcher.h"
 #include "Editor/AssetUndoManager.h"
@@ -64,6 +65,11 @@ namespace CCEngine {
         void ImportModelAsset(const std::string& filepath);
         void HandleAssetDropped(const std::string& filepath, const std::string& assetType, float mouseX, float mouseY);
         bool ApplyTextureAssetToEntity(Entity entity, const std::string& filepath);
+        bool ApplyMaterialAssetToEntity(Entity entity, const std::string& filepath);
+        void SelectAssetForInspection(const std::filesystem::path& assetPath, const std::string& assetType);
+        void ClearMissingInspectorAssetSelections();
+        void ApplyMaterialAssetPreview(const std::filesystem::path& materialPath, const MaterialAsset& material);
+        void RefreshMaterialAssetReferences(const std::filesystem::path& materialPath);
         Entity PickSceneEntityAt(float mouseX, float mouseY) const;
         void ShowObjectContextMenu(float x, float y, bool allowDelete);
         void ShowMeshObjectSubmenu();
@@ -107,6 +113,8 @@ namespace CCEngine {
         void RenderPhysicsDebugView(const PerspectiveCamera& camera, const std::vector<Entity>& selectedEntities);
         void CyclePhysicsDebugViewMode();
         void UpdatePhysicsDebugButton();
+        void UpdateColliderOutlineButton();
+        void HideColliderDebugDropdown();
         bool RunEditorQualityAssurance(bool closeWhenFinished);
 
     private:
@@ -203,6 +211,10 @@ namespace CCEngine {
         UI::Button* m_BtnToolSnap = nullptr;
         UI::Button* m_BtnToolFrame = nullptr;
         UI::Button* m_BtnPhysicsDebug = nullptr;
+        UI::Button* m_BtnColliderOutline = nullptr;
+        UI::Panel* m_ColliderDebugDropdownPanel = nullptr;
+        UI::Button* m_BtnColliderOutlineMode = nullptr;
+        UI::Button* m_BtnMeshColliderWireMode = nullptr;
         UI::Panel* m_ObjectContextMenuPanel = nullptr;
         UI::Panel* m_MeshObjectSubmenuPanel = nullptr;
         UI::Button* m_BtnCreateEmpty = nullptr;
@@ -246,6 +258,8 @@ namespace CCEngine {
         float m_LastViewportRightClickX = 0.0f;
         float m_LastViewportRightClickY = 0.0f;
         int m_PhysicsDebugViewMode = 0; // 0: Off, 1/2: 2D Selected/All, 3/4: 3D Selected/All, 5/6: Both Selected/All
+        bool m_ShowColliderOutlines = false;
+        bool m_ShowMeshColliderWire = false;
 
     };
 

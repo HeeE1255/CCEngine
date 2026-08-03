@@ -44,6 +44,7 @@ namespace CCEngine
 
     void UIRenderer::BeginUI(uint32_t windowWidth, uint32_t windowHeight)
     {
+        RenderCommand::SetViewport(0, 0, windowWidth, windowHeight);
         DirectX::XMMATRIX orthoMatrix = DirectX::XMMatrixOrthographicOffCenterLH(
             0.0f, (float)windowWidth, (float)windowHeight, 0.0f, -1.0f, 1.0f);
         Renderer2D::BeginScene(orthoMatrix);

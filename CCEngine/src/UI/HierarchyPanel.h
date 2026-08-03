@@ -32,6 +32,7 @@ namespace CCEngine
             virtual void OnRender() override;
 
             virtual bool OnEvent(Event& e) override;
+            virtual bool WantsMouseCapture() const override { return WindowPanel::WantsMouseCapture() || m_IsDraggingScrollbar; }
 
 
         private:

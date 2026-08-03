@@ -6,6 +6,7 @@ namespace Game
     {
         protected override void OnCollisionEnter2D(uint otherEntityID)
         {
+            Debug.Log($"Collision Enter with entity {otherEntityID}");
             Translation = new Vector3(10.0f, Translation.Y, Translation.Z);
         }
 
@@ -16,11 +17,13 @@ namespace Game
 
         protected override void OnCollisionExit2D(uint otherEntityID)
         {
+            Debug.Warn($"Collision Exit with entity {otherEntityID}");
             Translation = new Vector3(Translation.X, Translation.Y, 30.0f);
         }
 
         protected override void OnTriggerEnter2D(uint otherEntityID)
         {
+            Debug.Log($"Trigger Enter with entity {otherEntityID}");
             Translation = new Vector3(40.0f, Translation.Y, Translation.Z);
         }
 
@@ -31,6 +34,7 @@ namespace Game
 
         protected override void OnTriggerExit2D(uint otherEntityID)
         {
+            Debug.Error($"Trigger Exit with entity {otherEntityID}");
             Translation = new Vector3(Translation.X, Translation.Y, 60.0f);
         }
     }

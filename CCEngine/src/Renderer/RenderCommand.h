@@ -84,6 +84,12 @@ namespace CCEngine
             s_RendererAPI->BindTexture(slot, rendererID);
         }
 
+        inline static void UnbindTextures(uint32_t startSlot, uint32_t count)
+        {
+            if (!s_RendererAPI) return;
+            s_RendererAPI->UnbindTextures(startSlot, count);
+        }
+
     private:
         static std::unique_ptr<RendererAPI> s_RendererAPI;
     };

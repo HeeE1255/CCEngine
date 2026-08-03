@@ -26,6 +26,7 @@ namespace CCEngine
         virtual void SetBlendMode(BlendMode mode) override;
         virtual void SetCullMode(CullMode mode) override;
         virtual void BindTexture(uint32_t slot, RendererHandle rendererID) override;
+        virtual void UnbindTextures(uint32_t startSlot, uint32_t count) override;
         
     private:
         float m_ClearColor[4] = { 0.1f, 0.1f, 0.1f, 1.0f };

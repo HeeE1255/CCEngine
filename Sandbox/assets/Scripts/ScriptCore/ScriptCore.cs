@@ -70,7 +70,7 @@ namespace CCEngine
             set => Internal.NativeApi.SetTranslation(EntityID, value);
         }
 
-        public void Log(string message) => Internal.NativeApi.Log(message);
+        public void Log(string message) => Debug.Log(message);
 
         protected virtual void Awake() => OnCreate();
         protected virtual void OnEnable() { }
@@ -112,21 +112,37 @@ namespace CCEngine
             }
         }
     }
+
+    // 사용자 스크립트가 에디터 Console에 직접 메시지를 남길 때 쓰는 진입점이다.
+    // 엔진 내부 로그와 구분하기 위해 네이티브 쪽에서 [C#] 접두어를 붙인다.
+    public static class Debug
+    {
+        public static void Log(string message) => Internal.NativeApi.Log(message, Internal.NativeLogLevel.Info);
+        public static void Warn(string message) => Internal.NativeApi.Log(message, Internal.NativeLogLevel.Warning);
+        public static void Error(string message) => Internal.NativeApi.Log(message, Internal.NativeLogLevel.Error);
+    }
 }
 
 namespace CCEngine.Internal
 {
+    internal enum NativeLogLevel
+    {
+        Info = 0,
+        Warning = 1,
+        Error = 2
+    }
+
     internal static unsafe class NativeApi
     {
         private static delegate* unmanaged[Cdecl]<uint, float*, float*, float*, int> s_GetTranslation;
         private static delegate* unmanaged[Cdecl]<uint, float, float, float, void> s_SetTranslation;
-        private static delegate* unmanaged[Cdecl]<byte*, void> s_Log;
+        private static delegate* unmanaged[Cdecl]<byte*, int, void> s_Log;
 
         internal static void Bind(nint getTranslation, nint setTranslation, nint log)
         {
             s_GetTranslation = (delegate* unmanaged[Cdecl]<uint, float*, float*, float*, int>)getTranslation;
             s_SetTranslation = (delegate* unmanaged[Cdecl]<uint, float, float, float, void>)setTranslation;
-            s_Log = (delegate* unmanaged[Cdecl]<byte*, void>)log;
+            s_Log = (delegate* unmanaged[Cdecl]<byte*, int, void>)log;
         }
 
         internal static CCEngine.Vector3 GetTranslation(uint entityID)
@@ -139,11 +155,13 @@ namespace CCEngine.Internal
         internal static void SetTranslation(uint entityID, CCEngine.Vector3 value)
             => s_SetTranslation(entityID, value.X, value.Y, value.Z);
 
-        internal static void Log(string message)
+        internal static void Log(string message, NativeLogLevel level = NativeLogLevel.Info)
         {
+            // C# 문자열은 관리 메모리에 있으므로 네이티브로 넘기기 전에 UTF-8 바이트로 고정한다.
+            // 로그 레벨을 같이 넘겨야 Console 패널에서 Info, Warning, Error 색을 다르게 표시할 수 있다.
             byte[] utf8 = System.Text.Encoding.UTF8.GetBytes(message + '\0');
             fixed (byte* text = utf8)
-                s_Log(text);
+                s_Log(text, (int)level);
         }
     }
 

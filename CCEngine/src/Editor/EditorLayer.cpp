@@ -286,12 +286,19 @@ namespace CCEngine {
             };
 
             float angle = std::atan2(dy, dx);
-            DirectX::XMMATRIX transform =
-                DirectX::XMMatrixScaling(length, thickness, 1.0f) *
-                DirectX::XMMatrixRotationZ(angle) *
-                DirectX::XMMatrixTranslation(center.x, center.y, center.z);
+            auto drawLineQuad = [&](float drawThickness, const DirectX::XMFLOAT4& drawColor)
+                {
+                    DirectX::XMMATRIX transform =
+                        DirectX::XMMatrixScaling(length, drawThickness, 1.0f) *
+                        DirectX::XMMatrixRotationZ(angle) *
+                        DirectX::XMMatrixTranslation(center.x, center.y, center.z + 0.035f);
+                    Renderer2D::DrawQuad(transform, drawColor, -1);
+                };
 
-            Renderer2D::DrawQuad(transform, color, -1);
+            // 밝은 선만 그리면 같은 밝기의 메쉬 위에서 콜라이더 경계가 사라져 보인다.
+            // 어두운 받침선을 먼저 깔고 실제 색을 얹어 상용 에디터의 outline처럼 읽히게 한다.
+            drawLineQuad(thickness * 1.9f, { 0.02f, 0.02f, 0.02f, 0.82f });
+            drawLineQuad(thickness, color);
         }
 
         void DrawWorldDebugLine3D(const DirectX::XMFLOAT3& a, const DirectX::XMFLOAT3& b, const DirectX::XMFLOAT3& cameraPosition, float thickness, const DirectX::XMFLOAT4& color)
@@ -328,15 +335,24 @@ namespace CCEngine {
             DirectX::XMStoreFloat3(&z, zAxis);
             DirectX::XMStoreFloat3(&c, center);
 
-            // 3D 와이어는 선분마다 카메라를 향하는 얇은 사각형으로 그린다.
-            // 실제 선 렌더러를 새로 만들지 않아도 깊이 테스트와 카메라 회전을 자연스럽게 따른다.
-            DirectX::XMMATRIX transform(
-                x.x, x.y, x.z, 0.0f,
-                y.x, y.y, y.z, 0.0f,
-                z.x, z.y, z.z, 0.0f,
-                c.x, c.y, c.z, 1.0f);
+            auto drawBillboardLine = [&](float drawThickness, const DirectX::XMFLOAT4& drawColor)
+                {
+                    DirectX::XMVECTOR drawYAxis = DirectX::XMVectorScale(side, drawThickness);
+                    DirectX::XMFLOAT3 drawY;
+                    DirectX::XMStoreFloat3(&drawY, drawYAxis);
 
-            Renderer2D::DrawQuad(transform, color, -1);
+                    // 3D 와이어는 선분마다 카메라를 향하는 얇은 사각형으로 그린다.
+                    // 별도 라인 렌더러가 없더라도 카메라 회전에서 두께가 납작해지지 않는다.
+                    DirectX::XMMATRIX transform(
+                        x.x, x.y, x.z, 0.0f,
+                        drawY.x, drawY.y, drawY.z, 0.0f,
+                        z.x, z.y, z.z, 0.0f,
+                        c.x, c.y, c.z, 1.0f);
+                    Renderer2D::DrawQuad(transform, drawColor, -1);
+                };
+
+            drawBillboardLine(thickness * 2.0f, { 0.02f, 0.02f, 0.02f, 0.78f });
+            drawBillboardLine(thickness, color);
         }
 
         void DrawColliderBoxOutline(DirectX::XMMATRIX entityWorld, const BoxCollider2DComponent& collider, const DirectX::XMFLOAT4& color)
@@ -354,7 +370,7 @@ namespace CCEngine {
                 TransformPoint({ -0.5f,  0.5f, 0.0f }, colliderWorld)
             };
 
-            constexpr float lineThickness = 0.025f;
+            constexpr float lineThickness = 0.04f;
             DrawWorldDebugLine(corners[0], corners[1], lineThickness, color);
             DrawWorldDebugLine(corners[1], corners[2], lineThickness, color);
             DrawWorldDebugLine(corners[2], corners[3], lineThickness, color);
@@ -382,9 +398,59 @@ namespace CCEngine {
                 {0, 4}, {1, 5}, {2, 6}, {3, 7}
             };
 
-            constexpr float lineThickness = 0.018f;
+            constexpr float lineThickness = 0.035f;
             for (const auto& edge : edges)
                 DrawWorldDebugLine3D(corners[edge.first], corners[edge.second], cameraPosition, lineThickness, color);
+        }
+
+        void DrawMeshColliderWire3D(const std::shared_ptr<Mesh>& mesh, DirectX::XMMATRIX meshWorld, const DirectX::XMFLOAT3& cameraPosition, const DirectX::XMFLOAT4& color)
+        {
+            if (!mesh)
+                return;
+
+            const std::vector<Vertex3D>& vertices = mesh->GetVertices();
+            const std::vector<uint32_t>& indices = mesh->GetIndices();
+            if (vertices.empty() || indices.size() < 3)
+                return;
+
+            constexpr float lineThickness = 0.006f;
+            constexpr size_t maxDebugEdges = 6000;
+            std::unordered_set<uint64_t> drawnEdges;
+            drawnEdges.reserve((std::min)(indices.size(), maxDebugEdges * 2));
+
+            auto makeEdgeKey = [](uint32_t a, uint32_t b)
+                {
+                    uint32_t lo = (std::min)(a, b);
+                    uint32_t hi = (std::max)(a, b);
+                    return (uint64_t)lo << 32 | (uint64_t)hi;
+                };
+
+            auto drawEdge = [&](uint32_t a, uint32_t b)
+                {
+                    if (a >= vertices.size() || b >= vertices.size())
+                        return;
+
+                    uint64_t key = makeEdgeKey(a, b);
+                    if (!drawnEdges.insert(key).second)
+                        return;
+
+                    DirectX::XMFLOAT3 start = TransformPoint(vertices[a].Position, meshWorld);
+                    DirectX::XMFLOAT3 end = TransformPoint(vertices[b].Position, meshWorld);
+                    DrawWorldDebugLine3D(start, end, cameraPosition, lineThickness, color);
+                };
+
+            // 메시 와이어는 렌더 메쉬 정점을 그대로 사용한다.
+            // collider.Size는 bounds 표시용 값이므로 여기에 곱하면 실제 모델과 선 위치가 어긋난다.
+            // 같은 edge는 한 번만 그리고, 너무 큰 메시에서는 상한을 둬 씬 조작 프레임을 지킨다.
+            for (size_t i = 0; i + 2 < indices.size() && drawnEdges.size() < maxDebugEdges; i += 3)
+            {
+                uint32_t a = indices[i + 0];
+                uint32_t b = indices[i + 1];
+                uint32_t c = indices[i + 2];
+                drawEdge(a, b);
+                drawEdge(b, c);
+                drawEdge(c, a);
+            }
         }
 
         void DrawBoxCollider3DOutline(DirectX::XMMATRIX entityWorld, const BoxCollider3DComponent& collider, const DirectX::XMFLOAT3& cameraPosition, const DirectX::XMFLOAT4& color)
@@ -405,7 +471,7 @@ namespace CCEngine {
 
             constexpr int segments = 36;
             constexpr float pi = 3.1415926535f;
-            constexpr float lineThickness = 0.018f;
+            constexpr float lineThickness = 0.03f;
 
             for (int plane = 0; plane < 3; ++plane)
             {
@@ -435,7 +501,7 @@ namespace CCEngine {
 
             constexpr int segments = 36;
             constexpr float pi = 3.1415926535f;
-            constexpr float lineThickness = 0.018f;
+            constexpr float lineThickness = 0.03f;
             const float halfHeight = collider.Height * 0.5f;
 
             DirectX::XMFLOAT3 previousTop{};
@@ -690,9 +756,47 @@ namespace CCEngine {
         }
         AddEditorHitchStage(editorHitchStages, "ViewportResize", editorStageStartedAt);
 
+        auto isWidgetOrChildOfForUpdate = [](UI::Widget* widget, UI::Widget* parent) -> bool
+            {
+                while (widget)
+                {
+                    if (widget == parent)
+                        return true;
+                    widget = widget->GetParent();
+                }
+                return false;
+            };
+
+        std::function<UI::Widget*(UI::Widget*, float, float)> getTopmostWidgetAtForUpdate =
+            [&](UI::Widget* widget, float mouseX, float mouseY) -> UI::Widget*
+            {
+                if (!widget || !widget->IsVisible() || !widget->IsPointInside(mouseX, mouseY))
+                    return nullptr;
+
+                const auto& children = widget->GetChildren();
+                for (auto it = children.rbegin(); it != children.rend(); ++it)
+                {
+                    if (UI::Widget* hit = getTopmostWidgetAtForUpdate(*it, mouseX, mouseY))
+                        return hit;
+                }
+                return widget;
+            };
+
+        bool allowSceneCameraNavigation = false;
+        if (m_RootUI && m_ViewportWidget)
+        {
+            auto [mouseX, mouseY] = mainWindow.GetMousePosition();
+            UI::Widget* topmost = getTopmostWidgetAtForUpdate(m_RootUI, mouseX, mouseY);
+            // 씬 카메라는 뷰포트 위에 다른 창이 없을 때만 움직인다.
+            // 창 이동/우클릭 메뉴처럼 위에 떠 있는 UI는 항상 씬 뷰보다 먼저 입력을 가져야 한다.
+            allowSceneCameraNavigation =
+                m_ViewportWidget->IsPointInside(mouseX, mouseY) &&
+                isWidgetOrChildOfForUpdate(topmost, m_ViewportWidget);
+        }
+
         // 2. 카메라 및 로직 업데이트
         editorStageStartedAt = std::chrono::steady_clock::now();
-        m_Camera.OnUpdate(deltaTime, m_ProjectSettings.Data());
+        m_Camera.OnUpdate(deltaTime, m_ProjectSettings.Data(), allowSceneCameraNavigation);
         HandleShortcuts();
         AddEditorHitchStage(editorHitchStages, "CameraShortcuts", editorStageStartedAt);
 
@@ -887,6 +991,7 @@ namespace CCEngine {
         if (m_FileDropdownPanel) m_FileDropdownPanel->BringToFront();
         if (m_EditDropdownPanel) m_EditDropdownPanel->BringToFront();
         if (m_WindowDropdownPanel) m_WindowDropdownPanel->BringToFront();
+        if (m_ColliderDebugDropdownPanel) m_ColliderDebugDropdownPanel->BringToFront();
     }
 
     void EditorLayer::OnEvent(Event& e)
@@ -952,6 +1057,7 @@ namespace CCEngine {
             (m_FileDropdownPanel && m_FileDropdownPanel->IsVisible()) ||
             (m_EditDropdownPanel && m_EditDropdownPanel->IsVisible()) ||
             (m_WindowDropdownPanel && m_WindowDropdownPanel->IsVisible()) ||
+            (m_ColliderDebugDropdownPanel && m_ColliderDebugDropdownPanel->IsVisible()) ||
             (m_ObjectContextMenuPanel && m_ObjectContextMenuPanel->IsVisible()) ||
             (m_MeshObjectSubmenuPanel && m_MeshObjectSubmenuPanel->IsVisible()) ||
             (m_ProjectSettingsPanel && m_ProjectSettingsPanel->IsVisible());
@@ -996,6 +1102,15 @@ namespace CCEngine {
                     !m_BtnWindowMenu->IsPointInside(mouseEvent.GetX(), mouseEvent.GetY()))
                 {
                     m_WindowDropdownPanel->SetVisible(false);
+                }
+            }
+
+            if (m_ColliderDebugDropdownPanel && m_ColliderDebugDropdownPanel->IsVisible())
+            {
+                if (!m_ColliderDebugDropdownPanel->IsPointInside(mouseEvent.GetX(), mouseEvent.GetY()) &&
+                    !m_BtnColliderOutline->IsPointInside(mouseEvent.GetX(), mouseEvent.GetY()))
+                {
+                    HideColliderDebugDropdown();
                 }
             }
 
@@ -1164,7 +1279,7 @@ namespace CCEngine {
             if (isMouseEvent)
             {
                 UI::Widget* topmost = getTopmostWidgetAt(m_RootUI, mouseX, mouseY);
-                shouldRouteUIFirst = (topmost != m_ViewportWidget);
+                shouldRouteUIFirst = !isWidgetOrChildOf(topmost, m_ViewportWidget);
             }
         }
 
@@ -1182,8 +1297,10 @@ namespace CCEngine {
             auto vpSize = m_ViewportWidget->GetCalculatedSize();
 
             bool isInsideViewport = (mouseX >= vpPos.x && mouseX <= vpPos.x + vpSize.x && mouseY >= vpPos.y && mouseY <= vpPos.y + vpSize.y);
+            UI::Widget* topmost = m_RootUI ? getTopmostWidgetAt(m_RootUI, mouseX, mouseY) : nullptr;
+            bool viewportIsTopmost = isWidgetOrChildOf(topmost, m_ViewportWidget);
 
-            if (isInsideViewport || m_GizmoSystem.IsDragging())
+            if ((isInsideViewport && viewportIsTopmost) || m_GizmoSystem.IsDragging())
             {
                 auto selectedEntity = m_HierarchyPanel->GetSelectedEntity();
                 auto selectedEntities = m_HierarchyPanel->GetSelectedEntities();
@@ -1721,12 +1838,46 @@ namespace CCEngine {
             m_BtnToolSnap->SetActive(m_GizmoSystem.IsSnappingEnabled());
 
         UpdatePhysicsDebugButton();
+        UpdateColliderOutlineButton();
     }
 
     void EditorLayer::CyclePhysicsDebugViewMode()
     {
         m_PhysicsDebugViewMode = (m_PhysicsDebugViewMode + 1) % 7;
         UpdatePhysicsDebugButton();
+    }
+
+    void EditorLayer::UpdateColliderOutlineButton()
+    {
+        if (!m_BtnColliderOutline)
+            return;
+
+        if (m_ShowColliderOutlines)
+            m_BtnColliderOutline->SetText("Collider: Outline");
+        else if (m_ShowMeshColliderWire)
+            m_BtnColliderOutline->SetText("Collider: Wire");
+        else
+            m_BtnColliderOutline->SetText("Collider: Off");
+
+        m_BtnColliderOutline->SetActive(m_ShowColliderOutlines || m_ShowMeshColliderWire);
+
+        if (m_BtnColliderOutlineMode)
+        {
+            m_BtnColliderOutlineMode->SetText(m_ShowColliderOutlines ? "Outline: On" : "Outline: Off");
+            m_BtnColliderOutlineMode->SetActive(m_ShowColliderOutlines);
+        }
+
+        if (m_BtnMeshColliderWireMode)
+        {
+            m_BtnMeshColliderWireMode->SetText(m_ShowMeshColliderWire ? "Mesh Wire: On" : "Mesh Wire: Off");
+            m_BtnMeshColliderWireMode->SetActive(m_ShowMeshColliderWire);
+        }
+    }
+
+    void EditorLayer::HideColliderDebugDropdown()
+    {
+        if (m_ColliderDebugDropdownPanel)
+            m_ColliderDebugDropdownPanel->SetVisible(false);
     }
 
     void EditorLayer::UpdatePhysicsDebugButton()
@@ -1769,16 +1920,19 @@ namespace CCEngine {
 
     void EditorLayer::RenderPhysicsDebugView(const PerspectiveCamera& camera, const std::vector<Entity>& selectedEntities)
     {
-        if (!m_ActiveScene || m_PhysicsDebugViewMode == 0)
+        if (!m_ActiveScene || (!m_ShowColliderOutlines && !m_ShowMeshColliderWire))
             return;
 
-        const bool draw2D = m_PhysicsDebugViewMode == 1 || m_PhysicsDebugViewMode == 2 || m_PhysicsDebugViewMode == 5 || m_PhysicsDebugViewMode == 6;
-        const bool draw3D = m_PhysicsDebugViewMode == 3 || m_PhysicsDebugViewMode == 4 || m_PhysicsDebugViewMode == 5 || m_PhysicsDebugViewMode == 6;
-        const bool selectedOnly = m_PhysicsDebugViewMode == 1 || m_PhysicsDebugViewMode == 3 || m_PhysicsDebugViewMode == 5;
+        const bool selectedColliderOverlay = m_PhysicsDebugViewMode == 0;
+        const bool draw2D = m_ShowColliderOutlines && (selectedColliderOverlay || m_PhysicsDebugViewMode == 1 || m_PhysicsDebugViewMode == 2 || m_PhysicsDebugViewMode == 5 || m_PhysicsDebugViewMode == 6);
+        const bool draw3D = m_ShowMeshColliderWire || (m_ShowColliderOutlines && (selectedColliderOverlay || m_PhysicsDebugViewMode == 3 || m_PhysicsDebugViewMode == 4 || m_PhysicsDebugViewMode == 5 || m_PhysicsDebugViewMode == 6));
+        const bool selectedOnly = selectedColliderOverlay || m_PhysicsDebugViewMode == 1 || m_PhysicsDebugViewMode == 3 || m_PhysicsDebugViewMode == 5;
 
         std::vector<Entity> targets;
         if (selectedOnly)
         {
+            // Physics Debug가 꺼져 있어도 선택한 오브젝트의 콜라이더는 보여준다.
+            // 전체 표시 토글과 선택 확인용 오버레이를 분리해야 배치 작업 중 콜라이더 크기를 바로 확인할 수 있다.
             targets = selectedEntities;
         }
         else
@@ -1855,21 +2009,21 @@ namespace CCEngine {
             if (draw3D)
             {
                 const DirectX::XMFLOAT3 cameraPosition = camera.GetPosition();
-                if (entity.HasComponent<BoxCollider3DComponent>())
+                if (m_ShowColliderOutlines && entity.HasComponent<BoxCollider3DComponent>())
                 {
                     const auto& collider = entity.GetComponent<BoxCollider3DComponent>();
                     DirectX::XMFLOAT4 color = collider.IsTrigger ? DirectX::XMFLOAT4{ 1.0f, 0.62f, 0.24f, 0.92f } : DirectX::XMFLOAT4{ 0.35f, 0.85f, 1.0f, 0.92f };
                     DrawBoxCollider3DOutline(entityWorld, collider, cameraPosition, color);
                 }
 
-                if (entity.HasComponent<SphereCollider3DComponent>())
+                if (m_ShowColliderOutlines && entity.HasComponent<SphereCollider3DComponent>())
                 {
                     const auto& collider = entity.GetComponent<SphereCollider3DComponent>();
                     DirectX::XMFLOAT4 color = collider.IsTrigger ? DirectX::XMFLOAT4{ 1.0f, 0.62f, 0.24f, 0.92f } : DirectX::XMFLOAT4{ 0.35f, 0.85f, 1.0f, 0.92f };
                     DrawSphereCollider3DOutline(entityWorld, collider, cameraPosition, color);
                 }
 
-                if (entity.HasComponent<CylinderCollider3DComponent>())
+                if (m_ShowColliderOutlines && entity.HasComponent<CylinderCollider3DComponent>())
                 {
                     const auto& collider = entity.GetComponent<CylinderCollider3DComponent>();
                     DirectX::XMFLOAT4 color = collider.IsTrigger ? DirectX::XMFLOAT4{ 1.0f, 0.62f, 0.24f, 0.92f } : DirectX::XMFLOAT4{ 0.35f, 0.85f, 1.0f, 0.92f };
@@ -1884,7 +2038,19 @@ namespace CCEngine {
                         DirectX::XMMatrixScaling(collider.Size.x, collider.Size.y, collider.Size.z) *
                         DirectX::XMMatrixTranslation(collider.Offset.x, collider.Offset.y, collider.Offset.z) *
                         entityWorld;
-                    DrawWireBox3D(colliderWorld, cameraPosition, color);
+                    if (m_ShowColliderOutlines)
+                    {
+                        DrawWireBox3D(colliderWorld, cameraPosition, color);
+                    }
+                    else if (m_ShowMeshColliderWire && entity.HasComponent<MeshComponent>())
+                    {
+                        const auto& meshComponent = entity.GetComponent<MeshComponent>();
+                        std::shared_ptr<Mesh> mesh = meshComponent.MeshData ? meshComponent.MeshData : CreateDefaultMeshForType(meshComponent.Type);
+                        DirectX::XMMATRIX meshWorld =
+                            DirectX::XMMatrixTranslation(collider.Offset.x, collider.Offset.y, collider.Offset.z) *
+                            entityWorld;
+                        DrawMeshColliderWire3D(mesh, meshWorld, cameraPosition, color);
+                    }
                 }
             }
         }
@@ -2923,6 +3089,121 @@ namespace CCEngine {
         return true;
     }
 
+    bool EditorLayer::ApplyMaterialAssetToEntity(Entity entity, const std::string& filepath)
+    {
+        if (!entity || !entity.HasComponent<MeshComponent>())
+            return false;
+
+        if (AssetDatabase::GetAssetKind(filepath) != AssetKind::Material)
+            return false;
+
+        auto material = std::make_shared<MaterialAsset>();
+        if (!material->LoadFromFile(filepath))
+            return false;
+
+        m_UndoManager.BeginSceneStructureChange("Apply Material");
+
+        auto& mesh = entity.GetComponent<MeshComponent>();
+        mesh.Material = material;
+        // Material 에셋은 값 복사가 아니라 참조로 연결한다.
+        // 색/텍스처를 재질 파일에서 바꾸면 같은 재질을 쓰는 오브젝트가 같은 결과를 낼 수 있다.
+        mesh.MaterialPath = filepath;
+        mesh.MaterialAssetGuid = AssetDatabase::GetGuidFromPath(filepath);
+
+        m_UndoManager.CommitSceneStructureChange();
+
+        for (UI::InspectorPanel* inspector : m_InspectorPanels)
+        {
+            if (inspector)
+                inspector->RequestRebuild();
+        }
+        MarkHistoryPanelDirty();
+        ConsoleLog::Info("Material applied: " + filepath);
+        return true;
+    }
+
+    void EditorLayer::SelectAssetForInspection(const std::filesystem::path& assetPath, const std::string& assetType)
+    {
+        if (assetType != "material")
+            return;
+
+        for (UI::InspectorPanel* inspector : m_InspectorPanels)
+        {
+            if (inspector && inspector->IsVisible())
+                inspector->SetSelectedAsset(assetPath, assetType);
+        }
+    }
+
+    void EditorLayer::ClearMissingInspectorAssetSelections()
+    {
+        for (UI::InspectorPanel* inspector : m_InspectorPanels)
+        {
+            if (inspector)
+                inspector->ClearSelectedAssetIfMissing();
+        }
+    }
+
+    void EditorLayer::ApplyMaterialAssetPreview(const std::filesystem::path& materialPath, const MaterialAsset& material)
+    {
+        if (!m_ActiveScene || materialPath.empty())
+            return;
+
+        const std::string materialGuid = AssetDatabase::GetGuidFromPath(materialPath);
+        const std::string materialPathText = materialPath.string();
+
+        auto view = m_ActiveScene->GetRegistry().view<MeshComponent>();
+        for (auto entityID : view)
+        {
+            auto& mesh = view.get<MeshComponent>(entityID);
+            const bool sameGuid = !materialGuid.empty() && mesh.MaterialAssetGuid == materialGuid;
+            const bool samePath = mesh.MaterialPath == materialPathText;
+            if (!sameGuid && !samePath)
+                continue;
+
+            // 인스펙터 드래그 중에는 파일을 다시 읽지 않고 현재 메모리 값을 바로 씬에 반영한다.
+            // 저장과 검증은 디바운스 후 한 번만 처리해서 머티리얼 편집이 끊기지 않게 한다.
+            mesh.Material = std::make_shared<MaterialAsset>(material);
+            mesh.MaterialPath = materialPathText;
+            mesh.MaterialAssetGuid = materialGuid;
+        }
+
+        for (UI::AssetBrowserPanel* browser : m_AssetBrowserPanels)
+        {
+            if (browser)
+                browser->ApplyMaterialPreviewOverride(materialPath, material);
+        }
+    }
+
+    void EditorLayer::RefreshMaterialAssetReferences(const std::filesystem::path& materialPath)
+    {
+        if (!m_ActiveScene || materialPath.empty())
+            return;
+
+        MaterialAsset latestMaterial;
+        if (!latestMaterial.LoadFromFile(materialPath))
+            return;
+
+        const std::string materialGuid = AssetDatabase::GetGuidFromPath(materialPath);
+        const std::string materialPathText = materialPath.string();
+
+        auto view = m_ActiveScene->GetRegistry().view<MeshComponent>();
+        for (auto entityID : view)
+        {
+            auto& mesh = view.get<MeshComponent>(entityID);
+            const bool sameGuid = !materialGuid.empty() && mesh.MaterialAssetGuid == materialGuid;
+            const bool samePath = mesh.MaterialPath == materialPathText;
+            if (!sameGuid && !samePath)
+                continue;
+
+            // 인스펙터에서 Material 파일을 바꾸면 현재 씬의 참조도 즉시 다시 읽는다.
+            // 나중에 Material 캐시가 들어가면 이 부분은 캐시 dirty 처리로 바뀐다.
+            mesh.Material = std::make_shared<MaterialAsset>(latestMaterial);
+            mesh.MaterialPath = materialPathText;
+            mesh.MaterialAssetGuid = materialGuid;
+        }
+
+    }
+
     Entity EditorLayer::PickSceneEntityAt(float mouseX, float mouseY) const
     {
         if (!m_Framebuffer || !m_ActiveScene)
@@ -2994,6 +3275,32 @@ namespace CCEngine {
             {
                 if (!ApplyTextureAssetToEntity(target, filepath))
                     ConsoleLog::Warning("Texture drop ignored: target has no Mesh Renderer.");
+                return;
+            }
+
+            return;
+        }
+
+        if (assetType == "material")
+        {
+            for (UI::InspectorPanel* inspector : m_InspectorPanels)
+            {
+                if (!inspector || !inspector->IsVisible())
+                    continue;
+
+                if (inspector->IsMaterialSlotPoint(mouseX, mouseY))
+                {
+                    if (!ApplyMaterialAssetToEntity(inspector->GetSelectedEntity(), filepath))
+                        ConsoleLog::Warning("Material drop ignored: selected object has no Mesh Renderer.");
+                    return;
+                }
+            }
+
+            Entity target = PickSceneEntityAt(mouseX, mouseY);
+            if (target)
+            {
+                if (!ApplyMaterialAssetToEntity(target, filepath))
+                    ConsoleLog::Warning("Material drop ignored: target has no Mesh Renderer.");
                 return;
             }
 
@@ -3409,6 +3716,36 @@ namespace CCEngine {
             inspector->SetSceneStructureChangeCallbacks(
                 [this](const std::string& label) { m_UndoManager.BeginSceneStructureChange(label); },
                 [this]() { m_UndoManager.CommitSceneStructureChange(); });
+            inspector->SetAssetChangedCallback(
+                [this](const std::filesystem::path& path, const std::string& type)
+                {
+                    if (type == "material")
+                        RefreshMaterialAssetReferences(path);
+                    QueueAssetReferenceValidation();
+                });
+            inspector->SetMaterialPreviewChangedCallback(
+                [this](const std::filesystem::path& path, const MaterialAsset& material)
+                {
+                    ApplyMaterialAssetPreview(path, material);
+                });
+            inspector->SetMaterialPreviewCapturedCallback(
+                [this](const std::filesystem::path& path, uint32_t width, uint32_t height, const std::vector<uint32_t>& pixels)
+                {
+                    for (UI::AssetBrowserPanel* browser : m_AssetBrowserPanels)
+                    {
+                        if (browser)
+                            browser->ApplyMaterialPreviewCapture(path, width, height, pixels);
+                    }
+                });
+            inspector->SetMaterialPreviewTextureReadyCallback(
+                [this](const std::filesystem::path& path, RendererHandle texture)
+                {
+                    for (UI::AssetBrowserPanel* browser : m_AssetBrowserPanels)
+                    {
+                        if (browser)
+                            browser->ApplyMaterialPreviewTexture(path, texture);
+                    }
+                });
             if (m_HierarchyPanel)
                 inspector->SetSelectedEntity(m_HierarchyPanel->GetSelectedEntity());
             m_InspectorPanels.push_back(inspector);
@@ -3421,8 +3758,13 @@ namespace CCEngine {
             browser->SetOnPrefabSelected([this](const std::string& path) { InstantiatePrefab(path); });
             browser->SetOnModelSelected([this](const std::string& path) { ImportModelAsset(path); });
             browser->SetOnSceneSelected([this](const std::string& path) { OpenScene(path); });
+            browser->SetOnAssetSelected([this](const std::string& path, const std::string& type) { SelectAssetForInspection(path, type); });
             browser->SetOnAssetDropped([this](const std::string& path, const std::string& type, float x, float y) { HandleAssetDropped(path, type, x, y); });
-            browser->SetOnAssetDatabaseChanged([this]() { QueueAssetReferenceValidation(); });
+            browser->SetOnAssetDatabaseChanged([this]()
+                {
+                    ClearMissingInspectorAssetSelections();
+                    QueueAssetReferenceValidation();
+                });
             browser->SetOnAssetHistoryChanged([this]() { MarkHistoryPanelDirty(); });
             m_AssetBrowserPanels.push_back(browser);
         };
@@ -3680,6 +4022,36 @@ namespace CCEngine {
         m_InspectorPanel->SetSceneStructureChangeCallbacks(
             [this](const std::string& label) { m_UndoManager.BeginSceneStructureChange(label); },
             [this]() { m_UndoManager.CommitSceneStructureChange(); });
+        m_InspectorPanel->SetAssetChangedCallback(
+            [this](const std::filesystem::path& path, const std::string& type)
+            {
+                if (type == "material")
+                    RefreshMaterialAssetReferences(path);
+                QueueAssetReferenceValidation();
+            });
+        m_InspectorPanel->SetMaterialPreviewChangedCallback(
+            [this](const std::filesystem::path& path, const MaterialAsset& material)
+            {
+                ApplyMaterialAssetPreview(path, material);
+            });
+        m_InspectorPanel->SetMaterialPreviewCapturedCallback(
+            [this](const std::filesystem::path& path, uint32_t width, uint32_t height, const std::vector<uint32_t>& pixels)
+            {
+                for (UI::AssetBrowserPanel* browser : m_AssetBrowserPanels)
+                {
+                    if (browser)
+                        browser->ApplyMaterialPreviewCapture(path, width, height, pixels);
+                }
+            });
+        m_InspectorPanel->SetMaterialPreviewTextureReadyCallback(
+            [this](const std::filesystem::path& path, RendererHandle texture)
+            {
+                for (UI::AssetBrowserPanel* browser : m_AssetBrowserPanels)
+                {
+                    if (browser)
+                        browser->ApplyMaterialPreviewTexture(path, texture);
+                }
+            });
         m_RootUI->AddChild(m_InspectorPanel);
         m_InspectorPanels.push_back(m_InspectorPanel);
 
@@ -3759,6 +4131,30 @@ namespace CCEngine {
         m_BtnPhysicsDebug->SetOffsetMin(432.0f, -12.0f); m_BtnPhysicsDebug->SetOffsetMax(580.0f, 12.0f);
         m_ToolbarPanel->AddChild(m_BtnPhysicsDebug);
 
+        m_BtnColliderOutline = new UI::Button("BtnColliderOutline", "Collider: Off");
+        m_BtnColliderOutline->SetAnchorMin(0.0f, 0.5f); m_BtnColliderOutline->SetAnchorMax(0.0f, 0.5f);
+        m_BtnColliderOutline->SetOffsetMin(588.0f, -12.0f); m_BtnColliderOutline->SetOffsetMax(724.0f, 12.0f);
+        m_ToolbarPanel->AddChild(m_BtnColliderOutline);
+
+        m_ColliderDebugDropdownPanel = new UI::Panel("ColliderDebugDropdown", { 0.18f, 0.18f, 0.18f, 1.0f });
+        m_ColliderDebugDropdownPanel->SetVisible(false);
+        m_ColliderDebugDropdownPanel->SetBlockMouseEvents(true);
+        m_ColliderDebugDropdownPanel->SetAnchorMin(0.0f, 0.0f);
+        m_ColliderDebugDropdownPanel->SetAnchorMax(0.0f, 0.0f);
+        m_ColliderDebugDropdownPanel->SetOffsetMin(838.0f, 88.0f);
+        m_ColliderDebugDropdownPanel->SetOffsetMax(1010.0f, 140.0f);
+        m_RootUI->AddChild(m_ColliderDebugDropdownPanel);
+
+        m_BtnColliderOutlineMode = new UI::Button("BtnColliderOutlineMode", "Outline: Off");
+        m_BtnColliderOutlineMode->SetAnchorMin(0.0f, 0.0f); m_BtnColliderOutlineMode->SetAnchorMax(1.0f, 0.0f);
+        m_BtnColliderOutlineMode->SetOffsetMin(0.0f, 0.0f); m_BtnColliderOutlineMode->SetOffsetMax(0.0f, 26.0f);
+        m_ColliderDebugDropdownPanel->AddChild(m_BtnColliderOutlineMode);
+
+        m_BtnMeshColliderWireMode = new UI::Button("BtnMeshColliderWireMode", "Mesh Wire: Off");
+        m_BtnMeshColliderWireMode->SetAnchorMin(0.0f, 0.0f); m_BtnMeshColliderWireMode->SetAnchorMax(1.0f, 0.0f);
+        m_BtnMeshColliderWireMode->SetOffsetMin(0.0f, 26.0f); m_BtnMeshColliderWireMode->SetOffsetMax(0.0f, 52.0f);
+        m_ColliderDebugDropdownPanel->AddChild(m_BtnMeshColliderWireMode);
+
         m_BtnPlay = new UI::Button("BtnPlay", "Play");
         m_BtnPlay->SetAnchorMin(1.0f, 0.5f); m_BtnPlay->SetAnchorMax(1.0f, 0.5f);
         m_BtnPlay->SetOffsetMin(-220.0f, -12.0f); m_BtnPlay->SetOffsetMax(-160.0f, 12.0f);
@@ -3812,8 +4208,13 @@ namespace CCEngine {
         m_AssetBrowserPanel->SetOnPrefabSelected([this](const std::string& path) { InstantiatePrefab(path); });
         m_AssetBrowserPanel->SetOnModelSelected([this](const std::string& path) { ImportModelAsset(path); });
         m_AssetBrowserPanel->SetOnSceneSelected([this](const std::string& path) { OpenScene(path); });
+        m_AssetBrowserPanel->SetOnAssetSelected([this](const std::string& path, const std::string& type) { SelectAssetForInspection(path, type); });
         m_AssetBrowserPanel->SetOnAssetDropped([this](const std::string& path, const std::string& type, float x, float y) { HandleAssetDropped(path, type, x, y); });
-        m_AssetBrowserPanel->SetOnAssetDatabaseChanged([this]() { QueueAssetReferenceValidation(); });
+        m_AssetBrowserPanel->SetOnAssetDatabaseChanged([this]()
+            {
+                ClearMissingInspectorAssetSelections();
+                QueueAssetReferenceValidation();
+            });
         m_AssetBrowserPanel->SetOnAssetHistoryChanged([this]() { MarkHistoryPanelDirty(); });
         m_RootUI->AddChild(m_AssetBrowserPanel);
         m_AssetBrowserPanels.push_back(m_AssetBrowserPanel);
@@ -4033,6 +4434,7 @@ namespace CCEngine {
                 m_FileDropdownPanel->SetVisible(!m_FileDropdownPanel->IsVisible());
                 m_EditDropdownPanel->SetVisible(false);
                 m_WindowDropdownPanel->SetVisible(false);
+                HideColliderDebugDropdown();
                 BringEditorOverlaysToFront();
             });
         m_BtnEditMenu->SetOnClick([this]()
@@ -4040,6 +4442,7 @@ namespace CCEngine {
                 m_EditDropdownPanel->SetVisible(!m_EditDropdownPanel->IsVisible());
                 m_FileDropdownPanel->SetVisible(false);
                 m_WindowDropdownPanel->SetVisible(false);
+                HideColliderDebugDropdown();
                 BringEditorOverlaysToFront();
             });
         m_BtnWindowMenu->SetOnClick([this]()
@@ -4047,6 +4450,7 @@ namespace CCEngine {
                 m_WindowDropdownPanel->SetVisible(!m_WindowDropdownPanel->IsVisible());
                 m_FileDropdownPanel->SetVisible(false);
                 m_EditDropdownPanel->SetVisible(false);
+                HideColliderDebugDropdown();
                 BringEditorOverlaysToFront();
             });
 
@@ -4106,6 +4510,35 @@ namespace CCEngine {
         m_BtnToolSnap->SetOnClick([this]() { m_GizmoSystem.ToggleSnapping(); UpdateSceneToolButtons(); });
         m_BtnToolFrame->SetOnClick([this]() { FrameSelectedEntity(); });
         m_BtnPhysicsDebug->SetOnClick([this]() { CyclePhysicsDebugViewMode(); });
+        m_BtnColliderOutline->SetOnClick([this]()
+            {
+                if (!m_ColliderDebugDropdownPanel)
+                    return;
+
+                // 메인 버튼은 상태를 바로 바꾸지 않고 메뉴만 연다.
+                // 실제 표시 모드는 아래 항목에서 하나만 선택하게 해 두어 상태 충돌을 막는다.
+                m_ColliderDebugDropdownPanel->SetVisible(!m_ColliderDebugDropdownPanel->IsVisible());
+                if (m_FileDropdownPanel) m_FileDropdownPanel->SetVisible(false);
+                if (m_EditDropdownPanel) m_EditDropdownPanel->SetVisible(false);
+                if (m_WindowDropdownPanel) m_WindowDropdownPanel->SetVisible(false);
+                m_ColliderDebugDropdownPanel->BringToFront();
+            });
+        m_BtnColliderOutlineMode->SetOnClick([this]()
+            {
+                m_ShowColliderOutlines = !m_ShowColliderOutlines;
+                if (m_ShowColliderOutlines)
+                    m_ShowMeshColliderWire = false;
+                HideColliderDebugDropdown();
+                UpdateColliderOutlineButton();
+            });
+        m_BtnMeshColliderWireMode->SetOnClick([this]()
+            {
+                m_ShowMeshColliderWire = !m_ShowMeshColliderWire;
+                if (m_ShowMeshColliderWire)
+                    m_ShowColliderOutlines = false;
+                HideColliderDebugDropdown();
+                UpdateColliderOutlineButton();
+            });
 
         m_BtnPlay->SetOnClick([this]() {
             if (!m_ActiveScene)

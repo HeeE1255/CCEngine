@@ -111,6 +111,7 @@ namespace CCEngine
             {
                 case AssetKind::Scene: return "SceneImporter";
                 case AssetKind::Prefab: return "PrefabImporter";
+                case AssetKind::Material: return "MaterialImporter";
                 case AssetKind::Model: return "ModelImporter";
                 case AssetKind::Texture: return "TextureImporter";
                 case AssetKind::Script: return "ScriptImporter";
@@ -124,6 +125,7 @@ namespace CCEngine
             {
                 case AssetKind::Scene:
                 case AssetKind::Prefab:
+                case AssetKind::Material:
                 case AssetKind::Model:
                 case AssetKind::Texture:
                 case AssetKind::Script:
@@ -632,6 +634,17 @@ namespace CCEngine
                     "Texture",
                     repairFiles,
                     report);
+
+                ValidateGuidPathPair(
+                    object["MeshComponent"],
+                    "MaterialGuid",
+                    "MaterialPath",
+                    AssetKind::Material,
+                    sourceFile,
+                    jsonLocation + "/MeshComponent",
+                    "Material",
+                    repairFiles,
+                    report);
             }
 
             if (object.contains("ModelComponent") && object["ModelComponent"].is_object())
@@ -644,6 +657,31 @@ namespace CCEngine
                     sourceFile,
                     jsonLocation + "/ModelComponent",
                     "Model",
+                    repairFiles,
+                    report);
+            }
+
+            if (object.contains("Material") && object["Material"].is_object())
+            {
+                ValidateGuidPathPair(
+                    object["Material"],
+                    "AlbedoTextureGuid",
+                    "AlbedoTexturePath",
+                    AssetKind::Texture,
+                    sourceFile,
+                    jsonLocation + "/Material",
+                    "Material Texture",
+                    repairFiles,
+                    report);
+
+                ValidateGuidPathPair(
+                    object["Material"],
+                    "NormalTextureGuid",
+                    "NormalTexturePath",
+                    AssetKind::Texture,
+                    sourceFile,
+                    jsonLocation + "/Material",
+                    "Material Normal",
                     repairFiles,
                     report);
             }
@@ -937,6 +975,7 @@ namespace CCEngine
 
         if (extension == ".ccscene") return AssetKind::Scene;
         if (extension == ".ccprefab") return AssetKind::Prefab;
+        if (extension == ".ccmat") return AssetKind::Material;
         if (extension == ".fbx" || extension == ".obj" || extension == ".gltf" || extension == ".glb") return AssetKind::Model;
         if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".tga") return AssetKind::Texture;
         if (extension == ".cs") return AssetKind::Script;
@@ -1290,7 +1329,7 @@ namespace CCEngine
                 std::transform(extension.begin(), extension.end(), extension.begin(),
                     [](unsigned char c) { return (char)std::tolower(c); });
 
-                if (extension == ".ccscene" || extension == ".ccprefab")
+                if (extension == ".ccscene" || extension == ".ccprefab" || extension == ".ccmat")
                     filesToValidate.push_back(entry.path());
             }
         }
@@ -1366,6 +1405,7 @@ namespace CCEngine
         {
             case AssetKind::Scene: return "Scene";
             case AssetKind::Prefab: return "Prefab";
+            case AssetKind::Material: return "Material";
             case AssetKind::Model: return "Model";
             case AssetKind::Texture: return "Texture";
             case AssetKind::Script: return "Script";
@@ -1377,6 +1417,7 @@ namespace CCEngine
     {
         if (text == "Scene") return AssetKind::Scene;
         if (text == "Prefab") return AssetKind::Prefab;
+        if (text == "Material") return AssetKind::Material;
         if (text == "Model") return AssetKind::Model;
         if (text == "Texture") return AssetKind::Texture;
         if (text == "Script") return AssetKind::Script;

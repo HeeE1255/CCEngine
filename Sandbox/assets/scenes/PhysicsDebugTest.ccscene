@@ -169,6 +169,11 @@
                 "FixedRotation": false,
                 "Type": 1
             },
+            "ScriptComponent": {
+                "ClassName": "Game.PhysicsEventProbe",
+                "Enabled": true,
+                "Fields": {}
+            },
             "TagComponent": {
                 "Tag": "Dynamic Box Collider"
             },
@@ -423,7 +428,7 @@
                 "ActiveSelf": true
             },
             "CylinderCollider3DComponent": {
-                "Height": 1.4,
+                "Height": 1.0,
                 "IsTrigger": true,
                 "Offset": [
                     0.0,

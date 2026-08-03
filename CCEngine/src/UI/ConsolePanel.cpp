@@ -86,6 +86,48 @@ namespace CCEngine::UI
         if (!m_IsVisible)
             return false;
 
+        if (e.GetEventType() == EventType::MouseButtonPressed)
+        {
+            auto& me = static_cast<MouseButtonPressedEvent&>(e);
+            if (me.GetButton() == 0 && m_ScrollState.GetMaxScroll() > 0.0f)
+            {
+                float thumbH = m_ScrollState.GetThumbHeight();
+                float thumbY = m_ScrollState.GetThumbY(m_CalculatedPos.y + m_ContentTop);
+                float thumbX = m_CalculatedPos.x + m_CalculatedSize.x - 14.0f;
+                bool onThumb = me.GetX() >= thumbX && me.GetX() <= thumbX + 8.0f &&
+                    me.GetY() >= thumbY && me.GetY() <= thumbY + thumbH;
+                if (onThumb)
+                {
+                    m_IsDraggingScrollbar = true;
+                    m_DragMouseStartY = me.GetY();
+                    m_DragScrollStartY = m_ScrollState.ScrollY;
+                    Widget::BeginMouseInteraction(this);
+                    e.Handled = true;
+                    return true;
+                }
+            }
+        }
+
+        if (e.GetEventType() == EventType::MouseMoved && m_IsDraggingScrollbar)
+        {
+            auto& me = static_cast<MouseMovedEvent&>(e);
+            m_ScrollState.SetFromThumbDrag(me.GetY(), m_DragMouseStartY, m_DragScrollStartY);
+            e.Handled = true;
+            return true;
+        }
+
+        if (e.GetEventType() == EventType::MouseButtonReleased)
+        {
+            auto& me = static_cast<MouseButtonReleasedEvent&>(e);
+            if (me.GetButton() == 0 && m_IsDraggingScrollbar)
+            {
+                m_IsDraggingScrollbar = false;
+                Widget::EndMouseInteraction(this);
+                e.Handled = true;
+                return true;
+            }
+        }
+
         if (e.GetEventType() == EventType::MouseScrolled)
         {
             auto& se = static_cast<MouseScrolledEvent&>(e);

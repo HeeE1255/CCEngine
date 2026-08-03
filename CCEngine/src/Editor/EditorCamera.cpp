@@ -84,7 +84,7 @@ namespace CCEngine
         ResetCamera();
     }
 
-    void EditorCamera::OnUpdate(float deltaTime, const ProjectSettingsData& settings)
+    void EditorCamera::OnUpdate(float deltaTime, const ProjectSettingsData& settings, bool allowNavigation)
     {
         // 1. 네이티브 Win32 우클릭 감지
         bool isRightMouseDown = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
@@ -93,7 +93,9 @@ namespace CCEngine
         static bool s_IsFirstClick = true;
         static POINT s_LastMousePos = { 0, 0 };
 
-        if (isRightMouseDown)
+        // 카메라는 Win32 전역 입력을 직접 읽는다.
+        // 그래서 호출하는 쪽에서 씬 뷰가 실제 최상위일 때만 허용해 줘야 다른 패널 위 우클릭을 훔치지 않는다.
+        if (isRightMouseDown && allowNavigation)
         {
             // 2. 현재 마우스 전역(모니터) 좌표 가져오기
             POINT currentMousePos;

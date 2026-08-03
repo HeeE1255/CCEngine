@@ -3,6 +3,7 @@
 #include "Core.h"
 #include "Renderer/RendererHandle.h"
 #include <cstdint>
+#include <vector>
 
 namespace CCEngine {
 
@@ -34,6 +35,10 @@ namespace CCEngine {
 
         // ID 버퍼(슬롯1)에서 마우스 픽셀의 정수 값을 읽어오는 함수
         virtual int ReadPixel(uint32_t x, uint32_t y) = 0;
+
+        // 색상 버퍼 전체를 CPU 메모리로 복사한다.
+        // 썸네일처럼 한 번 캡처해서 재사용하는 용도에만 쓰고, 매 프레임 호출하면 GPU 대기가 생긴다.
+        virtual bool ReadColorPixels(std::vector<uint32_t>& outPixels) = 0;
 
         // ID 버퍼를 깨끗하게 지우는 함수
         virtual void ClearAttachment(uint32_t attachmentIndex, int value) = 0;

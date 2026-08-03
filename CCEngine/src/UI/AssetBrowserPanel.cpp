@@ -5,8 +5,16 @@
 #include "Core/AssetDatabase.h"
 #include "Core/ConsoleLog.h"
 #include "Editor/AssetUndoManager.h"
+#include "Renderer/MaterialAsset.h"
+#include "Renderer/MeshFactory.h"
+#include "Renderer/MaterialPreviewRenderer.h"
+#include "Renderer/PerspectiveCamera.h"
+#include "Renderer/RenderCommand.h"
+#include "Renderer/Renderer.h"
+#include "Renderer/Renderer3D.h"
 #include "Renderer/UIRenderer.h"
 #include "Renderer/Texture.h"
+#include "Scene/Components.h"
 #include "Scripting/ScriptCompiler.h"
 #include "Application.h"
 #include "Core/Window.h"
@@ -19,13 +27,18 @@
 #include <assimp/scene.h>
 #include <windows.h>
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstring>
 #include <cmath>
 #include <fstream>
 #include <functional>
+#include <iomanip>
 #include <iostream>
+#include <limits>
+#include <mutex>
 #include <sstream>
+#include <unordered_set>
 
 namespace CCEngine
 {
@@ -40,7 +53,7 @@ namespace CCEngine
             constexpr float kTypeFilterButtonWidth = 126.0f;
             constexpr float kSortButtonWidth = 102.0f;
             constexpr float kDropdownItemHeight = 26.0f;
-            constexpr int kTypeFilterItemCount = 6;
+            constexpr int kTypeFilterItemCount = 7;
             constexpr int kSortItemCount = 3;
 
             bool TryAcquirePreviewSlot(std::atomic<int>& counter, int maxCount)
@@ -85,6 +98,13 @@ namespace CCEngine
             uint32_t PackPreviewPixel(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255)
             {
                 return ((uint32_t)r) | ((uint32_t)g << 8) | ((uint32_t)b << 16) | ((uint32_t)a << 24);
+            }
+
+            bool IsMaterialAssetPath(const std::filesystem::path& path)
+            {
+                std::string extension = path.extension().string();
+                std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+                return extension == ".ccmat";
             }
 
             void PutPreviewPixel(DecodedPreviewPixels& image, int x, int y, uint32_t color)
@@ -144,6 +164,444 @@ namespace CCEngine
             }
 
             constexpr const char* ThumbnailAlgorithmVersion = "fit2d-v3";
+            constexpr const char* MaterialThumbnailAlgorithmVersion = "material-sphere-v8";
+            constexpr int MaterialPreviewTextureSize = 384;
+
+            void DrawPreviewBorder(float x, float y, float width, float height, const DirectX::XMFLOAT4& color)
+            {
+                // UIRenderer::DrawRect는 현재 채워진 사각형으로 동작한다.
+                // 썸네일 위에는 전체 면이 아니라 얇은 테두리만 올려야 캡처 이미지가 가려지지 않는다.
+                constexpr float thickness = 1.0f;
+                UIRenderer::DrawRectFilled(x, y, width, thickness, color);
+                UIRenderer::DrawRectFilled(x, y + height - thickness, width, thickness, color);
+                UIRenderer::DrawRectFilled(x, y, thickness, height, color);
+                UIRenderer::DrawRectFilled(x + width - thickness, y, thickness, height, color);
+            }
+
+            std::filesystem::path GetThumbnailDebugDirectory()
+            {
+                std::filesystem::path current = std::filesystem::current_path();
+                std::filesystem::path localPath = current / "local" / "thumbnail_debug";
+                if (std::filesystem::exists(localPath / "enable.txt"))
+                    return localPath;
+
+                std::filesystem::path parentLocalPath = current.parent_path() / "local" / "thumbnail_debug";
+                if (std::filesystem::exists(parentLocalPath / "enable.txt"))
+                    return parentLocalPath;
+
+                return localPath;
+            }
+
+            bool IsThumbnailDebugDumpEnabled()
+            {
+                static const bool s_Enabled = std::filesystem::exists(GetThumbnailDebugDirectory() / "enable.txt");
+                return s_Enabled;
+            }
+
+            std::string SanitizeDebugFileName(std::string value)
+            {
+                for (char& c : value)
+                {
+                    if (c == '\\' || c == '/' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|')
+                        c = '_';
+                }
+                return value;
+            }
+
+            void WriteThumbnailDebugBmp(const std::filesystem::path& path, uint32_t width, uint32_t height, const std::vector<uint32_t>& pixels)
+            {
+                if (width == 0 || height == 0 || pixels.size() != (size_t)width * (size_t)height)
+                    return;
+
+                std::ofstream stream(path, std::ios::binary);
+                if (!stream)
+                    return;
+
+                const uint32_t bytesPerPixel = 4;
+                const uint32_t imageBytes = width * height * bytesPerPixel;
+                const uint32_t fileBytes = 14 + 40 + imageBytes;
+
+                auto writeU16 = [&](uint16_t value)
+                    {
+                        stream.put((char)(value & 0xff));
+                        stream.put((char)((value >> 8) & 0xff));
+                    };
+
+                auto writeU32 = [&](uint32_t value)
+                    {
+                        stream.put((char)(value & 0xff));
+                        stream.put((char)((value >> 8) & 0xff));
+                        stream.put((char)((value >> 16) & 0xff));
+                        stream.put((char)((value >> 24) & 0xff));
+                    };
+
+                writeU16(0x4d42);
+                writeU32(fileBytes);
+                writeU16(0);
+                writeU16(0);
+                writeU32(14 + 40);
+
+                writeU32(40);
+                writeU32(width);
+                writeU32(height);
+                writeU16(1);
+                writeU16(32);
+                writeU32(0);
+                writeU32(imageBytes);
+                writeU32(2835);
+                writeU32(2835);
+                writeU32(0);
+                writeU32(0);
+
+                for (int y = (int)height - 1; y >= 0; --y)
+                {
+                    for (uint32_t x = 0; x < width; ++x)
+                    {
+                        uint32_t pixel = pixels[(size_t)y * (size_t)width + (size_t)x];
+                        uint8_t r = (uint8_t)(pixel & 0xff);
+                        uint8_t g = (uint8_t)((pixel >> 8) & 0xff);
+                        uint8_t b = (uint8_t)((pixel >> 16) & 0xff);
+                        uint8_t a = (uint8_t)((pixel >> 24) & 0xff);
+
+                        stream.put((char)b);
+                        stream.put((char)g);
+                        stream.put((char)r);
+                        stream.put((char)a);
+                    }
+                }
+            }
+
+            void DumpThumbnailDebugImage(const std::string& label, uint32_t width, uint32_t height, const std::vector<uint32_t>& pixels)
+            {
+                if (!IsThumbnailDebugDumpEnabled())
+                    return;
+
+                static std::mutex s_DumpMutex;
+                static std::unordered_set<std::string> s_DumpedLabels;
+
+                std::lock_guard<std::mutex> lock(s_DumpMutex);
+                if (s_DumpedLabels.contains(label) || s_DumpedLabels.size() >= 4)
+                    return;
+
+                s_DumpedLabels.insert(label);
+                std::filesystem::create_directories(GetThumbnailDebugDirectory());
+
+                std::ostringstream name;
+                name << std::setw(2) << std::setfill('0') << s_DumpedLabels.size() << "_" << SanitizeDebugFileName(label) << ".bmp";
+
+                // 썸네일 문제는 렌더, 크롭, GPU 텍스처 업로드 중 어디서 깨지는지 나눠서 봐야 한다.
+                // 그래서 최종 UI가 아니라 썸네일 생성 중간 픽셀을 로컬 BMP로 남긴다.
+                WriteThumbnailDebugBmp(GetThumbnailDebugDirectory() / name.str(), width, height, pixels);
+            }
+
+            void ForcePreviewAlphaOpaque(std::vector<uint32_t>& pixels)
+            {
+                for (uint32_t& pixel : pixels)
+                    pixel = (pixel & 0x00ffffffu) | 0xff000000u;
+            }
+
+            void AppendThumbnailDebugLog(const std::string& message)
+            {
+                if (!IsThumbnailDebugDumpEnabled())
+                    return;
+
+                std::filesystem::create_directories(GetThumbnailDebugDirectory());
+                std::ofstream stream(GetThumbnailDebugDirectory() / "trace.txt", std::ios::app);
+                if (stream)
+                    stream << message << "\n";
+            }
+
+            void AppendThumbnailDebugLogOnce(const std::string& key, const std::string& message)
+            {
+                if (!IsThumbnailDebugDumpEnabled())
+                    return;
+
+                static std::mutex s_LogOnceMutex;
+                static std::unordered_set<std::string> s_LoggedKeys;
+
+                std::lock_guard<std::mutex> lock(s_LogOnceMutex);
+                if (!s_LoggedKeys.insert(key).second)
+                    return;
+
+                AppendThumbnailDebugLog(message);
+            }
+
+            std::shared_ptr<Mesh> CreatePreviewMeshForType(MeshComponent::MeshType type)
+            {
+                static std::unordered_map<int, std::shared_ptr<Mesh>> s_MeshCache;
+                int key = static_cast<int>(type);
+                auto found = s_MeshCache.find(key);
+                if (found != s_MeshCache.end())
+                    return found->second;
+
+                std::shared_ptr<Mesh> mesh;
+                switch (type)
+                {
+                    case MeshComponent::MeshType::Cube: mesh = MeshFactory::CreateCube(); break;
+                    case MeshComponent::MeshType::Sphere: mesh = MeshFactory::CreateSphere(); break;
+                    case MeshComponent::MeshType::Plane: mesh = MeshFactory::CreatePlane(); break;
+                    case MeshComponent::MeshType::Quad: mesh = MeshFactory::CreateQuad(); break;
+                    case MeshComponent::MeshType::Capsule: mesh = MeshFactory::CreateCapsule(); break;
+                    case MeshComponent::MeshType::Cylinder: mesh = MeshFactory::CreateCylinder(); break;
+                    case MeshComponent::MeshType::Torus: mesh = MeshFactory::CreateTorus(); break;
+                    default: break;
+                }
+
+                if (mesh)
+                    s_MeshCache[key] = mesh;
+                return mesh;
+            }
+
+            DirectX::XMFLOAT3 ReadRenderPreviewFloat3(const nlohmann::json& data, const DirectX::XMFLOAT3& fallback)
+            {
+                if (!data.is_array() || data.size() < 3)
+                    return fallback;
+                return { data[0].get<float>(), data[1].get<float>(), data[2].get<float>() };
+            }
+
+            DirectX::XMFLOAT4 ReadRenderPreviewFloat4(const nlohmann::json& data, const DirectX::XMFLOAT4& fallback)
+            {
+                if (!data.is_array() || data.size() < 4)
+                    return fallback;
+                return { data[0].get<float>(), data[1].get<float>(), data[2].get<float>(), data[3].get<float>() };
+            }
+
+            DirectX::XMMATRIX ReadPrefabPreviewTransform(const nlohmann::json& entityData)
+            {
+                if (!entityData.contains("TransformComponent"))
+                    return DirectX::XMMatrixIdentity();
+
+                const auto& transformData = entityData["TransformComponent"];
+                DirectX::XMFLOAT3 translation = transformData.contains("Translation")
+                    ? ReadRenderPreviewFloat3(transformData["Translation"], { 0.0f, 0.0f, 0.0f })
+                    : DirectX::XMFLOAT3{ 0.0f, 0.0f, 0.0f };
+                DirectX::XMFLOAT3 rotation = transformData.contains("Rotation")
+                    ? ReadRenderPreviewFloat3(transformData["Rotation"], { 0.0f, 0.0f, 0.0f })
+                    : DirectX::XMFLOAT3{ 0.0f, 0.0f, 0.0f };
+                DirectX::XMFLOAT3 scale = transformData.contains("Scale")
+                    ? ReadRenderPreviewFloat3(transformData["Scale"], { 1.0f, 1.0f, 1.0f })
+                    : DirectX::XMFLOAT3{ 1.0f, 1.0f, 1.0f };
+
+                DirectX::XMVECTOR quat = DirectX::XMQuaternionRotationRollPitchYaw(rotation.x, rotation.y, rotation.z);
+                if (transformData.contains("QuaternionRotation"))
+                {
+                    DirectX::XMFLOAT4 storedQuat = ReadRenderPreviewFloat4(transformData["QuaternionRotation"], { 0.0f, 0.0f, 0.0f, 1.0f });
+                    quat = DirectX::XMLoadFloat4(&storedQuat);
+                }
+
+                return DirectX::XMMatrixScaling(scale.x, scale.y, scale.z)
+                    * DirectX::XMMatrixRotationQuaternion(quat)
+                    * DirectX::XMMatrixTranslation(translation.x, translation.y, translation.z);
+            }
+
+            void ExpandPrefabPreviewBounds(const std::shared_ptr<Mesh>& mesh, const DirectX::XMMATRIX& transform, DirectX::XMFLOAT3& minBounds, DirectX::XMFLOAT3& maxBounds, bool& hasBounds)
+            {
+                if (!mesh)
+                    return;
+
+                for (const Vertex3D& vertex : mesh->GetVertices())
+                {
+                    DirectX::XMVECTOR position = DirectX::XMLoadFloat3(&vertex.Position);
+                    position = DirectX::XMVector3TransformCoord(position, transform);
+                    DirectX::XMFLOAT3 p;
+                    DirectX::XMStoreFloat3(&p, position);
+
+                    if (!hasBounds)
+                    {
+                        minBounds = p;
+                        maxBounds = p;
+                        hasBounds = true;
+                    }
+                    else
+                    {
+                        minBounds.x = (std::min)(minBounds.x, p.x);
+                        minBounds.y = (std::min)(minBounds.y, p.y);
+                        minBounds.z = (std::min)(minBounds.z, p.z);
+                        maxBounds.x = (std::max)(maxBounds.x, p.x);
+                        maxBounds.y = (std::max)(maxBounds.y, p.y);
+                        maxBounds.z = (std::max)(maxBounds.z, p.z);
+                    }
+                }
+            }
+
+            bool HasVisibleMaterialPreviewPixels(const std::vector<uint32_t>& pixels)
+            {
+                if (pixels.empty())
+                    return false;
+
+                auto delta = [](uint8_t a, uint8_t b) -> int
+                    {
+                        return a > b ? (int)(a - b) : (int)(b - a);
+                    };
+
+                const uint32_t backgroundPixel = pixels.front();
+                const uint8_t backgroundR = (uint8_t)(backgroundPixel & 0xff);
+                const uint8_t backgroundG = (uint8_t)((backgroundPixel >> 8) & 0xff);
+                const uint8_t backgroundB = (uint8_t)((backgroundPixel >> 16) & 0xff);
+
+                size_t visiblePixels = 0;
+                const size_t requiredVisiblePixels = (std::max)((size_t)64, pixels.size() / 100);
+                for (uint32_t pixel : pixels)
+                {
+                    uint8_t r = (uint8_t)(pixel & 0xff);
+                    uint8_t g = (uint8_t)((pixel >> 8) & 0xff);
+                    uint8_t b = (uint8_t)((pixel >> 16) & 0xff);
+
+                    // 프레임 모서리의 배경색과 실제로 다른 픽셀이 충분해야 렌더 성공으로 본다.
+                    // 고정 색상과 비교하면 드라이버의 색 변환 때문에 빈 회색 화면도 성공으로 오인할 수 있다.
+                    if (delta(r, backgroundR) + delta(g, backgroundG) + delta(b, backgroundB) >= 24)
+                    {
+                        if (++visiblePixels >= requiredVisiblePixels)
+                            return true;
+                    }
+                }
+
+                return false;
+            }
+
+            DecodedPreviewPixels CropMaterialPreviewToContent(uint32_t width, uint32_t height, const std::vector<uint32_t>& pixels, int outputSize)
+            {
+                DecodedPreviewPixels result;
+                if (width == 0 || height == 0 || outputSize <= 0 || pixels.size() != (size_t)width * (size_t)height)
+                    return result;
+
+                auto delta = [](uint8_t a, uint8_t b) -> int
+                    {
+                        return a > b ? (int)(a - b) : (int)(b - a);
+                    };
+
+                const uint32_t backgroundPixel = pixels.front();
+                const uint8_t backgroundR = (uint8_t)(backgroundPixel & 0xff);
+                const uint8_t backgroundG = (uint8_t)((backgroundPixel >> 8) & 0xff);
+                const uint8_t backgroundB = (uint8_t)((backgroundPixel >> 16) & 0xff);
+
+                int minX = (int)width;
+                int minY = (int)height;
+                int maxX = -1;
+                int maxY = -1;
+
+                for (uint32_t y = 0; y < height; ++y)
+                {
+                    for (uint32_t x = 0; x < width; ++x)
+                    {
+                        uint32_t pixel = pixels[(size_t)y * (size_t)width + (size_t)x];
+                        uint8_t r = (uint8_t)(pixel & 0xff);
+                        uint8_t g = (uint8_t)((pixel >> 8) & 0xff);
+                        uint8_t b = (uint8_t)((pixel >> 16) & 0xff);
+
+                        if (delta(r, backgroundR) + delta(g, backgroundG) + delta(b, backgroundB) < 24)
+                            continue;
+
+                        minX = (std::min)(minX, (int)x);
+                        minY = (std::min)(minY, (int)y);
+                        maxX = (std::max)(maxX, (int)x);
+                        maxY = (std::max)(maxY, (int)y);
+                    }
+                }
+
+                if (maxX < minX || maxY < minY)
+                    return result;
+
+                int contentWidth = maxX - minX + 1;
+                int contentHeight = maxY - minY + 1;
+                if (contentWidth < 4 || contentHeight < 4)
+                    return result;
+
+                // 프레임 전체를 그대로 줄이면 물체가 한쪽 구석에 작게 찍힌 캡처도 성공 처리된다.
+                // 배경과 다른 픽셀의 박스를 찾고 정사각형으로 다시 샘플링해서 브라우저 썸네일 중심을 맞춘다.
+                int padding = (std::max)(6, (std::max)(contentWidth, contentHeight) / 8);
+                float centerX = (float)(minX + maxX) * 0.5f;
+                float centerY = (float)(minY + maxY) * 0.5f;
+                float sourceSize = (float)((std::max)(contentWidth, contentHeight) + padding * 2);
+                float sourceLeft = centerX - sourceSize * 0.5f;
+                float sourceTop = centerY - sourceSize * 0.5f;
+
+                result.Width = outputSize;
+                result.Height = outputSize;
+                result.Pixels.resize((size_t)outputSize * (size_t)outputSize);
+
+                for (int y = 0; y < outputSize; ++y)
+                {
+                    float v = ((float)y + 0.5f) / (float)outputSize;
+                    int sourceY = (std::clamp)((int)std::round(sourceTop + v * sourceSize), 0, (int)height - 1);
+                    for (int x = 0; x < outputSize; ++x)
+                    {
+                        float u = ((float)x + 0.5f) / (float)outputSize;
+                        int sourceX = (std::clamp)((int)std::round(sourceLeft + u * sourceSize), 0, (int)width - 1);
+                        result.Pixels[(size_t)y * (size_t)outputSize + (size_t)x] = pixels[(size_t)sourceY * (size_t)width + (size_t)sourceX];
+                    }
+                }
+
+                result.Success = HasVisibleMaterialPreviewPixels(result.Pixels);
+                return result;
+            }
+
+            DecodedPreviewPixels ResizePreviewFrame(uint32_t width, uint32_t height, const std::vector<uint32_t>& pixels, int outputSize)
+            {
+                DecodedPreviewPixels result;
+                if (width == 0 || height == 0 || outputSize <= 0 || pixels.size() != (size_t)width * (size_t)height)
+                    return result;
+
+                result.Width = outputSize;
+                result.Height = outputSize;
+                result.Pixels.resize((size_t)outputSize * (size_t)outputSize);
+
+                for (int y = 0; y < outputSize; ++y)
+                {
+                    int sourceY = (std::clamp)((int)(((float)y + 0.5f) / (float)outputSize * (float)height), 0, (int)height - 1);
+                    for (int x = 0; x < outputSize; ++x)
+                    {
+                        int sourceX = (std::clamp)((int)(((float)x + 0.5f) / (float)outputSize * (float)width), 0, (int)width - 1);
+                        result.Pixels[(size_t)y * (size_t)outputSize + (size_t)x] = pixels[(size_t)sourceY * (size_t)width + (size_t)sourceX];
+                    }
+                }
+
+                result.Success = HasVisibleMaterialPreviewPixels(result.Pixels);
+                return result;
+            }
+
+            bool PathsReferToSameExistingFile(const std::filesystem::path& a, const std::filesystem::path& b)
+            {
+                std::error_code ec;
+                if (a.empty() || b.empty() || !std::filesystem::exists(a, ec))
+                    return false;
+                ec.clear();
+                if (!std::filesystem::exists(b, ec))
+                    return false;
+
+                ec.clear();
+                if (std::filesystem::equivalent(a, b, ec) && !ec)
+                    return true;
+
+                ec.clear();
+                auto ca = std::filesystem::weakly_canonical(a, ec);
+                if (ec)
+                    return false;
+                ec.clear();
+                auto cb = std::filesystem::weakly_canonical(b, ec);
+                if (ec)
+                    return false;
+
+                return ca == cb;
+            }
+
+            std::filesystem::path NormalizeAssetPathForKey(const std::filesystem::path& path)
+            {
+                if (path.empty())
+                    return {};
+
+                std::error_code ec;
+                std::filesystem::path canonical = std::filesystem::weakly_canonical(path, ec);
+                if (!ec)
+                    return canonical;
+
+                ec.clear();
+                std::filesystem::path absolute = std::filesystem::absolute(path, ec);
+                if (!ec)
+                    return absolute;
+
+                return path;
+            }
 
             std::filesystem::path GetPreviewCachePath(const std::filesystem::path& assetPath, const std::string& typeKey)
             {
@@ -183,8 +641,12 @@ namespace CCEngine
                 outPixels.Width = (int)width;
                 outPixels.Height = (int)height;
                 outPixels.Pixels.resize((size_t)width * (size_t)height);
-                input.read(reinterpret_cast<char*>(outPixels.Pixels.data()), (std::streamsize)(outPixels.Pixels.size() * sizeof(uint32_t)));
-                outPixels.Success = input.good();
+                const std::streamsize byteCount = (std::streamsize)(outPixels.Pixels.size() * sizeof(uint32_t));
+                input.read(reinterpret_cast<char*>(outPixels.Pixels.data()), byteCount);
+
+                // 캐시 파일은 정확히 픽셀 끝에서 EOF가 걸릴 수 있다.
+                // 스트림 상태보다 실제 읽은 바이트를 기준으로 판단해야 정상 캐시가 실패 처리되지 않는다.
+                outPixels.Success = input.gcount() == byteCount;
                 return outPixels.Success;
             }
 
@@ -249,6 +711,161 @@ namespace CCEngine
                 }
 
                 stbi_image_free(source);
+                result.Success = true;
+                return result;
+            }
+
+            DecodedPreviewPixels GenerateMaterialPreviewPixels(const std::filesystem::path& path, int size)
+            {
+                DecodedPreviewPixels result;
+                if (size <= 0)
+                    return result;
+
+                DirectX::XMFLOAT4 albedo = { 1.0f, 1.0f, 1.0f, 1.0f };
+                float roughness = 0.5f;
+                float metallic = 0.0f;
+                std::filesystem::path albedoTexturePath;
+
+                std::ifstream input(path);
+                if (!input)
+                    return result;
+
+                try
+                {
+                    nlohmann::json root;
+                    input >> root;
+                    const nlohmann::json& data = root.contains("Material") && root["Material"].is_object() ? root["Material"] : root;
+                    if (data.contains("AlbedoColor") && data["AlbedoColor"].is_array() && data["AlbedoColor"].size() >= 4)
+                    {
+                        albedo = {
+                            data["AlbedoColor"][0].get<float>(),
+                            data["AlbedoColor"][1].get<float>(),
+                            data["AlbedoColor"][2].get<float>(),
+                            data["AlbedoColor"][3].get<float>()
+                        };
+                    }
+                    roughness = std::clamp(data.value("Roughness", roughness), 0.0f, 1.0f);
+                    metallic = std::clamp(data.value("Metallic", metallic), 0.0f, 1.0f);
+                    std::string albedoGuid = data.value("AlbedoTextureGuid", "");
+                    albedoTexturePath = data.value("AlbedoTexturePath", "");
+                    if (!albedoGuid.empty())
+                    {
+                        std::filesystem::path resolvedByGuid = AssetDatabase::GetPathFromGuid(albedoGuid);
+                        if (!resolvedByGuid.empty())
+                            albedoTexturePath = resolvedByGuid;
+                    }
+                }
+                catch (...)
+                {
+                    return result;
+                }
+
+                int textureWidth = 0;
+                int textureHeight = 0;
+                int textureChannels = 0;
+                stbi_uc* texturePixels = nullptr;
+                if (!albedoTexturePath.empty())
+                {
+                    std::filesystem::path resolvedTexturePath = albedoTexturePath;
+                    if (!std::filesystem::exists(resolvedTexturePath))
+                        resolvedTexturePath = path.parent_path() / albedoTexturePath;
+
+                    if (std::filesystem::exists(resolvedTexturePath))
+                        texturePixels = stbi_load(resolvedTexturePath.string().c_str(), &textureWidth, &textureHeight, &textureChannels, 4);
+                }
+
+                result.Width = size;
+                result.Height = size;
+                result.Pixels.resize((size_t)size * (size_t)size);
+
+                for (int y = 0; y < size; ++y)
+                {
+                    float t = (float)y / (float)(std::max)(1, size - 1);
+                    uint8_t background = (uint8_t)(22 + (int)(t * 12.0f));
+                    uint8_t blue = (uint8_t)(background + 4);
+                    for (int x = 0; x < size; ++x)
+                        result.Pixels[(size_t)y * (size_t)size + (size_t)x] = PackPreviewPixel(background, background, blue);
+                }
+
+                const float centerX = (float)size * 0.5f;
+                const float centerY = (float)size * 0.47f;
+                const float radius = (float)size * 0.36f;
+                constexpr float Pi = 3.14159265358979323846f;
+
+                for (int y = 0; y < size; ++y)
+                {
+                    for (int x = 0; x < size; ++x)
+                    {
+                        float normalX = ((float)x + 0.5f - centerX) / radius;
+                        float normalY = -(((float)y + 0.5f - centerY) / radius);
+                        float radiusSquared = normalX * normalX + normalY * normalY;
+                        if (radiusSquared > 1.0f)
+                            continue;
+
+                        float normalZ = std::sqrt((std::max)(0.0f, 1.0f - radiusSquared));
+                        float textureR = 1.0f;
+                        float textureG = 1.0f;
+                        float textureB = 1.0f;
+
+                        if (texturePixels && textureWidth > 0 && textureHeight > 0)
+                        {
+                            float u = 0.5f + std::atan2(normalX, normalZ) / (2.0f * Pi);
+                            float v = 0.5f - std::asin((std::clamp)(normalY, -1.0f, 1.0f)) / Pi;
+                            int textureX = (std::clamp)((int)(u * (float)(textureWidth - 1)), 0, textureWidth - 1);
+                            int textureY = (std::clamp)((int)(v * (float)(textureHeight - 1)), 0, textureHeight - 1);
+                            const stbi_uc* pixel = texturePixels + ((textureY * textureWidth + textureX) * 4);
+                            textureR = (float)pixel[0] / 255.0f;
+                            textureG = (float)pixel[1] / 255.0f;
+                            textureB = (float)pixel[2] / 255.0f;
+                        }
+
+                        float lightX = -0.38f;
+                        float lightY = 0.62f;
+                        float lightZ = 0.69f;
+                        float diffuse = (std::max)(0.0f, normalX * lightX + normalY * lightY + normalZ * lightZ);
+                        // 작은 브라우저 아이콘에서는 어두운 조명이 곧바로 회색 덩어리처럼 보인다.
+                        // 실제 재질 색은 유지하되 프리뷰용 기본광을 조금 올려 텍스처 무늬가 남도록 한다.
+                        float lighting = 0.34f + diffuse * 0.86f;
+
+                        float halfX = -0.20f;
+                        float halfY = 0.33f;
+                        float halfZ = 0.92f;
+                        float specularBase = (std::max)(0.0f, normalX * halfX + normalY * halfY + normalZ * halfZ);
+                        float specularPower = 6.0f + (1.0f - roughness) * 58.0f;
+                        float specular = std::pow(specularBase, specularPower) * (0.12f + metallic * 0.65f);
+
+                        float albedoR = (std::clamp)(albedo.x, 0.0f, 1.0f);
+                        float albedoG = (std::clamp)(albedo.y, 0.0f, 1.0f);
+                        float albedoB = (std::clamp)(albedo.z, 0.0f, 1.0f);
+                        if (texturePixels)
+                        {
+                            // 썸네일은 재질을 식별하는 용도다.
+                            // 순색 틴트가 텍스처 무늬를 완전히 지우지 않도록 프리뷰에서만 최소 채널을 둔다.
+                            constexpr float textureVisibility = 0.78f;
+                            constexpr float tintStrength = 1.0f - textureVisibility;
+                            albedoR = textureVisibility + albedoR * tintStrength;
+                            albedoG = textureVisibility + albedoG * tintStrength;
+                            albedoB = textureVisibility + albedoB * tintStrength;
+                            textureR = std::pow((std::clamp)(textureR, 0.0f, 1.0f), 0.82f);
+                            textureG = std::pow((std::clamp)(textureG, 0.0f, 1.0f), 0.82f);
+                            textureB = std::pow((std::clamp)(textureB, 0.0f, 1.0f), 0.82f);
+                        }
+
+                        float red = textureR * albedoR * lighting + specular;
+                        float green = textureG * albedoG * lighting + specular;
+                        float blue = textureB * albedoB * lighting + specular;
+                        result.Pixels[(size_t)y * (size_t)size + (size_t)x] = PackPreviewPixel(
+                            (uint8_t)((std::clamp)(red, 0.0f, 1.0f) * 255.0f),
+                            (uint8_t)((std::clamp)(green, 0.0f, 1.0f) * 255.0f),
+                            (uint8_t)((std::clamp)(blue, 0.0f, 1.0f) * 255.0f));
+                    }
+                }
+
+                if (texturePixels)
+                    stbi_image_free(texturePixels);
+
+                // 브라우저 썸네일은 렌더 스레드를 점유하지 않도록 픽셀만 만든다.
+                // 완성된 결과는 다른 에셋과 같은 업로드 큐와 디스크 캐시를 사용한다.
                 result.Success = true;
                 return result;
             }
@@ -331,6 +948,538 @@ namespace CCEngine
                 float X = 0.0f;
                 float Y = 0.0f;
             };
+
+            float GetPreviewPercentile(std::vector<float>& values, float percentile);
+
+            struct PrefabPreviewVertex
+            {
+                DirectX::XMFLOAT3 Position = { 0.0f, 0.0f, 0.0f };
+                DirectX::XMFLOAT3 Normal = { 0.0f, 1.0f, 0.0f };
+            };
+
+            struct PrefabPreviewMesh
+            {
+                MeshComponent::MeshType Type = MeshComponent::MeshType::Cube;
+                DirectX::XMFLOAT3 Translation = { 0.0f, 0.0f, 0.0f };
+                DirectX::XMFLOAT3 Rotation = { 0.0f, 0.0f, 0.0f };
+                DirectX::XMFLOAT3 Scale = { 1.0f, 1.0f, 1.0f };
+                DirectX::XMFLOAT4 Color = { 0.55f, 0.70f, 1.0f, 1.0f };
+                std::vector<PrefabPreviewVertex> Vertices;
+                std::vector<uint32_t> Indices;
+            };
+
+            struct PrefabProjectedVertex
+            {
+                float X = 0.0f;
+                float Y = 0.0f;
+                float Depth = 0.0f;
+                DirectX::XMFLOAT3 Normal = { 0.0f, 1.0f, 0.0f };
+            };
+
+            struct PrefabPreviewTriangle
+            {
+                PrefabProjectedVertex A;
+                PrefabProjectedVertex B;
+                PrefabProjectedVertex C;
+                DirectX::XMFLOAT4 Color = { 1.0f, 1.0f, 1.0f, 1.0f };
+            };
+
+            DirectX::XMFLOAT3 ReadPreviewFloat3(const nlohmann::json& data, const DirectX::XMFLOAT3& fallback)
+            {
+                if (!data.is_array() || data.size() < 3)
+                    return fallback;
+
+                return {
+                    data[0].get<float>(),
+                    data[1].get<float>(),
+                    data[2].get<float>()
+                };
+            }
+
+            DirectX::XMFLOAT4 ReadPreviewFloat4(const nlohmann::json& data, const DirectX::XMFLOAT4& fallback)
+            {
+                if (!data.is_array() || data.size() < 4)
+                    return fallback;
+
+                return {
+                    data[0].get<float>(),
+                    data[1].get<float>(),
+                    data[2].get<float>(),
+                    data[3].get<float>()
+                };
+            }
+
+            MeshComponent::MeshType ReadPrefabPreviewMeshType(const nlohmann::json& meshData)
+            {
+                int type = meshData.value("Type", (int)MeshComponent::MeshType::Cube);
+                if (type < (int)MeshComponent::MeshType::Custom || type >(int)MeshComponent::MeshType::Torus)
+                    return MeshComponent::MeshType::Cube;
+
+                return (MeshComponent::MeshType)type;
+            }
+
+            DirectX::XMFLOAT4 ReadPrefabPreviewMaterialColor(const nlohmann::json& meshData, const DirectX::XMFLOAT4& fallback)
+            {
+                std::string materialPath;
+                std::string materialGuid = meshData.value("MaterialGuid", "");
+                if (!materialGuid.empty())
+                    materialPath = AssetDatabase::GetPathFromGuid(materialGuid).string();
+                if (materialPath.empty())
+                    materialPath = meshData.value("MaterialPath", "");
+                if (materialPath.empty() || !std::filesystem::exists(materialPath))
+                    return fallback;
+
+                std::ifstream materialFile(materialPath);
+                if (!materialFile.is_open())
+                    return fallback;
+
+                try
+                {
+                    nlohmann::json root;
+                    materialFile >> root;
+                    const nlohmann::json& materialData = root.contains("Material") ? root["Material"] : root;
+                    if (materialData.contains("AlbedoColor"))
+                        return ReadPreviewFloat4(materialData["AlbedoColor"], fallback);
+                }
+                catch (...)
+                {
+                }
+
+                return fallback;
+            }
+
+            void AddPrefabPreviewVertex(std::vector<PrefabPreviewVertex>& vertices, float x, float y, float z, float nx, float ny, float nz)
+            {
+                vertices.push_back({ { x, y, z }, { nx, ny, nz } });
+            }
+
+            void BuildPrefabCubeMesh(PrefabPreviewMesh& mesh)
+            {
+                auto& v = mesh.Vertices;
+                auto& i = mesh.Indices;
+                const float h = 0.5f;
+                AddPrefabPreviewVertex(v, -h, -h, -h, 0.0f, 0.0f, -1.0f);
+                AddPrefabPreviewVertex(v,  h, -h, -h, 0.0f, 0.0f, -1.0f);
+                AddPrefabPreviewVertex(v,  h,  h, -h, 0.0f, 0.0f, -1.0f);
+                AddPrefabPreviewVertex(v, -h,  h, -h, 0.0f, 0.0f, -1.0f);
+                AddPrefabPreviewVertex(v,  h, -h,  h, 0.0f, 0.0f, 1.0f);
+                AddPrefabPreviewVertex(v, -h, -h,  h, 0.0f, 0.0f, 1.0f);
+                AddPrefabPreviewVertex(v, -h,  h,  h, 0.0f, 0.0f, 1.0f);
+                AddPrefabPreviewVertex(v,  h,  h,  h, 0.0f, 0.0f, 1.0f);
+                AddPrefabPreviewVertex(v, -h,  h, -h, 0.0f, 1.0f, 0.0f);
+                AddPrefabPreviewVertex(v,  h,  h, -h, 0.0f, 1.0f, 0.0f);
+                AddPrefabPreviewVertex(v,  h,  h,  h, 0.0f, 1.0f, 0.0f);
+                AddPrefabPreviewVertex(v, -h,  h,  h, 0.0f, 1.0f, 0.0f);
+                AddPrefabPreviewVertex(v, -h, -h,  h, 0.0f, -1.0f, 0.0f);
+                AddPrefabPreviewVertex(v,  h, -h,  h, 0.0f, -1.0f, 0.0f);
+                AddPrefabPreviewVertex(v,  h, -h, -h, 0.0f, -1.0f, 0.0f);
+                AddPrefabPreviewVertex(v, -h, -h, -h, 0.0f, -1.0f, 0.0f);
+                AddPrefabPreviewVertex(v,  h, -h, -h, 1.0f, 0.0f, 0.0f);
+                AddPrefabPreviewVertex(v,  h, -h,  h, 1.0f, 0.0f, 0.0f);
+                AddPrefabPreviewVertex(v,  h,  h,  h, 1.0f, 0.0f, 0.0f);
+                AddPrefabPreviewVertex(v,  h,  h, -h, 1.0f, 0.0f, 0.0f);
+                AddPrefabPreviewVertex(v, -h, -h,  h, -1.0f, 0.0f, 0.0f);
+                AddPrefabPreviewVertex(v, -h, -h, -h, -1.0f, 0.0f, 0.0f);
+                AddPrefabPreviewVertex(v, -h,  h, -h, -1.0f, 0.0f, 0.0f);
+                AddPrefabPreviewVertex(v, -h,  h,  h, -1.0f, 0.0f, 0.0f);
+                i = {
+                    0, 3, 2, 2, 1, 0,
+                    4, 7, 6, 6, 5, 4,
+                    8, 11, 10, 10, 9, 8,
+                    12, 15, 14, 14, 13, 12,
+                    16, 19, 18, 18, 17, 16,
+                    20, 23, 22, 22, 21, 20
+                };
+            }
+
+            void BuildPrefabPlaneMesh(PrefabPreviewMesh& mesh, bool vertical)
+            {
+                auto& v = mesh.Vertices;
+                auto& i = mesh.Indices;
+                if (vertical)
+                {
+                    AddPrefabPreviewVertex(v, -0.5f, -0.5f, 0.0f, 0.0f, 0.0f, -1.0f);
+                    AddPrefabPreviewVertex(v,  0.5f, -0.5f, 0.0f, 0.0f, 0.0f, -1.0f);
+                    AddPrefabPreviewVertex(v,  0.5f,  0.5f, 0.0f, 0.0f, 0.0f, -1.0f);
+                    AddPrefabPreviewVertex(v, -0.5f,  0.5f, 0.0f, 0.0f, 0.0f, -1.0f);
+                }
+                else
+                {
+                    AddPrefabPreviewVertex(v, -0.5f, 0.0f, -0.5f, 0.0f, 1.0f, 0.0f);
+                    AddPrefabPreviewVertex(v,  0.5f, 0.0f, -0.5f, 0.0f, 1.0f, 0.0f);
+                    AddPrefabPreviewVertex(v,  0.5f, 0.0f,  0.5f, 0.0f, 1.0f, 0.0f);
+                    AddPrefabPreviewVertex(v, -0.5f, 0.0f,  0.5f, 0.0f, 1.0f, 0.0f);
+                }
+                i = { 0, 3, 2, 2, 1, 0 };
+            }
+
+            void BuildPrefabSphereLikeMesh(PrefabPreviewMesh& mesh, float radius, int slices, int stacks)
+            {
+                auto& v = mesh.Vertices;
+                auto& i = mesh.Indices;
+                slices = (std::max)(slices, 6);
+                stacks = (std::max)(stacks, 4);
+                for (int stack = 0; stack <= stacks; ++stack)
+                {
+                    float phi = DirectX::XM_PI * (float)stack / (float)stacks;
+                    for (int slice = 0; slice <= slices; ++slice)
+                    {
+                        float theta = DirectX::XM_2PI * (float)slice / (float)slices;
+                        float x = radius * std::sin(phi) * std::cos(theta);
+                        float y = radius * std::cos(phi);
+                        float z = radius * std::sin(phi) * std::sin(theta);
+                        AddPrefabPreviewVertex(v, x, y, z, x / radius, y / radius, z / radius);
+                    }
+                }
+                for (int stack = 0; stack < stacks; ++stack)
+                {
+                    for (int slice = 0; slice < slices; ++slice)
+                    {
+                        uint32_t first = (uint32_t)(stack * (slices + 1) + slice);
+                        uint32_t second = first + (uint32_t)slices + 1;
+                        i.insert(i.end(), { first, first + 1, second, second, first + 1, second + 1 });
+                    }
+                }
+            }
+
+            void BuildPrefabCylinderMesh(PrefabPreviewMesh& mesh, float radius, float height, int segments)
+            {
+                auto& v = mesh.Vertices;
+                auto& i = mesh.Indices;
+                segments = (std::max)(segments, 6);
+                float half = height * 0.5f;
+                for (int segment = 0; segment <= segments; ++segment)
+                {
+                    float theta = DirectX::XM_2PI * (float)segment / (float)segments;
+                    float x = radius * std::cos(theta);
+                    float z = radius * std::sin(theta);
+                    AddPrefabPreviewVertex(v, x, -half, z, std::cos(theta), 0.0f, std::sin(theta));
+                    AddPrefabPreviewVertex(v, x,  half, z, std::cos(theta), 0.0f, std::sin(theta));
+                }
+                for (int segment = 0; segment < segments; ++segment)
+                {
+                    uint32_t first = (uint32_t)segment * 2;
+                    i.insert(i.end(), { first, first + 1, first + 2, first + 2, first + 1, first + 3 });
+                }
+
+                uint32_t topCenter = (uint32_t)v.size();
+                AddPrefabPreviewVertex(v, 0.0f, half, 0.0f, 0.0f, 1.0f, 0.0f);
+                uint32_t bottomCenter = (uint32_t)v.size();
+                AddPrefabPreviewVertex(v, 0.0f, -half, 0.0f, 0.0f, -1.0f, 0.0f);
+                for (int segment = 0; segment <= segments; ++segment)
+                {
+                    float theta = DirectX::XM_2PI * (float)segment / (float)segments;
+                    float x = radius * std::cos(theta);
+                    float z = radius * std::sin(theta);
+                    AddPrefabPreviewVertex(v, x, half, z, 0.0f, 1.0f, 0.0f);
+                    AddPrefabPreviewVertex(v, x, -half, z, 0.0f, -1.0f, 0.0f);
+                }
+                uint32_t capStart = topCenter + 2;
+                for (int segment = 0; segment < segments; ++segment)
+                {
+                    uint32_t topA = capStart + (uint32_t)segment * 2;
+                    uint32_t topB = topA + 2;
+                    uint32_t bottomA = topA + 1;
+                    uint32_t bottomB = topB + 1;
+                    i.insert(i.end(), { topCenter, topB, topA, bottomCenter, bottomA, bottomB });
+                }
+            }
+
+            void BuildPrefabTorusMesh(PrefabPreviewMesh& mesh, float majorRadius, float minorRadius, int radialSegments, int tubularSegments)
+            {
+                auto& v = mesh.Vertices;
+                auto& i = mesh.Indices;
+                radialSegments = (std::max)(radialSegments, 8);
+                tubularSegments = (std::max)(tubularSegments, 6);
+                for (int ring = 0; ring <= radialSegments; ++ring)
+                {
+                    float u = DirectX::XM_2PI * (float)ring / (float)radialSegments;
+                    for (int tube = 0; tube <= tubularSegments; ++tube)
+                    {
+                        float t = DirectX::XM_2PI * (float)tube / (float)tubularSegments;
+                        float x = (majorRadius + minorRadius * std::cos(t)) * std::cos(u);
+                        float y = (majorRadius + minorRadius * std::cos(t)) * std::sin(u);
+                        float z = minorRadius * std::sin(t);
+                        AddPrefabPreviewVertex(v, x, y, z, std::cos(t) * std::cos(u), std::cos(t) * std::sin(u), std::sin(t));
+                    }
+                }
+                for (int ring = 0; ring < radialSegments; ++ring)
+                {
+                    for (int tube = 0; tube < tubularSegments; ++tube)
+                    {
+                        uint32_t a = (uint32_t)(ring * (tubularSegments + 1) + tube);
+                        uint32_t b = a + (uint32_t)tubularSegments + 1;
+                        uint32_t c = a + 1;
+                        uint32_t d = b + 1;
+                        i.insert(i.end(), { a, b, c, c, b, d });
+                    }
+                }
+            }
+
+            void BuildPrefabPrimitiveMesh(PrefabPreviewMesh& mesh)
+            {
+                switch (mesh.Type)
+                {
+                    case MeshComponent::MeshType::Sphere:
+                        BuildPrefabSphereLikeMesh(mesh, 0.5f, 14, 8);
+                        break;
+                    case MeshComponent::MeshType::Plane:
+                        BuildPrefabPlaneMesh(mesh, false);
+                        mesh.Scale.x *= 2.0f;
+                        mesh.Scale.z *= 2.0f;
+                        break;
+                    case MeshComponent::MeshType::Quad:
+                        BuildPrefabPlaneMesh(mesh, true);
+                        break;
+                    case MeshComponent::MeshType::Capsule:
+                        BuildPrefabSphereLikeMesh(mesh, 0.5f, 12, 8);
+                        mesh.Scale.y *= 1.65f;
+                        break;
+                    case MeshComponent::MeshType::Cylinder:
+                        BuildPrefabCylinderMesh(mesh, 0.5f, 1.0f, 14);
+                        break;
+                    case MeshComponent::MeshType::Torus:
+                        BuildPrefabTorusMesh(mesh, 0.38f, 0.14f, 18, 8);
+                        break;
+                    case MeshComponent::MeshType::Cube:
+                    default:
+                        BuildPrefabCubeMesh(mesh);
+                        break;
+                }
+            }
+
+            bool CollectPrefabPrimitivePreviewMeshes(const nlohmann::json& data, std::vector<PrefabPreviewMesh>& meshes)
+            {
+                if (!data.contains("Entities") || !data["Entities"].is_array())
+                    return false;
+
+                for (const auto& entityData : data["Entities"])
+                {
+                    if (!entityData.contains("MeshComponent"))
+                        continue;
+
+                    const auto& meshData = entityData["MeshComponent"];
+                    PrefabPreviewMesh mesh;
+                    mesh.Type = ReadPrefabPreviewMeshType(meshData);
+                    if (mesh.Type == MeshComponent::MeshType::Custom)
+                        continue;
+
+                    mesh.Color = ReadPreviewFloat4(meshData.value("BaseColor", nlohmann::json::array()), mesh.Color);
+                    mesh.Color = ReadPrefabPreviewMaterialColor(meshData, mesh.Color);
+                    if (entityData.contains("TransformComponent"))
+                    {
+                        const auto& transformData = entityData["TransformComponent"];
+                        mesh.Translation = ReadPreviewFloat3(transformData.value("Translation", nlohmann::json::array()), mesh.Translation);
+                        mesh.Rotation = ReadPreviewFloat3(transformData.value("Rotation", nlohmann::json::array()), mesh.Rotation);
+                        mesh.Scale = ReadPreviewFloat3(transformData.value("Scale", nlohmann::json::array()), mesh.Scale);
+                    }
+
+                    BuildPrefabPrimitiveMesh(mesh);
+                    if (!mesh.Vertices.empty() && mesh.Indices.size() >= 3)
+                        meshes.push_back(std::move(mesh));
+                }
+
+                return !meshes.empty();
+            }
+
+            DirectX::XMFLOAT3 TransformPrefabPreviewNormal(const DirectX::XMFLOAT3& normal, const DirectX::XMMATRIX& transform)
+            {
+                DirectX::XMVECTOR n = DirectX::XMLoadFloat3(&normal);
+                n = DirectX::XMVector3Normalize(DirectX::XMVector3TransformNormal(n, transform));
+                DirectX::XMFLOAT3 result;
+                DirectX::XMStoreFloat3(&result, n);
+                return result;
+            }
+
+            DirectX::XMFLOAT3 TransformPrefabPreviewPosition(const DirectX::XMFLOAT3& position, const DirectX::XMMATRIX& transform)
+            {
+                DirectX::XMVECTOR p = DirectX::XMLoadFloat3(&position);
+                p = DirectX::XMVector3TransformCoord(p, transform);
+                DirectX::XMFLOAT3 result;
+                DirectX::XMStoreFloat3(&result, p);
+                return result;
+            }
+
+            PreviewPoint ProjectPrefabPreviewRaw(const DirectX::XMFLOAT3& position)
+            {
+                return {
+                    (position.x - position.z) * 0.92f,
+                    (position.x + position.z) * 0.42f - position.y * 0.92f
+                };
+            }
+
+            uint32_t ShadePrefabPreviewColor(const DirectX::XMFLOAT4& baseColor, const DirectX::XMFLOAT3& normal)
+            {
+                DirectX::XMVECTOR light = DirectX::XMVector3Normalize(DirectX::XMVectorSet(-0.45f, 0.72f, -0.54f, 0.0f));
+                DirectX::XMVECTOR n = DirectX::XMVector3Normalize(DirectX::XMLoadFloat3(&normal));
+                float diffuse = (std::max)(0.0f, DirectX::XMVectorGetX(DirectX::XMVector3Dot(n, light)));
+                float lighting = 0.38f + diffuse * 0.72f;
+                return PackPreviewPixel(
+                    (uint8_t)((std::clamp)(baseColor.x * lighting, 0.0f, 1.0f) * 255.0f),
+                    (uint8_t)((std::clamp)(baseColor.y * lighting, 0.0f, 1.0f) * 255.0f),
+                    (uint8_t)((std::clamp)(baseColor.z * lighting, 0.0f, 1.0f) * 255.0f));
+            }
+
+            void FillPrefabPreviewTriangle(DecodedPreviewPixels& image, std::vector<float>& depthBuffer, const PrefabPreviewTriangle& triangle)
+            {
+                float minX = (std::min)({ triangle.A.X, triangle.B.X, triangle.C.X });
+                float maxX = (std::max)({ triangle.A.X, triangle.B.X, triangle.C.X });
+                float minY = (std::min)({ triangle.A.Y, triangle.B.Y, triangle.C.Y });
+                float maxY = (std::max)({ triangle.A.Y, triangle.B.Y, triangle.C.Y });
+
+                int x0 = (std::max)(0, (int)std::floor(minX));
+                int x1 = (std::min)(image.Width - 1, (int)std::ceil(maxX));
+                int y0 = (std::max)(0, (int)std::floor(minY));
+                int y1 = (std::min)(image.Height - 1, (int)std::ceil(maxY));
+
+                float area =
+                    (triangle.B.X - triangle.A.X) * (triangle.C.Y - triangle.A.Y) -
+                    (triangle.B.Y - triangle.A.Y) * (triangle.C.X - triangle.A.X);
+                if (std::abs(area) < 0.0001f)
+                    return;
+
+                DirectX::XMFLOAT3 faceNormal = {
+                    (triangle.A.Normal.x + triangle.B.Normal.x + triangle.C.Normal.x) / 3.0f,
+                    (triangle.A.Normal.y + triangle.B.Normal.y + triangle.C.Normal.y) / 3.0f,
+                    (triangle.A.Normal.z + triangle.B.Normal.z + triangle.C.Normal.z) / 3.0f
+                };
+                uint32_t color = ShadePrefabPreviewColor(triangle.Color, faceNormal);
+
+                for (int y = y0; y <= y1; ++y)
+                {
+                    for (int x = x0; x <= x1; ++x)
+                    {
+                        float px = (float)x + 0.5f;
+                        float py = (float)y + 0.5f;
+                        float w0 = ((triangle.B.X - px) * (triangle.C.Y - py) - (triangle.B.Y - py) * (triangle.C.X - px)) / area;
+                        float w1 = ((triangle.C.X - px) * (triangle.A.Y - py) - (triangle.C.Y - py) * (triangle.A.X - px)) / area;
+                        float w2 = 1.0f - w0 - w1;
+                        if (w0 < -0.001f || w1 < -0.001f || w2 < -0.001f)
+                            continue;
+
+                        float depth = triangle.A.Depth * w0 + triangle.B.Depth * w1 + triangle.C.Depth * w2;
+                        size_t pixelIndex = (size_t)y * (size_t)image.Width + (size_t)x;
+                        if (depth < depthBuffer[pixelIndex])
+                            continue;
+
+                        depthBuffer[pixelIndex] = depth;
+                        image.Pixels[pixelIndex] = color;
+                    }
+                }
+            }
+
+            DecodedPreviewPixels GeneratePrefabPrimitivePreviewPixels(const std::filesystem::path& path, const std::vector<PrefabPreviewMesh>& meshes, int size)
+            {
+                DecodedPreviewPixels result;
+                result.Width = size;
+                result.Height = size;
+                result.Pixels.resize((size_t)size * (size_t)size);
+                std::vector<float> depthBuffer(result.Pixels.size(), -std::numeric_limits<float>::infinity());
+
+                for (int y = 0; y < size; ++y)
+                {
+                    for (int x = 0; x < size; ++x)
+                    {
+                        float t = (float)y / (float)(std::max)(1, size - 1);
+                        uint8_t bg = (uint8_t)(25 + (int)(t * 17.0f));
+                        result.Pixels[(size_t)y * (size_t)size + (size_t)x] = PackPreviewPixel(bg, bg, (uint8_t)(bg + 5));
+                    }
+                }
+
+                std::vector<DirectX::XMFLOAT3> worldPositions;
+                std::vector<PrefabPreviewTriangle> triangles;
+                for (const PrefabPreviewMesh& mesh : meshes)
+                {
+                    DirectX::XMMATRIX transform =
+                        DirectX::XMMatrixScaling(mesh.Scale.x, mesh.Scale.y, mesh.Scale.z) *
+                        DirectX::XMMatrixRotationRollPitchYaw(mesh.Rotation.x, mesh.Rotation.y, mesh.Rotation.z) *
+                        DirectX::XMMatrixTranslation(mesh.Translation.x, mesh.Translation.y, mesh.Translation.z);
+
+                    std::vector<DirectX::XMFLOAT3> transformedPositions;
+                    std::vector<DirectX::XMFLOAT3> transformedNormals;
+                    transformedPositions.reserve(mesh.Vertices.size());
+                    transformedNormals.reserve(mesh.Vertices.size());
+                    for (const PrefabPreviewVertex& vertex : mesh.Vertices)
+                    {
+                        transformedPositions.push_back(TransformPrefabPreviewPosition(vertex.Position, transform));
+                        transformedNormals.push_back(TransformPrefabPreviewNormal(vertex.Normal, transform));
+                        worldPositions.push_back(transformedPositions.back());
+                    }
+
+                    for (size_t index = 0; index + 2 < mesh.Indices.size(); index += 3)
+                    {
+                        uint32_t ia = mesh.Indices[index + 0];
+                        uint32_t ib = mesh.Indices[index + 1];
+                        uint32_t ic = mesh.Indices[index + 2];
+                        if (ia >= transformedPositions.size() || ib >= transformedPositions.size() || ic >= transformedPositions.size())
+                            continue;
+
+                        PrefabPreviewTriangle triangle;
+                        triangle.Color = mesh.Color;
+                        triangle.A.Normal = transformedNormals[ia];
+                        triangle.B.Normal = transformedNormals[ib];
+                        triangle.C.Normal = transformedNormals[ic];
+                        triangle.A.Depth = transformedPositions[ia].x + transformedPositions[ia].z - transformedPositions[ia].y * 0.25f;
+                        triangle.B.Depth = transformedPositions[ib].x + transformedPositions[ib].z - transformedPositions[ib].y * 0.25f;
+                        triangle.C.Depth = transformedPositions[ic].x + transformedPositions[ic].z - transformedPositions[ic].y * 0.25f;
+                        PreviewPoint pa = ProjectPrefabPreviewRaw(transformedPositions[ia]);
+                        PreviewPoint pb = ProjectPrefabPreviewRaw(transformedPositions[ib]);
+                        PreviewPoint pc = ProjectPrefabPreviewRaw(transformedPositions[ic]);
+                        triangle.A.X = pa.X; triangle.A.Y = pa.Y;
+                        triangle.B.X = pb.X; triangle.B.Y = pb.Y;
+                        triangle.C.X = pc.X; triangle.C.Y = pc.Y;
+                        triangles.push_back(triangle);
+                    }
+                }
+
+                if (worldPositions.empty() || triangles.empty())
+                    return GenerateModelOrPrefabPreviewPixels(path, true, size);
+
+                std::vector<float> projectedXs;
+                std::vector<float> projectedYs;
+                projectedXs.reserve(worldPositions.size());
+                projectedYs.reserve(worldPositions.size());
+                for (const DirectX::XMFLOAT3& position : worldPositions)
+                {
+                    PreviewPoint projected = ProjectPrefabPreviewRaw(position);
+                    projectedXs.push_back(projected.X);
+                    projectedYs.push_back(projected.Y);
+                }
+
+                PreviewPoint minProjected = { GetPreviewPercentile(projectedXs, 0.01f), GetPreviewPercentile(projectedYs, 0.01f) };
+                PreviewPoint maxProjected = { GetPreviewPercentile(projectedXs, 0.99f), GetPreviewPercentile(projectedYs, 0.99f) };
+                float projectedWidth = (std::max)(0.001f, maxProjected.X - minProjected.X);
+                float projectedHeight = (std::max)(0.001f, maxProjected.Y - minProjected.Y);
+                float padding = (float)size * 0.17f;
+                float fitScale = (std::min)((size - padding * 2.0f) / projectedWidth, (size - padding * 2.0f) / projectedHeight);
+
+                for (PrefabPreviewTriangle& triangle : triangles)
+                {
+                    triangle.A.X = padding + (triangle.A.X - minProjected.X) * fitScale;
+                    triangle.A.Y = padding + (triangle.A.Y - minProjected.Y) * fitScale;
+                    triangle.B.X = padding + (triangle.B.X - minProjected.X) * fitScale;
+                    triangle.B.Y = padding + (triangle.B.Y - minProjected.Y) * fitScale;
+                    triangle.C.X = padding + (triangle.C.X - minProjected.X) * fitScale;
+                    triangle.C.Y = padding + (triangle.C.Y - minProjected.Y) * fitScale;
+                    FillPrefabPreviewTriangle(result, depthBuffer, triangle);
+                }
+
+                uint32_t outline = PackPreviewPixel(24, 27, 34);
+                for (const PrefabPreviewTriangle& triangle : triangles)
+                {
+                    DrawPreviewLine(result, (int)triangle.A.X, (int)triangle.A.Y, (int)triangle.B.X, (int)triangle.B.Y, outline);
+                    DrawPreviewLine(result, (int)triangle.B.X, (int)triangle.B.Y, (int)triangle.C.X, (int)triangle.C.Y, outline);
+                    DrawPreviewLine(result, (int)triangle.C.X, (int)triangle.C.Y, (int)triangle.A.X, (int)triangle.A.Y, outline);
+                }
+
+                // 프리팹은 여러 엔티티를 묶는 에셋이다.
+                // 실제 메시를 그린 뒤 작은 연결 표시만 얹어 모델 파일과 구분한다.
+                uint32_t badge = PackPreviewPixel(82, 128, 235);
+                int nodeSize = std::max(3, size / 16);
+                FillPreviewRect(result, size - size / 4, size - size / 4, nodeSize, nodeSize, badge);
+                result.Success = true;
+                return result;
+            }
 
             float GetPreviewPercentile(std::vector<float>& values, float percentile)
             {
@@ -555,6 +1704,14 @@ namespace CCEngine
                                     }
                                 }
                             }
+
+                            std::vector<PrefabPreviewMesh> primitiveMeshes;
+                            if (CollectPrefabPrimitivePreviewMeshes(data, primitiveMeshes))
+                            {
+                                DecodedPreviewPixels primitivePreview = GeneratePrefabPrimitivePreviewPixels(path, primitiveMeshes, size);
+                                if (primitivePreview.Success)
+                                    return primitivePreview;
+                            }
                         }
                     }
                     catch (...)
@@ -567,7 +1724,7 @@ namespace CCEngine
 
             DecodedPreviewPixels LoadOrGenerateCachedAssetPreview(const std::filesystem::path& path, bool prefab, int size)
             {
-                std::string typeKey = prefab ? "prefab" : "model";
+                std::string typeKey = prefab ? "prefab_primitive_render_v1" : "model";
                 std::filesystem::path cachePath = GetPreviewCachePath(path, typeKey);
 
                 DecodedPreviewPixels cached;
@@ -579,6 +1736,20 @@ namespace CCEngine
                 DecodedPreviewPixels generated = prefab
                     ? GeneratePrefabPreviewPixels(path, size)
                     : GenerateModelWirePreviewPixels(path, size);
+                SavePreviewCacheFile(cachePath, generated);
+                return generated;
+            }
+
+            DecodedPreviewPixels LoadOrGenerateCachedMaterialPreview(const std::filesystem::path& path, int size)
+            {
+                const std::string typeKey = MaterialThumbnailAlgorithmVersion;
+                const std::filesystem::path cachePath = GetPreviewCachePath(path, typeKey);
+
+                DecodedPreviewPixels cached;
+                if (LoadPreviewCacheFile(cachePath, cached))
+                    return cached;
+
+                DecodedPreviewPixels generated = GenerateMaterialPreviewPixels(path, size);
                 SavePreviewCacheFile(cachePath, generated);
                 return generated;
             }
@@ -726,6 +1897,7 @@ namespace CCEngine
                 m_TreeChildCache.clear();
                 m_TexturePreviewCache.clear();
                 m_TexturePreviewOrder.clear();
+                InvalidateMaterialPreviewCache(false);
                 m_FbxMeshCache.clear();
                 AssetDatabase::Scan(m_RootDirectory);
             }
@@ -1018,6 +2190,7 @@ namespace CCEngine
 
             if (extension == ".ccscene") return AssetType::Scene;
             if (extension == ".ccprefab") return AssetType::Prefab;
+            if (extension == ".ccmat") return AssetType::Material;
             if (extension == ".fbx" || extension == ".obj" || extension == ".gltf" || extension == ".glb") return AssetType::Model;
             if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".tga") return AssetType::Texture;
             if (extension == ".cs") return AssetType::Script;
@@ -1031,6 +2204,7 @@ namespace CCEngine
                 case AssetType::Folder: return "DIR";
                 case AssetType::Scene: return "SCN";
                 case AssetType::Prefab: return "PFB";
+                case AssetType::Material: return "MAT";
                 case AssetType::Model: return "MDL";
                 case AssetType::FbxMesh: return "MSH";
                 case AssetType::Texture: return "TEX";
@@ -1045,6 +2219,7 @@ namespace CCEngine
             {
                 case AssetType::Scene: return "scene";
                 case AssetType::Prefab: return "prefab";
+                case AssetType::Material: return "material";
                 case AssetType::Model: return "model";
                 case AssetType::FbxMesh: return "mesh";
                 case AssetType::Texture: return "texture";
@@ -1060,6 +2235,7 @@ namespace CCEngine
             {
                 case TypeFilter::Texture: return "Texture";
                 case TypeFilter::Model: return "Model";
+                case TypeFilter::Material: return "Material";
                 case TypeFilter::Prefab: return "Prefab";
                 case TypeFilter::Scene: return "Scene";
                 case TypeFilter::Script: return "Script";
@@ -1217,6 +2393,7 @@ namespace CCEngine
 
             m_TexturePreviewCache.clear();
             m_TexturePreviewOrder.clear();
+            InvalidateMaterialPreviewCache(true);
             m_TreeChildCache.clear();
             Refresh(true);
             NotifyAssetDatabaseChanged();
@@ -1243,6 +2420,7 @@ namespace CCEngine
 
             m_TexturePreviewCache.clear();
             m_TexturePreviewOrder.clear();
+            InvalidateMaterialPreviewCache(forceReimport);
             m_TreeChildCache.clear();
             Refresh(false);
             NotifyAssetDatabaseChanged();
@@ -1268,6 +2446,26 @@ namespace CCEngine
 
             // 폴더 생성 뒤에는 트리 캐시를 비워야 왼쪽 폴더 목록에도 바로 나타난다.
             AssetDatabase::MarkDirty(m_RootDirectory);
+            m_TreeChildCache.clear();
+            Refresh(true);
+            return true;
+        }
+
+        bool AssetBrowserPanel::CreateMaterialInCurrentDirectory()
+        {
+            if (!IsPathInsideRoot(m_CurrentDirectory, true))
+                return false;
+
+            std::filesystem::path materialPath = MakeUniquePath(m_CurrentDirectory, "New Material", ".ccmat");
+            MaterialAsset material = MaterialAsset::CreateDefault(materialPath.stem().string());
+            if (!material.SaveToFile(materialPath))
+                return false;
+
+            // Material도 일반 에셋이므로 생성 즉시 meta를 만든다.
+            // 그래야 씬/프리팹이 처음부터 GUID로 참조할 수 있다.
+            AssetDatabase::EnsureMetaFile(materialPath);
+            AssetDatabase::MarkDirty(m_RootDirectory);
+
             m_TreeChildCache.clear();
             Refresh(true);
             return true;
@@ -1526,7 +2724,7 @@ namespace CCEngine
                 return index;
             }
 
-            const float iconSizes[5] = { 18.0f, 32.0f, 48.0f, 72.0f, 96.0f };
+            const float iconSizes[5] = { 18.0f, 36.0f, 64.0f, 96.0f, 128.0f };
             float iconSize = iconSizes[(std::clamp)(m_IconSizeStep, 0, 4)];
             float cellW = iconSize + 58.0f;
             float cellH = iconSize + 42.0f;
@@ -1567,7 +2765,7 @@ namespace CCEngine
                 return true;
             }
 
-            const float iconSizes[5] = { 18.0f, 32.0f, 48.0f, 72.0f, 96.0f };
+            const float iconSizes[5] = { 18.0f, 36.0f, 64.0f, 96.0f, 128.0f };
             float iconSize = iconSizes[(std::clamp)(m_IconSizeStep, 0, 4)];
             float cellW = iconSize + 58.0f;
             float cellH = iconSize + 42.0f;
@@ -1606,7 +2804,7 @@ namespace CCEngine
                     mouseY >= buttonY && mouseY <= buttonY + 16.0f;
             }
 
-            const float iconSizes[5] = { 18.0f, 32.0f, 48.0f, 72.0f, 96.0f };
+            const float iconSizes[5] = { 18.0f, 36.0f, 64.0f, 96.0f, 128.0f };
             float iconSize = iconSizes[(std::clamp)(m_IconSizeStep, 0, 4)];
             float iconX = x + (w + 8.0f - iconSize) * 0.5f - 4.0f;
             float iconY = y + 6.0f;
@@ -1843,6 +3041,8 @@ namespace CCEngine
                         queryTypeFilter = TypeFilter::Texture;
                     else if (typeText == "model" || typeText == "fbx" || typeText == "mesh")
                         queryTypeFilter = TypeFilter::Model;
+                    else if (typeText == "material" || typeText == "mat")
+                        queryTypeFilter = TypeFilter::Material;
                     else if (typeText == "prefab" || typeText == "pfb")
                         queryTypeFilter = TypeFilter::Prefab;
                     else if (typeText == "scene" || typeText == "scn")
@@ -1904,6 +3104,7 @@ namespace CCEngine
                     {
                         case TypeFilter::Texture: return entry.Type == AssetType::Texture;
                         case TypeFilter::Model: return entry.Type == AssetType::Model || entry.Type == AssetType::FbxMesh;
+                        case TypeFilter::Material: return entry.Type == AssetType::Material;
                         case TypeFilter::Prefab: return entry.Type == AssetType::Prefab;
                         case TypeFilter::Scene: return entry.Type == AssetType::Scene;
                         case TypeFilter::Script: return entry.Type == AssetType::Script;
@@ -2241,6 +3442,9 @@ namespace CCEngine
                 m_SelectedIndices.insert(index);
                 m_SelectedIndex = index;
                 m_AnchorSelectedIndex = index;
+                const AssetEntry& entry = m_ViewEntries[index];
+                if (m_OnAssetSelected && entry.Type == AssetType::Material && !IsVirtualSubAsset(entry))
+                    m_OnAssetSelected(entry.Path.string(), GetTypeKey(entry.Type));
                 return;
             }
 
@@ -2384,7 +3588,7 @@ namespace CCEngine
                     }
                     else
                     {
-                        const float iconSizes[5] = { 18.0f, 32.0f, 48.0f, 72.0f, 96.0f };
+                        const float iconSizes[5] = { 18.0f, 36.0f, 64.0f, 96.0f, 128.0f };
                         float iconSize = iconSizes[(std::clamp)(m_IconSizeStep, 0, 4)];
                         float cellW = iconSize + 58.0f;
                         float cellH = iconSize + 42.0f;
@@ -2566,6 +3770,129 @@ namespace CCEngine
             // 브라우저는 트리 캐시와 현재 화면 목록만 다시 만든다.
             m_TreeChildCache.clear();
             Refresh(false);
+        }
+
+        void AssetBrowserPanel::ApplyMaterialPreviewOverride(const std::filesystem::path& materialPath, const MaterialAsset& material)
+        {
+            if (materialPath.empty())
+                return;
+
+            MaterialPreviewCacheEntry& preview = m_MaterialPreviewCache[GetTreeKey(materialPath)];
+            std::error_code ec;
+            preview.LastWriteTime = std::filesystem::last_write_time(materialPath, ec);
+            if (ec)
+                preview.LastWriteTime = {};
+            preview.SourcePath = materialPath;
+
+            // 인스펙터에서 편집 중인 값은 아직 파일에 저장되지 않았을 수 있다.
+            // 썸네일은 파일 재스캔을 기다리지 말고 같은 메모리 값을 받아 즉시 다시 그린다.
+            preview.Material = material;
+            preview.AlbedoColor = material.AlbedoColor;
+            preview.Valid = true;
+            preview.Dirty = true;
+            preview.CaptureFailed = false;
+            preview.CapturePending = false;
+            preview.CaptureAttempts = 0;
+        }
+
+        void AssetBrowserPanel::ApplyMaterialPreviewCapture(const std::filesystem::path& materialPath, uint32_t width, uint32_t height, const std::vector<uint32_t>& pixels)
+        {
+            if (materialPath.empty() || width == 0 || height == 0 || pixels.empty() || !HasVisibleMaterialPreviewPixels(pixels))
+                return;
+
+            // 인스펙터 하단 프리뷰는 사용자가 보는 완성된 렌더 결과다.
+            // 여기서 다시 크롭하면 배경색 판정이 틀렸을 때 회색 영역만 썸네일로 남을 수 있으므로,
+            // 이 경로는 프리뷰 프레임을 그대로 축소해서 에셋 브라우저에 전달한다.
+            DecodedPreviewPixels capturedFrame = ResizePreviewFrame(width, height, pixels, MaterialPreviewTextureSize);
+            if (!capturedFrame.Success)
+            {
+                AppendThumbnailDebugLog("material inspector capture resize failed: " + materialPath.string());
+                return;
+            }
+
+            ForcePreviewAlphaOpaque(capturedFrame.Pixels);
+            DumpThumbnailDebugImage("material_inspector_frame_capture", (uint32_t)capturedFrame.Width, (uint32_t)capturedFrame.Height, capturedFrame.Pixels);
+
+            std::vector<std::string> targetKeys;
+            targetKeys.push_back(GetTreeKey(materialPath));
+
+            auto collectMatchingEntryKey = [&](const AssetEntry& entry)
+                {
+                    if ((entry.Type == AssetType::Material || IsMaterialAssetPath(entry.Path)) &&
+                        PathsReferToSameExistingFile(entry.Path, materialPath))
+                    {
+                        targetKeys.push_back(GetTreeKey(entry.Path));
+                    }
+                };
+
+            for (const AssetEntry& entry : m_Entries)
+                collectMatchingEntryKey(entry);
+            for (const AssetEntry& entry : m_ViewEntries)
+                collectMatchingEntryKey(entry);
+
+            std::sort(targetKeys.begin(), targetKeys.end());
+            targetKeys.erase(std::unique(targetKeys.begin(), targetKeys.end()), targetKeys.end());
+
+            for (const std::string& key : targetKeys)
+            {
+                MaterialPreviewCacheEntry& preview = m_MaterialPreviewCache[key];
+                std::error_code ec;
+                preview.LastWriteTime = std::filesystem::last_write_time(materialPath, ec);
+                if (ec)
+                    preview.LastWriteTime = {};
+                preview.SourcePath = materialPath;
+
+                // 인스펙터 프리뷰 캡처는 최종 안전망이다.
+                // GPU 텍스처 업로드나 DrawImage 상태가 깨져도 같은 픽셀을 CPU 샘플링으로 바로 그릴 수 있게 보관한다.
+                preview.CapturedPixels = capturedFrame.Pixels;
+                preview.CapturedPixelWidth = capturedFrame.Width;
+                preview.CapturedPixelHeight = capturedFrame.Height;
+                preview.CapturedTexture.reset(Texture2D::Create((uint32_t)capturedFrame.Width, (uint32_t)capturedFrame.Height, capturedFrame.Pixels.data()));
+                preview.CapturedFromInspector = true;
+                preview.Valid = true;
+                preview.Rendered = true;
+                preview.Dirty = false;
+                preview.CaptureFailed = false;
+                preview.CapturePending = false;
+                preview.CaptureAttempts = 0;
+
+                AppendThumbnailDebugLogOnce(std::string("material-capture-applied|") + key,
+                    std::string("material inspector capture applied: key=") + key +
+                    " source=" + NormalizeAssetPathForKey(materialPath).generic_string() +
+                    " size=" + std::to_string(capturedFrame.Width) + "x" + std::to_string(capturedFrame.Height) +
+                    " texture=" + std::to_string(preview.CapturedTexture != nullptr) +
+                    " srv=" + std::to_string(preview.CapturedTexture && preview.CapturedTexture->GetRendererID() != nullptr));
+            }
+        }
+
+        void AssetBrowserPanel::ApplyMaterialPreviewTexture(const std::filesystem::path& materialPath, RendererHandle previewTexture)
+        {
+            if (materialPath.empty() || !previewTexture)
+                return;
+
+            std::vector<std::string> targetKeys;
+            targetKeys.push_back(GetTreeKey(materialPath));
+            for (const AssetEntry& entry : m_ViewEntries)
+            {
+                if ((entry.Type == AssetType::Material || IsMaterialAssetPath(entry.Path)) &&
+                    PathsReferToSameExistingFile(entry.Path, materialPath))
+                {
+                    targetKeys.push_back(GetTreeKey(entry.Path));
+                }
+            }
+
+            std::sort(targetKeys.begin(), targetKeys.end());
+            targetKeys.erase(std::unique(targetKeys.begin(), targetKeys.end()), targetKeys.end());
+
+            for (const std::string& key : targetKeys)
+            {
+                // 임시 테스트 경로:
+                // 인스펙터 하단 프리뷰가 이미 정상 렌더링된 상태라면 같은 렌더 타깃을 브라우저에서도 그대로 그린다.
+                // 정식 썸네일 저장 문제가 해결되면 이 borrowed preview 경로는 제거해도 된다.
+                BorrowedMaterialPreview& borrowedPreview = m_BorrowedMaterialPreviews[key];
+                borrowedPreview.SourcePath = materialPath;
+                borrowedPreview.Texture = previewTexture;
+            }
         }
 
         bool AssetBrowserPanel::MoveEntryToDirectory(const AssetEntry& entry, const std::filesystem::path& targetDirectory, AssetUndoManager::Command* undoCommand)
@@ -2761,16 +4088,18 @@ namespace CCEngine
             }
 
             bool isTexture = entry.Type == AssetType::Texture;
+            bool isMaterial = entry.Type == AssetType::Material || IsMaterialAssetPath(entry.Path);
             bool isFbxContainerModel = IsFbxContainer(entry);
             bool isGeneratedPreview =
-                entry.Type == AssetType::Prefab ||
                 entry.Type == AssetType::FbxMesh ||
                 (entry.Type == AssetType::Model && !isFbxContainerModel);
             if (!isTexture && !isGeneratedPreview)
                 return nullptr;
 
             std::string key = GetTreeKey(entry.IsSubAsset ? entry.SourceAssetPath : entry.Path);
-            if (isGeneratedPreview)
+            if (isMaterial)
+                key += std::string("|") + MaterialThumbnailAlgorithmVersion;
+            else if (isGeneratedPreview)
                 key += std::string("|") + ThumbnailAlgorithmVersion;
             if (entry.Type == AssetType::FbxMesh)
                 key += "|mesh:" + std::to_string(entry.SubAssetIndex);
@@ -2803,6 +4132,12 @@ namespace CCEngine
                 }
 
                 if (pixels.empty() || width <= 0 || height <= 0)
+                {
+                    job->Failed = true;
+                    return nullptr;
+                }
+
+                if (isMaterial && !HasVisibleMaterialPreviewPixels(pixels))
                 {
                     job->Failed = true;
                     return nullptr;
@@ -2858,6 +4193,8 @@ namespace CCEngine
                     DecodedPreviewPixels decoded;
                     if (type == AssetType::Texture)
                         decoded = DecodeTexturePreviewPixels(path, 128);
+                    else if (type == AssetType::Material)
+                        decoded = LoadOrGenerateCachedMaterialPreview(std::filesystem::path(path), MaterialPreviewTextureSize);
                     else if (type == AssetType::FbxMesh)
                         decoded = LoadOrGenerateCachedFbxMeshPreview(std::filesystem::path(path), subAssetIndex, 128);
                     else
@@ -2896,10 +4233,661 @@ namespace CCEngine
             return nullptr;
         }
 
+        const DirectX::XMFLOAT4* AssetBrowserPanel::GetMaterialPreviewColor(const AssetEntry& entry)
+        {
+            if (entry.Type != AssetType::Material && !IsMaterialAssetPath(entry.Path))
+                return nullptr;
+
+            std::error_code ec;
+            std::filesystem::file_time_type writeTime = std::filesystem::last_write_time(entry.Path, ec);
+            if (ec)
+            {
+                m_MaterialPreviewCache.erase(GetTreeKey(entry.Path));
+                writeTime = {};
+                return nullptr;
+            }
+
+            std::string key = GetTreeKey(entry.Path);
+            auto cached = m_MaterialPreviewCache.find(key);
+            if (cached != m_MaterialPreviewCache.end() && cached->second.Valid && cached->second.LastWriteTime == writeTime)
+            {
+                if (!cached->second.Rendered && !cached->second.CaptureFailed)
+                    cached->second.Dirty = true;
+                return &cached->second.AlbedoColor;
+            }
+
+            MaterialPreviewCacheEntry& preview = m_MaterialPreviewCache[key];
+            bool keepFramebuffer = preview.PreviewFramebuffer != nullptr;
+            AppendThumbnailDebugLog("material cache reload: " + key + " keepFramebuffer=" + std::to_string(keepFramebuffer));
+            preview.SourcePath = entry.Path;
+            preview.LastWriteTime = writeTime;
+            MaterialAsset material;
+            if (material.LoadFromFile(entry.Path))
+            {
+                preview.Material = material;
+                preview.AlbedoColor = material.AlbedoColor;
+                preview.Valid = true;
+                preview.Dirty = true;
+                preview.CaptureFailed = false;
+                preview.CapturePending = false;
+                preview.CaptureAttempts = 0;
+                // 파일이 갱신되었어도 새 렌더 결과가 준비되기 전까지 마지막 정상 프리뷰를 유지한다.
+                // 상용 에디터처럼 썸네일이 순간적으로 빈 회색 칸으로 돌아가는 깜박임을 막기 위한 캐시 정책이다.
+                AppendThumbnailDebugLog("material cache loaded: " + key);
+            }
+            else
+            {
+                preview.Valid = false;
+                preview.Dirty = false;
+                preview.Rendered = false;
+                preview.CaptureFailed = false;
+                preview.CapturePending = false;
+                preview.CaptureAttempts = 0;
+                preview.CapturedTexture.reset();
+                preview.CapturedPixels.clear();
+                preview.CapturedPixelWidth = 0;
+                preview.CapturedPixelHeight = 0;
+                preview.CapturedFromInspector = false;
+                AppendThumbnailDebugLog("material cache load failed: " + key);
+            }
+
+            // Material 썸네일은 파일 수정 시간이 바뀔 때만 다시 읽는다.
+            // 그리드 렌더링 중 매 프레임 .ccmat을 파싱하면 색 조정이나 스크롤이 끊긴다.
+            if (!keepFramebuffer && preview.CapturedPixels.empty())
+            {
+                preview.Dirty = true;
+                preview.Rendered = false;
+                preview.CaptureFailed = false;
+                preview.CapturePending = false;
+                preview.CaptureAttempts = 0;
+                preview.CapturedTexture.reset();
+                AppendThumbnailDebugLog("material cache reset without framebuffer: " + key);
+            }
+            return preview.Valid ? &preview.AlbedoColor : nullptr;
+        }
+
+        RendererHandle AssetBrowserPanel::GetMaterialPreviewTexture(const AssetEntry& entry)
+        {
+            GetMaterialPreviewColor(entry);
+            auto cached = m_MaterialPreviewCache.find(GetTreeKey(entry.Path));
+            if (cached == m_MaterialPreviewCache.end() ||
+                !cached->second.Valid ||
+                !cached->second.Rendered ||
+                !cached->second.CapturedTexture)
+            {
+                AppendThumbnailDebugLogOnce(std::string("material-get-texture-fallback|") + GetTreeKey(entry.Path),
+                    "material get texture fallback: key=" + GetTreeKey(entry.Path));
+                return nullptr;
+            }
+
+            AppendThumbnailDebugLogOnce(std::string("material-get-texture-ok|") + GetTreeKey(entry.Path),
+                "material get texture ok: key=" + GetTreeKey(entry.Path));
+            return cached->second.CapturedTexture->GetRendererID();
+        }
+
+        RendererHandle AssetBrowserPanel::GetPrefabPreviewTexture(const AssetEntry& entry)
+        {
+            if (entry.Type != AssetType::Prefab)
+                return nullptr;
+
+            std::error_code ec;
+            if (!std::filesystem::exists(entry.Path, ec))
+                return nullptr;
+
+            std::filesystem::file_time_type lastWriteTime = std::filesystem::last_write_time(entry.Path, ec);
+            if (ec)
+                lastWriteTime = {};
+
+            const std::string key = GetTreeKey(entry.Path);
+            PrefabPreviewCacheEntry& preview = m_PrefabPreviewCache[key];
+            if (!preview.Valid || preview.LastWriteTime != lastWriteTime)
+            {
+                preview = PrefabPreviewCacheEntry{};
+                preview.LastWriteTime = lastWriteTime;
+
+                std::ifstream input(entry.Path);
+                if (input)
+                {
+                    try
+                    {
+                        nlohmann::json data;
+                        input >> data;
+
+                        if (data.contains("Entities") && data["Entities"].is_array())
+                        {
+                            struct EntityPreviewData
+                            {
+                                int LocalID = -1;
+                                int ParentID = -1;
+                                DirectX::XMMATRIX LocalTransform = DirectX::XMMatrixIdentity();
+                                bool HasMesh = false;
+                                MeshComponent::MeshType Type = MeshComponent::MeshType::Custom;
+                                DirectX::XMFLOAT4 Color = { 1.0f, 1.0f, 1.0f, 1.0f };
+                                std::string AlbedoPath;
+                                std::string MaterialPath;
+                            };
+
+                            std::unordered_map<int, EntityPreviewData> entityDataMap;
+                            for (const auto& entityData : data["Entities"])
+                            {
+                                EntityPreviewData previewEntity;
+                                previewEntity.LocalID = entityData.value("LocalID", -1);
+                                previewEntity.ParentID = entityData.value("ParentID", -1);
+                                previewEntity.LocalTransform = ReadPrefabPreviewTransform(entityData);
+
+                                if (entityData.contains("MeshComponent"))
+                                {
+                                    const auto& meshData = entityData["MeshComponent"];
+                                    previewEntity.HasMesh = true;
+                                    previewEntity.Type = static_cast<MeshComponent::MeshType>(meshData.value("Type", (int)MeshComponent::MeshType::Custom));
+                                    if (meshData.contains("BaseColor"))
+                                        previewEntity.Color = ReadRenderPreviewFloat4(meshData["BaseColor"], previewEntity.Color);
+
+                                    std::string albedoGuid = meshData.value("AlbedoGuid", "");
+                                    if (!albedoGuid.empty())
+                                        previewEntity.AlbedoPath = AssetDatabase::GetPathFromGuid(albedoGuid).string();
+                                    if (previewEntity.AlbedoPath.empty() && meshData.contains("AlbedoPath"))
+                                        previewEntity.AlbedoPath = meshData["AlbedoPath"].get<std::string>();
+
+                                    std::string materialGuid = meshData.value("MaterialGuid", "");
+                                    if (!materialGuid.empty())
+                                        previewEntity.MaterialPath = AssetDatabase::GetPathFromGuid(materialGuid).string();
+                                    if (previewEntity.MaterialPath.empty() && meshData.contains("MaterialPath"))
+                                        previewEntity.MaterialPath = meshData["MaterialPath"].get<std::string>();
+                                }
+
+                                if (previewEntity.LocalID >= 0)
+                                    entityDataMap[previewEntity.LocalID] = previewEntity;
+                            }
+
+                            std::unordered_map<int, DirectX::XMMATRIX> worldCache;
+                            std::function<DirectX::XMMATRIX(int)> resolveWorld = [&](int localID) -> DirectX::XMMATRIX
+                                {
+                                    auto cachedWorld = worldCache.find(localID);
+                                    if (cachedWorld != worldCache.end())
+                                        return cachedWorld->second;
+
+                                    auto entityIt = entityDataMap.find(localID);
+                                    if (entityIt == entityDataMap.end())
+                                        return DirectX::XMMatrixIdentity();
+
+                                    DirectX::XMMATRIX world = entityIt->second.LocalTransform;
+                                    if (entityIt->second.ParentID >= 0)
+                                        world = world * resolveWorld(entityIt->second.ParentID);
+
+                                    worldCache[localID] = world;
+                                    return world;
+                                };
+
+                            for (const auto& [localID, previewEntity] : entityDataMap)
+                            {
+                                if (!previewEntity.HasMesh || previewEntity.Type == MeshComponent::MeshType::Custom)
+                                    continue;
+
+                                PrefabPreviewRenderItem item;
+                                item.MeshData = CreatePreviewMeshForType(previewEntity.Type);
+                                if (!item.MeshData)
+                                    continue;
+
+                                item.Transform = resolveWorld(localID);
+                                item.Color = previewEntity.Color;
+
+                                if (!previewEntity.MaterialPath.empty() && std::filesystem::exists(previewEntity.MaterialPath))
+                                {
+                                    MaterialAsset material;
+                                    if (material.LoadFromFile(previewEntity.MaterialPath))
+                                    {
+                                        item.Color = material.AlbedoColor;
+                                        if (material.AlbedoTexture)
+                                            item.Texture = material.AlbedoTexture;
+                                    }
+                                }
+
+                                if (!item.Texture && !previewEntity.AlbedoPath.empty() && std::filesystem::exists(previewEntity.AlbedoPath))
+                                    item.Texture.reset(Texture2D::Create(previewEntity.AlbedoPath));
+
+                                preview.Items.push_back(item);
+                            }
+                        }
+                    }
+                    catch (...)
+                    {
+                        preview.Items.clear();
+                    }
+                }
+
+                // 프리팹 썸네일은 실제 렌더러로 한 번 촬영한 결과만 사용한다.
+                // 여기서 가짜 픽셀을 만들면 씬에 배치되는 모습과 브라우저 썸네일이 서로 달라진다.
+                preview.Valid = !preview.Items.empty();
+                preview.Dirty = preview.Valid;
+                preview.Rendered = false;
+                preview.CaptureFailed = !preview.Valid;
+                preview.CapturedTexture.reset();
+            }
+
+            if (!preview.Rendered || !preview.CapturedTexture)
+                return nullptr;
+
+            return preview.CapturedTexture->GetRendererID();
+        }
+
+        void AssetBrowserPanel::RenderMaterialPreviewThumbnail(MaterialPreviewCacheEntry& preview)
+        {
+            if (!preview.Valid)
+                return;
+
+            if (preview.CapturedFromInspector && !preview.CapturedPixels.empty())
+            {
+                // 인스펙터 프리뷰는 사용자가 실제로 보는 렌더 결과다.
+                // 백그라운드 썸네일 렌더가 늦게 돌면서 그 결과를 회색 실패 캡처로 덮으면 안 된다.
+                preview.Rendered = true;
+                preview.Dirty = false;
+                preview.CapturePending = false;
+                preview.CaptureFailed = false;
+                return;
+            }
+
+            if (!preview.PreviewFramebuffer)
+            {
+                FramebufferSpecification spec;
+                spec.Width = MaterialPreviewTextureSize;
+                spec.Height = MaterialPreviewTextureSize;
+                preview.PreviewFramebuffer.reset(Framebuffer::Create(spec));
+                preview.Dirty = true;
+            }
+
+            if (!m_MaterialPreviewMesh)
+                m_MaterialPreviewMesh = MeshFactory::CreateSphere(0.75f, 32, 16);
+
+            if (!preview.PreviewFramebuffer || !m_MaterialPreviewMesh)
+                return;
+
+            auto& window = CCEngine::Application::Get()->GetWindow();
+            MaterialPreviewRenderOptions options;
+            options.Yaw = 0.55f;
+            options.Pitch = -0.20f;
+            options.TargetWidth = preview.PreviewFramebuffer->GetSpecification().Width;
+            options.TargetHeight = preview.PreviewFramebuffer->GetSpecification().Height;
+            options.RestoreViewportWidth = window.GetWidth();
+            options.RestoreViewportHeight = window.GetHeight();
+            RenderMaterialPreviewToFramebuffer(preview.PreviewFramebuffer.get(), m_MaterialPreviewMesh, preview.Material, options);
+
+            std::vector<uint32_t> pixels;
+            const bool readSucceeded = preview.PreviewFramebuffer->ReadColorPixels(pixels);
+            if (readSucceeded)
+                DumpThumbnailDebugImage("material_raw_capture", preview.PreviewFramebuffer->GetSpecification().Width, preview.PreviewFramebuffer->GetSpecification().Height, pixels);
+
+            const bool captureValid = readSucceeded && HasVisibleMaterialPreviewPixels(pixels);
+
+            if (captureValid)
+            {
+                const FramebufferSpecification& spec = preview.PreviewFramebuffer->GetSpecification();
+                DecodedPreviewPixels cropped = CropMaterialPreviewToContent(spec.Width, spec.Height, pixels, MaterialPreviewTextureSize);
+                if (cropped.Success)
+                    DumpThumbnailDebugImage("material_cropped_capture", (uint32_t)cropped.Width, (uint32_t)cropped.Height, cropped.Pixels);
+                if (cropped.Success)
+                    ForcePreviewAlphaOpaque(cropped.Pixels);
+                if (cropped.Success)
+                {
+                    preview.CapturedPixels = cropped.Pixels;
+                    preview.CapturedPixelWidth = cropped.Width;
+                    preview.CapturedPixelHeight = cropped.Height;
+                    preview.CapturedFromInspector = false;
+                }
+                preview.CapturedTexture.reset(cropped.Success ? Texture2D::Create((uint32_t)cropped.Width, (uint32_t)cropped.Height, cropped.Pixels.data()) : nullptr);
+                AppendThumbnailDebugLog(std::string("material texture create: cropped=") + std::to_string(cropped.Success) +
+                    " texture=" + std::to_string(preview.CapturedTexture != nullptr) +
+                    " srv=" + std::to_string(preview.CapturedTexture && preview.CapturedTexture->GetRendererID() != nullptr));
+            }
+            else
+            {
+                if (preview.CapturedPixels.empty())
+                {
+                    preview.CapturedTexture.reset();
+                    preview.CapturedPixelWidth = 0;
+                    preview.CapturedPixelHeight = 0;
+                    preview.CapturedFromInspector = false;
+                }
+                AppendThumbnailDebugLog(std::string("material capture invalid, keepExisting=") + std::to_string(!preview.CapturedPixels.empty()));
+            }
+
+            // 회색 클리어 화면을 성공한 썸네일로 고정하지 않는다.
+            // 실제 픽셀이 잡힌 경우에만 캐시하고, 아니면 절차식 임시 아이콘으로 내려간다.
+            preview.Rendered = (preview.CapturedTexture != nullptr && preview.CapturedTexture->GetRendererID() != nullptr) || !preview.CapturedPixels.empty();
+            preview.Dirty = !preview.Rendered;
+            preview.CapturePending = false;
+            preview.CaptureFailed = !preview.Rendered;
+        }
+
+        void AssetBrowserPanel::InvalidateMaterialPreviewCache(bool discardCapturedPixels)
+        {
+            for (auto it = m_MaterialPreviewCache.begin(); it != m_MaterialPreviewCache.end(); )
+            {
+                MaterialPreviewCacheEntry& preview = it->second;
+
+                std::error_code ec;
+                if (!preview.SourcePath.empty() && !std::filesystem::exists(preview.SourcePath, ec))
+                {
+                    it = m_MaterialPreviewCache.erase(it);
+                    continue;
+                }
+
+                if (discardCapturedPixels)
+                {
+                    preview.CapturedTexture.reset();
+                    preview.CapturedPixels.clear();
+                    preview.CapturedPixelWidth = 0;
+                    preview.CapturedPixelHeight = 0;
+                    preview.CapturedFromInspector = false;
+                    preview.Rendered = false;
+                }
+
+                // 에셋 DB 새로고침은 파일 목록을 갱신하는 일이고, 인스펙터가 방금 넘겨준 프리뷰 픽셀은 별개의 결과다.
+                // 그래서 단순 Refresh에서는 성공한 캡처를 보존하고, 다음 렌더가 준비될 때까지 회색 칸으로 되돌아가지 않게 한다.
+                preview.PreviewFramebuffer.reset();
+                preview.CaptureFailed = false;
+                preview.CapturePending = false;
+                preview.CaptureAttempts = 0;
+                preview.Dirty = discardCapturedPixels || preview.CapturedPixels.empty();
+                ++it;
+            }
+        }
+
+        void AssetBrowserPanel::RenderPrefabPreviewThumbnail(PrefabPreviewCacheEntry& preview)
+        {
+            if (!preview.Valid || preview.Items.empty())
+                return;
+
+            constexpr uint32_t PrefabPreviewTextureSize = 256;
+            if (!preview.PreviewFramebuffer)
+            {
+                FramebufferSpecification spec;
+                spec.Width = PrefabPreviewTextureSize;
+                spec.Height = PrefabPreviewTextureSize;
+                preview.PreviewFramebuffer.reset(Framebuffer::Create(spec));
+                preview.Dirty = true;
+            }
+
+            if (!preview.PreviewFramebuffer)
+                return;
+
+            DirectX::XMFLOAT3 minBounds = { 0.0f, 0.0f, 0.0f };
+            DirectX::XMFLOAT3 maxBounds = { 0.0f, 0.0f, 0.0f };
+            bool hasBounds = false;
+            for (const PrefabPreviewRenderItem& item : preview.Items)
+                ExpandPrefabPreviewBounds(item.MeshData, item.Transform, minBounds, maxBounds, hasBounds);
+
+            if (!hasBounds)
+            {
+                preview.CaptureFailed = true;
+                preview.Dirty = false;
+                return;
+            }
+
+            DirectX::XMFLOAT3 center =
+            {
+                (minBounds.x + maxBounds.x) * 0.5f,
+                (minBounds.y + maxBounds.y) * 0.5f,
+                (minBounds.z + maxBounds.z) * 0.5f
+            };
+            DirectX::XMFLOAT3 extents =
+            {
+                (maxBounds.x - minBounds.x) * 0.5f,
+                (maxBounds.y - minBounds.y) * 0.5f,
+                (maxBounds.z - minBounds.z) * 0.5f
+            };
+            float radius = (std::max)(0.25f, std::sqrt(extents.x * extents.x + extents.y * extents.y + extents.z * extents.z));
+            float distance = (std::max)(2.0f, radius * 3.0f);
+
+            DirectX::XMVECTOR eye = DirectX::XMVectorSet(center.x + distance * 0.70f, center.y + distance * 0.45f, center.z - distance, 1.0f);
+            DirectX::XMVECTOR target = DirectX::XMVectorSet(center.x, center.y, center.z, 1.0f);
+            DirectX::XMVECTOR up = DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+            DirectX::XMMATRIX view = DirectX::XMMatrixLookAtLH(eye, target, up);
+            DirectX::XMMATRIX cameraWorld = DirectX::XMMatrixInverse(nullptr, view);
+            DirectX::XMVECTOR cameraRotation = DirectX::XMQuaternionRotationMatrix(cameraWorld);
+
+            DirectX::XMFLOAT3 eyePosition;
+            DirectX::XMFLOAT4 eyeRotation;
+            DirectX::XMStoreFloat3(&eyePosition, eye);
+            DirectX::XMStoreFloat4(&eyeRotation, cameraRotation);
+
+            preview.PreviewFramebuffer->Bind();
+            RenderCommand::SetViewport(0, 0, PrefabPreviewTextureSize, PrefabPreviewTextureSize);
+            RenderCommand::SetScissorEnable(false);
+            RenderCommand::SetBlendMode(RendererAPI::BlendMode::Opaque);
+            RenderCommand::SetCullMode(RendererAPI::CullMode::Back);
+            RenderCommand::SetDepthTest(true);
+            Renderer::SetClearColor(0.10f, 0.10f, 0.11f, 1.0f);
+            Renderer::Clear();
+
+            PerspectiveCamera camera(38.0f, 1.0f, 0.05f, (std::max)(50.0f, distance * 8.0f));
+            camera.SetPosition(eyePosition);
+            camera.SetRotation(eyeRotation);
+
+            SceneLightData lightData;
+            lightData.LightCount = 2;
+            lightData.Lights[0].Direction = { -0.45f, -0.80f, 0.30f };
+            lightData.Lights[0].Color = { 1.0f, 0.96f, 0.90f };
+            lightData.Lights[0].Intensity = 1.15f;
+            lightData.Lights[1].Direction = { 0.65f, 0.35f, 0.30f };
+            lightData.Lights[1].Color = { 0.55f, 0.65f, 1.0f };
+            lightData.Lights[1].Intensity = 0.35f;
+
+            Renderer3D::BeginScene(camera, lightData);
+            for (const PrefabPreviewRenderItem& item : preview.Items)
+                Renderer3D::DrawMesh(item.Transform, item.MeshData, item.Texture, item.Color, -1);
+            Renderer3D::EndScene();
+            preview.PreviewFramebuffer->Unbind();
+
+            auto& window = CCEngine::Application::Get()->GetWindow();
+            RenderCommand::SetViewport(0, 0, window.GetWidth(), window.GetHeight());
+
+            std::vector<uint32_t> pixels;
+            const bool readSucceeded = preview.PreviewFramebuffer->ReadColorPixels(pixels);
+            if (readSucceeded)
+                DumpThumbnailDebugImage("prefab_raw_capture", PrefabPreviewTextureSize, PrefabPreviewTextureSize, pixels);
+
+            const bool captureValid = readSucceeded && HasVisibleMaterialPreviewPixels(pixels);
+
+            if (captureValid)
+            {
+                DecodedPreviewPixels cropped = CropMaterialPreviewToContent(PrefabPreviewTextureSize, PrefabPreviewTextureSize, pixels, 256);
+                if (cropped.Success)
+                    DumpThumbnailDebugImage("prefab_cropped_capture", (uint32_t)cropped.Width, (uint32_t)cropped.Height, cropped.Pixels);
+                if (cropped.Success)
+                    ForcePreviewAlphaOpaque(cropped.Pixels);
+                preview.CapturedTexture.reset(cropped.Success ? Texture2D::Create((uint32_t)cropped.Width, (uint32_t)cropped.Height, cropped.Pixels.data()) : nullptr);
+            }
+            else
+            {
+                preview.CapturedTexture.reset();
+            }
+
+            preview.Rendered = preview.CapturedTexture != nullptr && preview.CapturedTexture->GetRendererID() != nullptr;
+            preview.Dirty = !preview.Rendered;
+            preview.CaptureFailed = !preview.Rendered;
+        }
+
+        void AssetBrowserPanel::PrepareMaterialPreviewRequests()
+        {
+            int preparedCount = 0;
+            constexpr int MaxPreparedMaterialPreviewsPerFrame = 48;
+            for (const AssetEntry& entry : m_ViewEntries)
+            {
+                if (entry.Type != AssetType::Material && !IsMaterialAssetPath(entry.Path))
+                    continue;
+
+                // 브라우저 UI가 텍스처를 그리기 전에 캐시 항목부터 만들어 둔다.
+                // 렌더는 아래 UpdateMaterialPreviewThumbnails에서 나눠 처리해서 폴더 진입 순간의 멈춤을 줄인다.
+                GetMaterialPreviewColor(entry);
+                if (++preparedCount >= MaxPreparedMaterialPreviewsPerFrame)
+                    break;
+            }
+        }
+
+        void AssetBrowserPanel::UpdateMaterialPreviewThumbnails()
+        {
+            if (!m_IsVisible)
+                return;
+
+            PrepareMaterialPreviewRequests();
+
+            constexpr int MaxMaterialPreviewRendersPerFrame = 1;
+            int rendered = 0;
+            for (auto& [key, preview] : m_MaterialPreviewCache)
+            {
+                if (!preview.Valid || !preview.Dirty)
+                    continue;
+
+                RenderMaterialPreviewThumbnail(preview);
+                if (++rendered >= MaxMaterialPreviewRendersPerFrame)
+                    break;
+            }
+        }
+
+        void AssetBrowserPanel::UpdatePrefabPreviewThumbnails()
+        {
+            if (!m_IsVisible)
+                return;
+
+            constexpr int MaxPrefabPreviewRendersPerFrame = 1;
+            int rendered = 0;
+            for (auto& [key, preview] : m_PrefabPreviewCache)
+            {
+                if (!preview.Valid || !preview.Dirty)
+                    continue;
+
+                RenderPrefabPreviewThumbnail(preview);
+                if (++rendered >= MaxPrefabPreviewRendersPerFrame)
+                    break;
+            }
+        }
+
+        void AssetBrowserPanel::DrawMaterialPreview(const AssetEntry& entry, float x, float y, float size)
+        {
+            const std::string key = GetTreeKey(entry.Path);
+
+            auto cached = m_MaterialPreviewCache.find(key);
+            auto hasCapturedPreview = [](const MaterialPreviewCacheEntry& preview) -> bool
+                {
+                    return (!preview.CapturedPixels.empty() &&
+                        preview.CapturedPixelWidth > 0 &&
+                        preview.CapturedPixelHeight > 0) ||
+                        (preview.CapturedTexture && preview.CapturedTexture->GetRendererID() != nullptr);
+                };
+
+            if (cached == m_MaterialPreviewCache.end() || !hasCapturedPreview(cached->second))
+            {
+                for (auto it = m_MaterialPreviewCache.begin(); it != m_MaterialPreviewCache.end(); ++it)
+                {
+                    if (!hasCapturedPreview(it->second))
+                        continue;
+
+                    if (!it->second.SourcePath.empty() && PathsReferToSameExistingFile(it->second.SourcePath, entry.Path))
+                    {
+                        // 에셋 경로는 상대/절대/canonical 형태가 섞일 수 있다.
+                        // 상대경로 캐시가 먼저 만들어져도, 실제 프리뷰 캡처가 있는 같은 파일 캐시를 우선 사용한다.
+                        cached = it;
+                        break;
+                    }
+                }
+            }
+
+            if (cached != m_MaterialPreviewCache.end() &&
+                cached->second.CapturedTexture &&
+                cached->second.CapturedTexture->GetRendererID() != nullptr)
+            {
+                // 썸네일은 인스펙터 프리뷰에서 캡처한 사진 텍스처를 그대로 그린다.
+                // 픽셀을 UI 사각형으로 다시 그리면 품질이 떨어지고, 렌더 경로도 실제 에셋 썸네일과 달라진다.
+                AppendThumbnailDebugLogOnce(std::string("material-draw-captured|") + key,
+                    std::string("material draw captured texture: entry=") + NormalizeAssetPathForKey(entry.Path).generic_string() +
+                    " cacheKey=" + cached->first +
+                    " source=" + NormalizeAssetPathForKey(cached->second.SourcePath).generic_string() +
+                    " pixels=" + std::to_string(cached->second.CapturedPixelWidth) + "x" + std::to_string(cached->second.CapturedPixelHeight));
+                UIRenderer::DrawRectFilled(x, y, size, size, { 0.075f, 0.075f, 0.082f, 1.0f });
+                UIRenderer::DrawImage(x + 2.0f, y + 2.0f, size - 4.0f, size - 4.0f, cached->second.CapturedTexture->GetRendererID());
+                DrawPreviewBorder(x, y, size, size, { 0.22f, 0.22f, 0.24f, 1.0f });
+                return;
+            }
+
+            auto borrowed = m_BorrowedMaterialPreviews.find(key);
+            if (borrowed == m_BorrowedMaterialPreviews.end() || !borrowed->second.Texture)
+            {
+                for (auto it = m_BorrowedMaterialPreviews.begin(); it != m_BorrowedMaterialPreviews.end(); ++it)
+                {
+                    if (!it->second.Texture || it->second.SourcePath.empty())
+                        continue;
+
+                    if (PathsReferToSameExistingFile(it->second.SourcePath, entry.Path))
+                    {
+                        // 인스펙터 프리뷰 브리지는 프레임버퍼 SRV를 직접 빌려 쓰는 임시 경로다.
+                        // 캐시 key가 달라도 같은 파일이면 같은 프리뷰를 써야 브라우저가 회색 fallback으로 빠지지 않는다.
+                        borrowed = it;
+                        break;
+                    }
+                }
+            }
+            if (borrowed != m_BorrowedMaterialPreviews.end() && borrowed->second.Texture)
+            {
+                AppendThumbnailDebugLogOnce(std::string("material-draw-borrowed|") + key,
+                    std::string("material draw borrowed inspector texture: entry=") + NormalizeAssetPathForKey(entry.Path).generic_string() +
+                    " source=" + NormalizeAssetPathForKey(borrowed->second.SourcePath).generic_string());
+                UIRenderer::DrawRectFilled(x, y, size, size, { 0.075f, 0.075f, 0.082f, 1.0f });
+                UIRenderer::DrawImage(x + 2.0f, y + 2.0f, size - 4.0f, size - 4.0f, borrowed->second.Texture);
+                DrawPreviewBorder(x, y, size, size, { 0.22f, 0.22f, 0.24f, 1.0f });
+                return;
+            }
+
+            RendererHandle renderedPreview = GetMaterialPreviewTexture(entry);
+            if (renderedPreview)
+            {
+                AppendThumbnailDebugLogOnce(std::string("material-draw-rendered|") + key,
+                    "material draw rendered thumbnail: entry=" + NormalizeAssetPathForKey(entry.Path).generic_string());
+                UIRenderer::DrawRectFilled(x, y, size, size, { 0.075f, 0.075f, 0.082f, 1.0f });
+                UIRenderer::DrawImage(x + 2.0f, y + 2.0f, size - 4.0f, size - 4.0f, renderedPreview);
+                DrawPreviewBorder(x, y, size, size, { 0.22f, 0.22f, 0.24f, 1.0f });
+                return;
+            }
+
+            const DirectX::XMFLOAT4* color = GetMaterialPreviewColor(entry);
+            if (color)
+            {
+                auto fallbackCache = m_MaterialPreviewCache.find(key);
+                const bool hasCache = fallbackCache != m_MaterialPreviewCache.end();
+                AppendThumbnailDebugLogOnce(std::string("material-draw-color-fallback|") + key,
+                    std::string("material draw color fallback: entry=") + NormalizeAssetPathForKey(entry.Path).generic_string() +
+                    " cache=" + std::to_string(hasCache) +
+                    " valid=" + std::to_string(hasCache && fallbackCache->second.Valid) +
+                    " rendered=" + std::to_string(hasCache && fallbackCache->second.Rendered) +
+                    " hasTexture=" + std::to_string(hasCache && fallbackCache->second.CapturedTexture != nullptr) +
+                    " hasPixels=" + std::to_string(hasCache && !fallbackCache->second.CapturedPixels.empty()));
+                UIRenderer::DrawRectFilled(x, y, size, size, { 0.075f, 0.075f, 0.082f, 1.0f });
+                DrawPreviewBorder(x, y, size, size, { 0.22f, 0.22f, 0.24f, 1.0f });
+            }
+        }
+
         void AssetBrowserPanel::DrawAssetPreview(const AssetEntry& entry, float x, float y, float size)
         {
+            if (entry.Type == AssetType::Material || IsMaterialAssetPath(entry.Path))
+            {
+                DrawMaterialPreview(entry, x, y, size);
+                return;
+            }
+
+            if (entry.Type == AssetType::Prefab)
+            {
+                RendererHandle prefabPreview = GetPrefabPreviewTexture(entry);
+                if (prefabPreview)
+                {
+                    UIRenderer::DrawRectFilled(x, y, size, size, { 0.075f, 0.075f, 0.082f, 1.0f });
+                    UIRenderer::DrawImage(x + 2.0f, y + 2.0f, size - 4.0f, size - 4.0f, prefabPreview);
+                    DrawPreviewBorder(x, y, size, size, { 0.22f, 0.22f, 0.24f, 1.0f });
+                    return;
+                }
+            }
+
             UIRenderer::DrawRectFilled(x, y, size, size, { 0.075f, 0.075f, 0.082f, 1.0f });
-            UIRenderer::DrawRect(x, y, size, size, { 0.22f, 0.22f, 0.24f, 1.0f });
+            DrawPreviewBorder(x, y, size, size, { 0.22f, 0.22f, 0.24f, 1.0f });
 
             Texture2D* previewTexture = GetAssetPreviewTexture(entry);
             if (previewTexture)
@@ -3010,7 +4998,7 @@ namespace CCEngine
             {
                 // 아이콘 크기가 바뀌면 한 줄에 들어가는 개수가 달라진다.
                 // 스크롤 높이도 현재 폭과 아이콘 단계로 다시 계산해야 빈 공간이나 잘림이 생기지 않는다.
-                const float iconSizes[5] = { 18.0f, 32.0f, 48.0f, 72.0f, 96.0f };
+                const float iconSizes[5] = { 18.0f, 36.0f, 64.0f, 96.0f, 128.0f };
                 float iconSize = iconSizes[(std::clamp)(m_IconSizeStep, 0, 4)];
                 float cellW = iconSize + 58.0f;
                 float cellH = iconSize + 42.0f;
@@ -3025,12 +5013,21 @@ namespace CCEngine
             m_TreeScrollState.ViewportHeight = m_ScrollState.ViewportHeight;
         }
 
+        void AssetBrowserPanel::OnUpdate(float deltaTime)
+        {
+            WindowPanel::OnUpdate(deltaTime);
+            CheckExternalFileChanges();
+
+            // 썸네일용 3D 렌더는 UI가 그려지는 OnRender 안에서 돌리면 렌더 상태가 섞인다.
+            // update 단계에서 오프스크린 렌더를 끝내고, OnRender는 완성된 텍스처만 그린다.
+            UpdateMaterialPreviewThumbnails();
+            UpdatePrefabPreviewThumbnails();
+        }
+
         void AssetBrowserPanel::OnRender()
         {
             if (!m_IsVisible)
                 return;
-
-            CheckExternalFileChanges();
 
             SetClipPadding(0.0f, m_ContentTop, 0.0f, 0.0f);
             WindowPanel::OnRender();
@@ -3228,7 +5225,7 @@ namespace CCEngine
             else
             {
                 // 1~4단계는 아이콘 모드다. 단계가 올라갈수록 아이콘과 셀을 같이 키운다.
-                const float iconSizes[5] = { 18.0f, 32.0f, 48.0f, 72.0f, 96.0f };
+                const float iconSizes[5] = { 18.0f, 36.0f, 64.0f, 96.0f, 128.0f };
                 float iconSize = iconSizes[(std::clamp)(m_IconSizeStep, 0, 4)];
                 float cellW = iconSize + 58.0f;
                 float cellH = iconSize + 42.0f;
@@ -3827,6 +5824,8 @@ namespace CCEngine
                         m_ContextMenuVisible = false;
                         if (command == "Create Folder")
                             BeginCreateFolder();
+                        else if (command == "Create Material")
+                            CreateMaterialInCurrentDirectory();
                         else if (command == "Refresh")
                             RefreshCurrentFolder(false);
                         else if (command == "Refresh All")
@@ -3842,6 +5841,7 @@ namespace CCEngine
                             }
                             m_TexturePreviewCache.clear();
                             m_TexturePreviewOrder.clear();
+                            InvalidateMaterialPreviewCache(false);
                             m_TreeChildCache.clear();
                             Refresh(false);
                             NotifyAssetDatabaseChanged();
@@ -3872,6 +5872,7 @@ namespace CCEngine
                     m_IsMouseDownOnEntry = false;
                     m_DragMouseStartY = me.GetY();
                     m_DragTreeScrollStartY = m_TreeScrollState.ScrollY;
+                    Widget::BeginMouseInteraction(this);
                     e.Handled = true;
                     return true;
                 }
@@ -3891,6 +5892,7 @@ namespace CCEngine
                     m_IsMouseDownOnEntry = false;
                     m_DragMouseStartY = me.GetY();
                     m_DragScrollStartY = m_ScrollState.ScrollY;
+                    Widget::BeginMouseInteraction(this);
                     e.Handled = true;
                     return true;
                 }
@@ -4021,6 +6023,7 @@ namespace CCEngine
                     {
                         ClearSelection();
                         m_ContextMenuItems.push_back("Create Folder");
+                        m_ContextMenuItems.push_back("Create Material");
                         m_ContextMenuItems.push_back("Refresh");
                         m_ContextMenuItems.push_back("Refresh All");
                         m_ContextMenuItems.push_back("Run QA Checks");
@@ -4051,14 +6054,7 @@ namespace CCEngine
             if (e.GetEventType() == EventType::MouseMoved && m_IsDraggingScrollbar)
             {
                 auto& me = static_cast<MouseMovedEvent&>(e);
-                float trackSpace = m_ScrollState.ViewportHeight - m_ScrollState.GetThumbHeight();
-
-                if (trackSpace > 0.0f)
-                {
-                    float deltaY = me.GetY() - m_DragMouseStartY;
-                    float scrollDelta = (deltaY / trackSpace) * m_ScrollState.GetMaxScroll();
-                    m_ScrollState.ScrollY = std::clamp(m_DragScrollStartY + scrollDelta, 0.0f, m_ScrollState.GetMaxScroll());
-                }
+                m_ScrollState.SetFromThumbDrag(me.GetY(), m_DragMouseStartY, m_DragScrollStartY);
 
                 e.Handled = true;
                 return true;
@@ -4067,14 +6063,7 @@ namespace CCEngine
             if (e.GetEventType() == EventType::MouseMoved && m_IsDraggingTreeScrollbar)
             {
                 auto& me = static_cast<MouseMovedEvent&>(e);
-                float trackSpace = m_TreeScrollState.ViewportHeight - m_TreeScrollState.GetThumbHeight();
-
-                if (trackSpace > 0.0f)
-                {
-                    float deltaY = me.GetY() - m_DragMouseStartY;
-                    float scrollDelta = (deltaY / trackSpace) * m_TreeScrollState.GetMaxScroll();
-                    m_TreeScrollState.ScrollY = std::clamp(m_DragTreeScrollStartY + scrollDelta, 0.0f, m_TreeScrollState.GetMaxScroll());
-                }
+                m_TreeScrollState.SetFromThumbDrag(me.GetY(), m_DragMouseStartY, m_DragTreeScrollStartY);
 
                 e.Handled = true;
                 return true;
@@ -4129,6 +6118,7 @@ namespace CCEngine
                 if (me.GetButton() == 0 && m_IsDraggingScrollbar)
                 {
                     m_IsDraggingScrollbar = false;
+                    Widget::EndMouseInteraction(this);
                     e.Handled = true;
                     return true;
                 }
@@ -4136,6 +6126,7 @@ namespace CCEngine
                 if (me.GetButton() == 0 && m_IsDraggingTreeScrollbar)
                 {
                     m_IsDraggingTreeScrollbar = false;
+                    Widget::EndMouseInteraction(this);
                     e.Handled = true;
                     return true;
                 }

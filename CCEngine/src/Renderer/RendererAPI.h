@@ -42,6 +42,7 @@ namespace CCEngine
         virtual void SetBlendMode(BlendMode mode) = 0;
         virtual void SetCullMode(CullMode mode) = 0;
         virtual void BindTexture(uint32_t slot, RendererHandle rendererID) = 0;
+        virtual void UnbindTextures(uint32_t startSlot, uint32_t count) = 0;
 
         inline static API GetAPI() { return s_API; }
         static void SetAPI(API api) { s_API = api; }

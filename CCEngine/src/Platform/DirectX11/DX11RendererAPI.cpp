@@ -1,6 +1,7 @@
 #include "Platform/DirectX11/DX11RendererAPI.h"
 #include "Platform/DirectX11/DX11Context.h"
 #include <d3d11.h>
+#include <algorithm>
 
 namespace CCEngine
 {
@@ -258,5 +259,20 @@ namespace CCEngine
         ID3D11ShaderResourceView* srv = static_cast<ID3D11ShaderResourceView*>(rendererID);
 
         context->PSSetShaderResources(slot, 1, &srv);
+    }
+
+    void DX11RendererAPI::UnbindTextures(uint32_t startSlot, uint32_t count)
+    {
+        if (count == 0)
+            return;
+
+        auto context = DX11Context::Get()->GetDeviceContext();
+        ID3D11ShaderResourceView* nullSRVs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
+        uint32_t clampedStart = (std::min)(startSlot, (uint32_t)D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT);
+        uint32_t clampedCount = (std::min)(count, (uint32_t)D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT - clampedStart);
+        if (clampedCount == 0)
+            return;
+
+        context->PSSetShaderResources(clampedStart, clampedCount, nullSRVs);
     }
 }

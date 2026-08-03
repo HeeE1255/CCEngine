@@ -8,6 +8,7 @@
 #include "Scene/ScriptableEntity.h"
 #include "Renderer/Texture.h"
 #include "Renderer/Model.h"
+#include "Renderer/MaterialAsset.h"
 #include "Animation/Animator.h"
 
 namespace CCEngine
@@ -214,6 +215,11 @@ namespace CCEngine
         // 텍스처 파일은 이름이 바뀔 수 있으므로 저장할 때 GUID를 우선 사용한다.
         std::string AlbedoAssetGuid;
         std::string AlbedoPath;
+        std::shared_ptr<MaterialAsset> Material;
+        // Material은 별도 에셋이므로 MeshComponent에는 참조만 저장한다.
+        // 실제 색/텍스처 값은 렌더 직전에 Material 파일을 해석해 사용한다.
+        std::string MaterialAssetGuid;
+        std::string MaterialPath;
 
         MeshComponent() = default;
         MeshComponent(const MeshComponent&) = default;

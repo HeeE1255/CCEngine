@@ -34,7 +34,7 @@ namespace CCEngine
 
         using GetTranslationFn = int(__cdecl*)(uint32_t, float*, float*, float*);
         using SetTranslationFn = void(__cdecl*)(uint32_t, float, float, float);
-        using LogFn = void(__cdecl*)(const char*);
+        using LogFn = void(__cdecl*)(const char*, int);
 
         struct ScriptEngineData
         {
@@ -125,10 +125,26 @@ namespace CCEngine
                 entity.GetComponent<TransformComponent>().Translation = { x, y, z };
         }
 
-        void __cdecl LogFromManaged(const char* message)
+        void __cdecl LogFromManaged(const char* message, int level)
         {
-            if (message)
-                ConsoleLog::Info(std::string("[C#] ") + message);
+            if (!message)
+                return;
+
+            // 스크립트 로그는 사용자가 의도적으로 남긴 기록이다.
+            // 엔진 내부 이벤트를 자동으로 뿌리지 않고, C# Debug API가 넘긴 레벨만 Console에 반영한다.
+            const std::string text = std::string("[C#] ") + message;
+            switch (level)
+            {
+            case 1:
+                ConsoleLog::Warning(text);
+                break;
+            case 2:
+                ConsoleLog::Error(text);
+                break;
+            default:
+                ConsoleLog::Info(text);
+                break;
+            }
         }
 
         std::vector<float> ParseFloatList(const std::string& text)

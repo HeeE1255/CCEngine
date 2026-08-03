@@ -3,6 +3,7 @@
 #include "Scene/Entity.h"
 #include "Scene/Components.h"
 #include "Renderer/MeshFactory.h"
+#include "Renderer/MaterialAsset.h"
 #include "Renderer/Texture.h"
 
 #include "json.hpp"
@@ -60,6 +61,36 @@ namespace CCEngine
             }
         }
 
+        std::shared_ptr<MaterialAsset> LoadMaterialReference(MeshComponent& mesh, const nlohmann::json& meshData)
+        {
+            std::string materialGuid = meshData.value("MaterialGuid", "");
+            std::string materialPath;
+            if (!materialGuid.empty())
+            {
+                // Material도 텍스처처럼 GUID를 먼저 본다.
+                // 파일 이동/이름 변경 후에도 meta가 남아 있으면 같은 재질을 다시 찾을 수 있다.
+                materialPath = AssetDatabase::GetPathFromGuid(materialGuid).string();
+                mesh.MaterialAssetGuid = materialGuid;
+            }
+
+            if (materialPath.empty() && meshData.contains("MaterialPath"))
+            {
+                materialPath = meshData["MaterialPath"].get<std::string>();
+                if (mesh.MaterialAssetGuid.empty())
+                    mesh.MaterialAssetGuid = AssetDatabase::GetGuidFromPath(materialPath);
+            }
+
+            mesh.MaterialPath = materialPath;
+            if (materialPath.empty() || !std::filesystem::exists(materialPath))
+                return nullptr;
+
+            auto material = std::make_shared<MaterialAsset>();
+            if (!material->LoadFromFile(materialPath))
+                return nullptr;
+
+            return material;
+        }
+
         void SerializeEntityComponents(Entity entity, nlohmann::json& entityData)
         {
             // 엔티티가 가진 컴포넌트만 기록한다. 없는 컴포넌트는 저장하지 않아야 로드할 때 불필요하게 붙지 않는다.
@@ -96,6 +127,18 @@ namespace CCEngine
                         std::string guid = AssetDatabase::GetGuidFromPath(mesh.AlbedoPath);
                         if (!guid.empty())
                             entityData["MeshComponent"]["AlbedoGuid"] = guid;
+                    }
+                }
+                if (!mesh.MaterialAssetGuid.empty())
+                    entityData["MeshComponent"]["MaterialGuid"] = mesh.MaterialAssetGuid;
+                if (!mesh.MaterialPath.empty())
+                {
+                    entityData["MeshComponent"]["MaterialPath"] = mesh.MaterialPath;
+                    if (mesh.MaterialAssetGuid.empty())
+                    {
+                        std::string guid = AssetDatabase::GetGuidFromPath(mesh.MaterialPath);
+                        if (!guid.empty())
+                            entityData["MeshComponent"]["MaterialGuid"] = guid;
                     }
                 }
             }
@@ -251,6 +294,8 @@ namespace CCEngine
                 mesh.AlbedoPath = texturePath;
                 if (!texturePath.empty() && std::filesystem::exists(texturePath))
                     mesh.AlbedoMap.reset(Texture2D::Create(texturePath));
+
+                mesh.Material = LoadMaterialReference(mesh, meshData);
             }
 
             if (entityData.contains("ModelComponent"))

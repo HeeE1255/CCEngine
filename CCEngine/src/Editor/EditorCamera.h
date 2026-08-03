@@ -12,7 +12,7 @@ namespace CCEngine
         EditorCamera(float fov, float aspectRatio, float nearClip, float farClip);
 
         // 매 프레임 입력(키보드/마우스)을 처리하는 함수
-        void OnUpdate(float deltaTime, const ProjectSettingsData& settings);
+        void OnUpdate(float deltaTime, const ProjectSettingsData& settings, bool allowNavigation);
 
         // UI에 띄워주기 위한 Getter
         const DirectX::XMFLOAT3& GetPosition() const { return m_Position; }
