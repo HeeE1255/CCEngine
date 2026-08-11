@@ -1,7 +1,12 @@
 #include "Renderer3D.h"
+#include "Renderer/MaterialAsset.h"
 #include "Renderer/MeshFactory.h"
 #include "Renderer/RenderCommand.h" // DX11 RHI의 RenderCommand 호출용!
+#include "Renderer/RuntimeShaderLibrary.h"
 #include "Utils/MathUtils.h"
+
+#include <algorithm>
+#include <filesystem>
 
 namespace CCEngine
 {
@@ -18,6 +23,10 @@ namespace CCEngine
         float Padding[3];
     };
 
+    constexpr uint32_t MaxMaterialColorProperties = 8;
+    constexpr uint32_t MaxMaterialScalarSlots = 16;
+    constexpr uint32_t MaxMaterialTextureSlots = 8;
+
     // HLSL의 b1 레지스터와 매칭 (오브젝트)
     struct TransformData // 총 96바이트 
     {
@@ -32,6 +41,18 @@ namespace CCEngine
     struct BoneData // 12800 바이트 (64 bytes * 512 matrices)
     {
         DirectX::XMMATRIX BoneMatrices[512];
+    };
+
+    // HLSL의 b4 레지스터와 매칭되는 커스텀 Material 버퍼다.
+    // b2는 스킨드 메쉬 본 행렬이 쓰고 있으므로 Material 값은 별도 슬롯에 둔다.
+    // Visual Shader도 나중에 이 레이아웃을 기준으로 HLSL을 생성하면 같은 런타임 경로를 재사용할 수 있다.
+    struct MaterialPropertyBufferData
+    {
+        DirectX::XMFLOAT4 AlbedoColor = { 1.0f, 1.0f, 1.0f, 1.0f };
+        DirectX::XMFLOAT4 ColorProperties[MaxMaterialColorProperties] = {};
+        DirectX::XMFLOAT4 ScalarProperties[4] = {};
+        DirectX::XMFLOAT4 ToggleProperties[4] = {};
+        DirectX::XMFLOAT4 SurfaceValues = { 0.5f, 0.0f, 0.0f, 0.0f }; // x: Roughness, y: Metallic
     };
 
     Renderer3D::RenderData* Renderer3D::s_Data = new Renderer3D::RenderData();
@@ -57,6 +78,7 @@ namespace CCEngine
 
         s_Data->BoneConstantBuffer.reset(ConstantBuffer::Create(sizeof(BoneData)));
         s_Data->SceneConstantBuffer.reset(ConstantBuffer::Create(sizeof(SceneBufferData)));
+        s_Data->MaterialPropertyConstantBuffer.reset(ConstantBuffer::Create(sizeof(MaterialPropertyBufferData)));
     }
 
     void Renderer3D::Shutdown()
@@ -103,8 +125,125 @@ namespace CCEngine
         // 빈자리
     }
 
+    namespace
+    {
+        void WriteScalar(MaterialPropertyBufferData& buffer, uint32_t scalarIndex, float value)
+        {
+            if (scalarIndex >= MaxMaterialScalarSlots)
+                return;
+
+            DirectX::XMFLOAT4& target = buffer.ScalarProperties[scalarIndex / 4];
+            float* values = &target.x;
+            values[scalarIndex % 4] = value;
+        }
+
+        void WriteToggle(MaterialPropertyBufferData& buffer, uint32_t toggleIndex, bool value)
+        {
+            if (toggleIndex >= MaxMaterialScalarSlots)
+                return;
+
+            DirectX::XMFLOAT4& target = buffer.ToggleProperties[toggleIndex / 4];
+            float* values = &target.x;
+            values[toggleIndex % 4] = value ? 1.0f : 0.0f;
+        }
+
+    }
+
+    std::shared_ptr<Texture2D> Renderer3D::GetCachedMaterialTexture(const std::string& path)
+    {
+        if (path.empty() || !std::filesystem::exists(path))
+            return nullptr;
+
+        std::filesystem::path normalizedPath = std::filesystem::weakly_canonical(path);
+        std::string key = normalizedPath.string();
+        auto it = s_Data->MaterialPropertyTextureCache.find(key);
+        if (it != s_Data->MaterialPropertyTextureCache.end())
+            return it->second;
+
+        std::shared_ptr<Texture2D> texture;
+        texture.reset(Texture2D::Create(key));
+        s_Data->MaterialPropertyTextureCache[key] = texture;
+        return texture;
+    }
+
+    void Renderer3D::BindMaterialProperties(const MaterialAsset* material, const std::shared_ptr<Texture2D>& fallbackAlbedo)
+    {
+        MaterialPropertyBufferData buffer;
+        const MaterialAsset* source = material;
+        if (source)
+        {
+            buffer.AlbedoColor = source->AlbedoColor;
+            buffer.SurfaceValues.x = source->Roughness;
+            buffer.SurfaceValues.y = source->Metallic;
+        }
+
+        uint32_t colorIndex = 0;
+        uint32_t scalarIndex = 0;
+        uint32_t toggleIndex = 0;
+        uint32_t textureIndex = 1;
+        bool albedoSlotBound = false;
+
+        if (source)
+        {
+            for (const auto& [name, value] : source->ShaderProperties)
+            {
+                if (value.Type == ShaderPropertyType::Color)
+                {
+                    if (name == "AlbedoColor")
+                        buffer.AlbedoColor = value.Color;
+                    else if (colorIndex < MaxMaterialColorProperties)
+                        buffer.ColorProperties[colorIndex++] = value.Color;
+                }
+                else if (value.Type == ShaderPropertyType::Float)
+                {
+                    if (name == "Roughness")
+                        buffer.SurfaceValues.x = value.FloatValue;
+                    else if (name == "Metallic")
+                        buffer.SurfaceValues.y = value.FloatValue;
+                    else
+                        WriteScalar(buffer, scalarIndex++, value.FloatValue);
+                }
+                else if (value.Type == ShaderPropertyType::Toggle)
+                {
+                    WriteToggle(buffer, toggleIndex++, value.BoolValue);
+                }
+                else if (value.Type == ShaderPropertyType::Texture2D)
+                {
+                    std::shared_ptr<Texture2D> texture = GetCachedMaterialTexture(value.TexturePath);
+                    if (name == "AlbedoTexture")
+                    {
+                        if (texture)
+                        {
+                            texture->Bind(0);
+                            albedoSlotBound = true;
+                        }
+                    }
+                    else if (texture && textureIndex < MaxMaterialTextureSlots)
+                    {
+                        texture->Bind(textureIndex++);
+                    }
+                }
+            }
+        }
+
+        s_Data->MaterialPropertyConstantBuffer->SetData(&buffer, sizeof(MaterialPropertyBufferData));
+        s_Data->MaterialPropertyConstantBuffer->Bind(4);
+
+        if (!albedoSlotBound && source && source->AlbedoTexture)
+            source->AlbedoTexture->Bind(0);
+        else if (!albedoSlotBound && fallbackAlbedo)
+            fallbackAlbedo->Bind(0);
+        else if (!albedoSlotBound)
+            s_Data->DefaultWhiteTexture->Bind(0);
+    }
+
     // 일반 정적 메쉬 드로우 콜
     void Renderer3D::DrawMesh(const DirectX::XMMATRIX& transform, const std::shared_ptr<Mesh>& mesh, const std::shared_ptr<Texture2D>& texture, const DirectX::XMFLOAT4& color, int entityID)
+    {
+        DrawMesh(transform, mesh, texture, color, nullptr, entityID);
+    }
+
+    void Renderer3D::DrawMesh(const DirectX::XMMATRIX& transform, const std::shared_ptr<Mesh>& mesh, const std::shared_ptr<Texture2D>& texture, const DirectX::XMFLOAT4& color, const MaterialAsset* material, int entityID)
     {
         if (!mesh)
         {
@@ -122,18 +261,18 @@ namespace CCEngine
         s_Data->TransformConstantBuffer->SetData(&transformData, sizeof(TransformData));
         s_Data->TransformConstantBuffer->Bind(1);
 
-        if (texture)
-        {
-            texture->Bind(0);
-        }
-        else
-        {
-            s_Data->DefaultWhiteTexture->Bind(0);
-        }
+        BindMaterialProperties(material, texture);
+
+        // Material에 커스텀 HLSL이 연결된 경우 런타임 셰이더 캐시에서 가져온다.
+        // 컴파일 실패 시에는 RuntimeShaderLibrary가 에러 셰이더를 반환해 씬에서 바로 보이게 한다.
+        std::shared_ptr<Shader> runtimeShader = material ? RuntimeShaderLibrary::GetShaderForMaterial(*material) : nullptr;
+        Shader* activeShader = runtimeShader && runtimeShader->IsValid()
+            ? runtimeShader.get()
+            : s_Data->Base3DShader.get();
 
         // 2. 셰이더 활성화 및 레이아웃 설정
-        s_Data->Base3DShader->Bind();
-        s_Data->Base3DShader->BindLayout(mesh->GetVertexBuffer()->GetLayout());
+        activeShader->Bind();
+        activeShader->BindLayout(mesh->GetVertexBuffer()->GetLayout());
 
         // 3. 메쉬(정점 버퍼, 인덱스 버퍼) 활성화
         mesh->Bind();
@@ -171,6 +310,11 @@ namespace CCEngine
     //  뼈대가 있는 스킨드 메쉬 드로우 콜
     void Renderer3D::DrawSkinnedMesh(const DirectX::XMMATRIX& transform, const std::shared_ptr<Mesh>& mesh, const std::shared_ptr<Texture2D>& texture, const DirectX::XMFLOAT4& color, int entityID, const std::vector<DirectX::XMMATRIX>& boneMatrices)
     {
+        DrawSkinnedMesh(transform, mesh, texture, color, nullptr, entityID, boneMatrices);
+    }
+
+    void Renderer3D::DrawSkinnedMesh(const DirectX::XMMATRIX& transform, const std::shared_ptr<Mesh>& mesh, const std::shared_ptr<Texture2D>& texture, const DirectX::XMFLOAT4& color, const MaterialAsset* material, int entityID, const std::vector<DirectX::XMMATRIX>& boneMatrices)
+    {
         if (!mesh)
         {
             return;
@@ -206,17 +350,15 @@ namespace CCEngine
         s_Data->BoneConstantBuffer->SetData(&boneData, sizeof(BoneData));
         s_Data->BoneConstantBuffer->Bind(2);
 
-        if (texture)
-        {
-            texture->Bind(0);
-        }
-        else
-        {
-            s_Data->DefaultWhiteTexture->Bind(0);
-        }
+        BindMaterialProperties(material, texture);
 
-        s_Data->Base3DShader->Bind();
-        s_Data->Base3DShader->BindLayout(mesh->GetVertexBuffer()->GetLayout());
+        std::shared_ptr<Shader> runtimeShader = material ? RuntimeShaderLibrary::GetShaderForMaterial(*material) : nullptr;
+        Shader* activeShader = runtimeShader && runtimeShader->IsValid()
+            ? runtimeShader.get()
+            : s_Data->Base3DShader.get();
+
+        activeShader->Bind();
+        activeShader->BindLayout(mesh->GetVertexBuffer()->GetLayout());
 
         mesh->Bind();
 

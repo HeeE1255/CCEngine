@@ -42,6 +42,7 @@ namespace CCEngine
             void SetOnModelSelected(std::function<void(const std::string&)> callback) { m_OnModelSelected = callback; }
             void SetOnSceneSelected(std::function<void(const std::string&)> callback) { m_OnSceneSelected = callback; }
             void SetOnAssetSelected(std::function<void(const std::string&, const std::string&)> callback) { m_OnAssetSelected = std::move(callback); }
+            void SetOnCodeAssetOpened(std::function<void(const std::string&)> callback) { m_OnCodeAssetOpened = std::move(callback); }
             void SetOnAssetDropped(std::function<void(const std::string&, const std::string&, float, float)> callback) { m_OnAssetDropped = callback; }
             void SetOnAssetDatabaseChanged(std::function<void()> callback) { m_OnAssetDatabaseChanged = std::move(callback); }
             void SetOnAssetHistoryChanged(std::function<void()> callback) { m_OnAssetHistoryChanged = std::move(callback); }
@@ -74,6 +75,8 @@ namespace CCEngine
                 Scene,
                 Prefab,
                 Material,
+                Shader,
+                VisualShader,
                 Model,
                 FbxMesh,
                 Texture,
@@ -102,6 +105,7 @@ namespace CCEngine
                 Texture,
                 Model,
                 Material,
+                Shader,
                 Prefab,
                 Scene,
                 Script
@@ -140,6 +144,8 @@ namespace CCEngine
             bool RefreshCurrentFolder(bool forceReimport);
             bool CreateFolderInCurrentDirectory();
             bool CreateMaterialInCurrentDirectory();
+            bool CreateShaderInCurrentDirectory();
+            bool CreateVisualShaderInCurrentDirectory();
             bool RenameSelectedAsset(const std::string& newName);
             void BeginCreateFolder();
             void BeginRenameSelected();
@@ -385,6 +391,7 @@ namespace CCEngine
             std::function<void(const std::string&)> m_OnModelSelected = nullptr;
             std::function<void(const std::string&)> m_OnSceneSelected = nullptr;
             std::function<void(const std::string&, const std::string&)> m_OnAssetSelected = nullptr;
+            std::function<void(const std::string&)> m_OnCodeAssetOpened = nullptr;
             std::function<void(const std::string&, const std::string&, float, float)> m_OnAssetDropped = nullptr;
             std::function<void()> m_OnAssetDatabaseChanged = nullptr;
             std::function<void()> m_OnAssetHistoryChanged = nullptr;

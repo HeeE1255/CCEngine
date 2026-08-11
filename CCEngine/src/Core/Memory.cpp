@@ -28,27 +28,64 @@ namespace CCEngine {
     }
 }
 
+namespace
+{
+    struct alignas(std::max_align_t) AllocationHeader
+    {
+        size_t Size = 0;
+    };
+
+    void* AllocateTracked(size_t size)
+    {
+        size_t totalSize = sizeof(AllocationHeader) + size;
+        auto* raw = static_cast<AllocationHeader*>(std::malloc(totalSize));
+        if (!raw)
+            throw std::bad_alloc();
+
+        raw->Size = size;
+        CCEngine::s_Stats.TotalAllocated += size;
+        return raw + 1;
+    }
+
+    void FreeTracked(void* memory) noexcept
+    {
+        if (!memory)
+            return;
+
+        auto* header = static_cast<AllocationHeader*>(memory) - 1;
+        CCEngine::s_Stats.TotalFreed += header->Size;
+        std::free(header);
+    }
+}
+
 // =========================================================
 // 전역 new / delete 구현부
 // =========================================================
 
 void* operator new(size_t size) {
-    // 1. 통계 기록
-    CCEngine::s_Stats.TotalAllocated += size;
-
-    // 2. 실제 메모리 할당
-    return malloc(size);
+    return AllocateTracked(size);
 }
 
 void operator delete(void* memory, size_t size) noexcept {
-    // 1. 통계 기록
-    CCEngine::s_Stats.TotalFreed += size;
-
-    // 2. 메모리 해제
-    free(memory);
+    (void)size;
+    FreeTracked(memory);
 }
 
 void operator delete(void* memory) noexcept {
-    // 크기를 모르는 delete 호출 시 (Fallback)
-    free(memory);
+    // 크기를 모르는 delete도 header에 저장된 크기로 해제량을 계산한다.
+    // 이 처리가 없으면 실제로 free된 메모리도 통계상 누수처럼 남는다.
+    FreeTracked(memory);
+}
+
+void* operator new[](size_t size) {
+    return AllocateTracked(size);
+}
+
+void operator delete[](void* memory, size_t size) noexcept {
+    (void)size;
+    FreeTracked(memory);
+}
+
+void operator delete[](void* memory) noexcept {
+    FreeTracked(memory);
 }

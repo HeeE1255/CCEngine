@@ -108,6 +108,7 @@ namespace CCEngine {
         void OpenEditorWindow(int windowKind);
         void OpenProjectSettingsWindow();
         void OpenAssetReferenceValidatorWindow();
+        void OpenCodeAssetInExternalEditor(const std::filesystem::path& assetPath);
         void OpenKeyBindingPickerWindow(UI::KeyBindingInput* targetInput);
         void BringEditorOverlaysToFront();
         void RenderPhysicsDebugView(const PerspectiveCamera& camera, const std::vector<Entity>& selectedEntities);

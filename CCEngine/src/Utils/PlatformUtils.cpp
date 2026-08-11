@@ -4,6 +4,7 @@
 #define NOMINMAX 
 #include <windows.h>
 #include <commdlg.h> // 파일 다이얼로그 헤더
+#include <filesystem>
 
 namespace CCEngine
 {
@@ -66,5 +67,47 @@ namespace CCEngine
         }
             
         return std::string();
+    }
+
+    std::filesystem::path PlatformUtils::FindVisualStudioExecutable()
+    {
+        const wchar_t* candidates[] =
+        {
+            L"C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\IDE\\devenv.exe",
+            L"C:\\Program Files\\Microsoft Visual Studio\\2022\\Professional\\Common7\\IDE\\devenv.exe",
+            L"C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise\\Common7\\IDE\\devenv.exe",
+            L"C:\\Program Files\\Microsoft Visual Studio\\2019\\Community\\Common7\\IDE\\devenv.exe",
+            L"C:\\Program Files\\Microsoft Visual Studio\\2019\\Professional\\Common7\\IDE\\devenv.exe",
+            L"C:\\Program Files\\Microsoft Visual Studio\\2019\\Enterprise\\Common7\\IDE\\devenv.exe"
+        };
+
+        for (const wchar_t* candidate : candidates)
+        {
+            std::filesystem::path path(candidate);
+            if (std::filesystem::exists(path))
+                return path;
+        }
+
+        return {};
+    }
+
+    bool PlatformUtils::OpenFileWithApplication(const std::filesystem::path& applicationPath, const std::filesystem::path& filePath)
+    {
+        if (filePath.empty())
+            return false;
+
+        if (!applicationPath.empty() && std::filesystem::exists(applicationPath))
+        {
+            // 외부 편집기는 프로젝트 설정에 저장된 실행 파일을 우선 사용한다.
+            // 파일 경로는 공백이 들어갈 수 있으므로 인자 문자열에서 반드시 따옴표로 감싼다.
+            std::wstring parameters = L"\"" + filePath.wstring() + L"\"";
+            auto result = reinterpret_cast<intptr_t>(
+                ShellExecuteW(nullptr, L"open", applicationPath.wstring().c_str(), parameters.c_str(), nullptr, SW_SHOWNORMAL));
+            return result > 32;
+        }
+
+        auto result = reinterpret_cast<intptr_t>(
+            ShellExecuteW(nullptr, L"open", filePath.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+        return result > 32;
     }
 }

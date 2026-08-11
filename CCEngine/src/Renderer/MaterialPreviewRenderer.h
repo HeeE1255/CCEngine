@@ -65,7 +65,7 @@ namespace CCEngine
         // 여기서 색을 더하거나 밝게 보정하면 인스펙터, 썸네일, 씬 결과가 서로 달라진다.
         DirectX::XMFLOAT4 previewColor = material.AlbedoColor;
         previewColor.w = 1.0f;
-        Renderer3D::DrawMesh(rotation, previewMesh, material.AlbedoTexture, previewColor, -1);
+        Renderer3D::DrawMesh(rotation, previewMesh, material.AlbedoTexture, previewColor, &material, -1);
 
         Renderer3D::EndScene();
         framebuffer->Unbind();

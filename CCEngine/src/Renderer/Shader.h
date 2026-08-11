@@ -1,6 +1,7 @@
 #pragma once
 #include "Core.h"
 #include <string>
+#include <filesystem>
 #include "Renderer/Buffer.h"
 
 namespace CCEngine
@@ -17,8 +18,10 @@ namespace CCEngine
         virtual void Unbind() const = 0;
 
         virtual void BindLayout(const BufferLayout& layout) = 0;
+        virtual bool IsValid() const = 0;
 
         // 파일 경로를 받아서 셰이더를 생성하는 팩토리 함수
         static Shader* Create(const std::string& filepath);
+        static Shader* CreateFromBytecode(const std::filesystem::path& vertexBytecode, const std::filesystem::path& pixelBytecode);
     };
 }

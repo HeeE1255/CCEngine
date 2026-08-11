@@ -1,6 +1,8 @@
 #include "Core/AssetDatabase.h"
 
 #include "Core/ConsoleLog.h"
+#include "Renderer/RuntimeShaderLibrary.h"
+#include "Renderer/ShaderCompiler.h"
 #include "json.hpp"
 
 #include <algorithm>
@@ -112,6 +114,8 @@ namespace CCEngine
                 case AssetKind::Scene: return "SceneImporter";
                 case AssetKind::Prefab: return "PrefabImporter";
                 case AssetKind::Material: return "MaterialImporter";
+                case AssetKind::Shader: return "ShaderImporter";
+                case AssetKind::VisualShader: return "VisualShaderImporter";
                 case AssetKind::Model: return "ModelImporter";
                 case AssetKind::Texture: return "TextureImporter";
                 case AssetKind::Script: return "ScriptImporter";
@@ -126,6 +130,8 @@ namespace CCEngine
                 case AssetKind::Scene:
                 case AssetKind::Prefab:
                 case AssetKind::Material:
+                case AssetKind::Shader:
+                case AssetKind::VisualShader:
                 case AssetKind::Model:
                 case AssetKind::Texture:
                 case AssetKind::Script:
@@ -665,6 +671,17 @@ namespace CCEngine
             {
                 ValidateGuidPathPair(
                     object["Material"],
+                    "ShaderGuid",
+                    "ShaderPath",
+                    AssetKind::Shader,
+                    sourceFile,
+                    jsonLocation + "/Material",
+                    "Material Shader",
+                    repairFiles,
+                    report);
+
+                ValidateGuidPathPair(
+                    object["Material"],
                     "AlbedoTextureGuid",
                     "AlbedoTexturePath",
                     AssetKind::Texture,
@@ -976,6 +993,8 @@ namespace CCEngine
         if (extension == ".ccscene") return AssetKind::Scene;
         if (extension == ".ccprefab") return AssetKind::Prefab;
         if (extension == ".ccmat") return AssetKind::Material;
+        if (extension == ".hlsl" || extension == ".ccshader") return AssetKind::Shader;
+        if (extension == ".ccvshader") return AssetKind::VisualShader;
         if (extension == ".fbx" || extension == ".obj" || extension == ".gltf" || extension == ".glb") return AssetKind::Model;
         if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".tga") return AssetKind::Texture;
         if (extension == ".cs") return AssetKind::Script;
@@ -1097,6 +1116,23 @@ namespace CCEngine
         }
 
         RegisterMetadata(metadata);
+
+        if (result.Type == AssetKind::Shader && ShaderCompiler::IsHlslSource(assetPath))
+        {
+            RuntimeShaderLibrary::Invalidate(assetPath);
+            ShaderCompileResult compileResult = ShaderCompiler::CompileHlslFile(assetPath, force);
+            if (!compileResult.Success)
+            {
+                result.Message = compileResult.Summary;
+                ConsoleLog::Error(result.Message);
+                return result;
+            }
+
+            // Shader import는 meta 갱신과 컴파일 검증을 함께 끝내야 성공으로 본다.
+            // 그래야 문법 오류가 있는 셰이더가 "정상 임포트"처럼 보이지 않는다.
+            ConsoleLog::Info(compileResult.Summary);
+        }
+
         result.Success = true;
         result.WasChanged = !hadReadableMeta || !IsSameMetadata(previousMetadata, metadata);
         result.Guid = metadata.Guid;
@@ -1209,6 +1245,14 @@ namespace CCEngine
                 std::filesystem::rename(to, from, rollbackEc);
                 return false;
             }
+        }
+
+        AssetMetadata movedMetadata;
+        if (ReadMetaFile(toMeta, movedMetadata) && !movedMetadata.Guid.empty())
+        {
+            // MoveAsset은 복사가 아니라 같은 에셋의 위치 변경이다.
+            // 이전 경로로 남아 있는 GUID 캐시를 지우고 다시 등록해야 중복 GUID 방어 로직이 새 GUID를 발급하지 않는다.
+            s_GuidToMetadata.erase(movedMetadata.Guid);
         }
 
         s_PathToGuid.erase(NormalizeKey(from));
@@ -1329,7 +1373,7 @@ namespace CCEngine
                 std::transform(extension.begin(), extension.end(), extension.begin(),
                     [](unsigned char c) { return (char)std::tolower(c); });
 
-                if (extension == ".ccscene" || extension == ".ccprefab" || extension == ".ccmat")
+                if (extension == ".ccscene" || extension == ".ccprefab" || extension == ".ccmat" || extension == ".hlsl" || extension == ".ccshader" || extension == ".ccvshader")
                     filesToValidate.push_back(entry.path());
             }
         }
@@ -1406,6 +1450,8 @@ namespace CCEngine
             case AssetKind::Scene: return "Scene";
             case AssetKind::Prefab: return "Prefab";
             case AssetKind::Material: return "Material";
+            case AssetKind::Shader: return "Shader";
+            case AssetKind::VisualShader: return "VisualShader";
             case AssetKind::Model: return "Model";
             case AssetKind::Texture: return "Texture";
             case AssetKind::Script: return "Script";
@@ -1418,6 +1464,8 @@ namespace CCEngine
         if (text == "Scene") return AssetKind::Scene;
         if (text == "Prefab") return AssetKind::Prefab;
         if (text == "Material") return AssetKind::Material;
+        if (text == "Shader") return AssetKind::Shader;
+        if (text == "VisualShader") return AssetKind::VisualShader;
         if (text == "Model") return AssetKind::Model;
         if (text == "Texture") return AssetKind::Texture;
         if (text == "Script") return AssetKind::Script;

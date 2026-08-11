@@ -155,8 +155,6 @@ namespace CCEngine
     Application::~Application()
     {
         s_Instance = nullptr;
-        // 엔진이 꺼질 때 가장 마지막에 메모리 매니저 종료 (누수 검사)
-        MemoryManager::Shutdown();
     }
 
     void Application::PushLayer(Layer* layer)

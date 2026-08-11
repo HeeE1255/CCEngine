@@ -44,6 +44,10 @@ namespace CCEngine
             {
                 m_OnMaterialPreviewTextureReady = std::move(callback);
             }
+            void SetShaderEditorOpenCallback(std::function<void(const std::filesystem::path&)> callback)
+            {
+                m_OnOpenShaderEditor = std::move(callback);
+            }
             void SetSceneStructureChangeCallbacks(
                 std::function<void(const std::string&)> beginChange,
                 std::function<void()> commitChange)
@@ -79,6 +83,9 @@ namespace CCEngine
             };
             void RebuildInspector();
             void BuildMaterialInspector();
+            void BuildShaderInspector();
+            void BuildGenericAssetInspector();
+            MaterialAsset BuildShaderPreviewMaterial(const std::filesystem::path& shaderPath) const;
             void MarkSelectedMaterialDirty();
             void FlushSelectedMaterialSave();
             void SaveSelectedMaterial();
@@ -128,6 +135,7 @@ namespace CCEngine
             std::function<void(const std::filesystem::path&, const MaterialAsset&)> m_OnMaterialPreviewChanged;
             std::function<void(const std::filesystem::path&, uint32_t, uint32_t, const std::vector<uint32_t>&)> m_OnMaterialPreviewCaptured;
             std::function<void(const std::filesystem::path&, RendererHandle)> m_OnMaterialPreviewTextureReady;
+            std::function<void(const std::filesystem::path&)> m_OnOpenShaderEditor;
             bool m_NeedsRebuild = false;
             bool m_MaterialSavePending = false;
             float m_MaterialSaveCountdown = 0.0f;

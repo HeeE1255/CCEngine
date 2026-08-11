@@ -14,6 +14,8 @@ namespace CCEngine
         Scene,
         Prefab,
         Material,
+        Shader,
+        VisualShader,
         Model,
         Texture,
         Script

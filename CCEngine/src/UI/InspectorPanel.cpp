@@ -5,6 +5,9 @@
 #include "Renderer/Renderer.h"
 #include "Renderer/Renderer3D.h"
 #include "Renderer/MaterialPreviewRenderer.h"
+#include "Renderer/RuntimeShaderLibrary.h"
+#include "Renderer/ShaderAsset.h"
+#include "Renderer/ShaderCompiler.h"
 #include "Renderer/Texture.h"
 #include "Renderer/UIRenderer.h"
 #include "Renderer/Renderer2D.h"
@@ -77,6 +80,61 @@ namespace CCEngine
                 UIRenderer::DrawRectFilled(cx - radius * 0.36f, cy - radius * 0.48f, radius * 0.44f, radius * 0.12f, ScaleColor(albedo, 1.35f));
                 UIRenderer::DrawRectFilled(cx - radius * 0.48f, cy - radius * 0.30f, radius * 0.22f, radius * 0.08f, ScaleColor(albedo, 1.22f));
                 UIRenderer::DrawRect(cx - radius, cy - radius, radius * 2.0f, radius * 2.0f, { 0.04f, 0.04f, 0.045f, 0.75f });
+            }
+
+            DirectX::XMFLOAT4 GetShaderStatusColor(const ShaderCacheStatus& cacheStatus, const RuntimeShaderStatus& runtimeStatus)
+            {
+                if (runtimeStatus.HasEntry && runtimeStatus.UsingErrorShader)
+                    return { 0.34f, 0.08f, 0.12f, 1.0f };
+
+                if (!cacheStatus.IsHlsl)
+                    return { 0.17f, 0.16f, 0.11f, 1.0f };
+
+                if (!cacheStatus.SourceExists)
+                    return { 0.34f, 0.08f, 0.12f, 1.0f };
+
+                if (cacheStatus.VertexBytecodeFresh && cacheStatus.PixelBytecodeFresh)
+                    return { 0.10f, 0.22f, 0.13f, 1.0f };
+
+                return { 0.30f, 0.22f, 0.08f, 1.0f };
+            }
+
+            std::string BuildShaderStatusText(const std::filesystem::path& shaderPath)
+            {
+                ShaderCacheStatus cacheStatus = ShaderCompiler::GetHlslCacheStatus(shaderPath);
+                RuntimeShaderStatus runtimeStatus = RuntimeShaderLibrary::GetStatusForShader(shaderPath);
+
+                if (runtimeStatus.HasEntry && runtimeStatus.UsingErrorShader)
+                    return "Shader Status: Error Shader active";
+
+                ShaderCompileResult lastCompile;
+                if (ShaderCompiler::GetLastCompileResult(shaderPath, lastCompile) && !lastCompile.Success)
+                {
+                    if (!lastCompile.ReflectionErrors.empty())
+                        return "Shader Status: reflection validation failed";
+                    return "Shader Status: last compile failed";
+                }
+
+                if (!cacheStatus.IsHlsl)
+                    return "Shader Status: Legacy metadata";
+
+                return "Shader Status: " + cacheStatus.Message;
+            }
+
+            void ApplyShaderStatusButtonStyle(Button* button, const std::filesystem::path& shaderPath)
+            {
+                if (!button)
+                    return;
+
+                ShaderCacheStatus cacheStatus = ShaderCompiler::GetHlslCacheStatus(shaderPath);
+                RuntimeShaderStatus runtimeStatus = RuntimeShaderLibrary::GetStatusForShader(shaderPath);
+                ShaderCompileResult lastCompile;
+                DirectX::XMFLOAT4 color =
+                    (ShaderCompiler::GetLastCompileResult(shaderPath, lastCompile) && !lastCompile.Success)
+                    ? DirectX::XMFLOAT4{ 0.34f, 0.08f, 0.12f, 1.0f }
+                    : GetShaderStatusColor(cacheStatus, runtimeStatus);
+                button->SetNormalColor(color);
+                button->SetHoverColor(ScaleColor(color, 1.18f));
             }
 
             class MaterialPreviewWidget : public Widget
@@ -293,6 +351,12 @@ namespace CCEngine
             m_SelectedEntity = {};
             m_SelectedAssetPath = assetPath;
             m_SelectedAssetType = assetType;
+            if (m_SelectedAssetType != "material")
+            {
+                m_SelectedMaterial = MaterialAsset{};
+                m_MaterialSavePending = false;
+                m_MaterialSaveCountdown = 0.0f;
+            }
             m_MaterialPreviewImage = nullptr;
             m_MaterialPreviewDirty = true;
             RebuildInspector();
@@ -337,6 +401,10 @@ namespace CCEngine
             {
                 if (m_SelectedAssetType == "material")
                     BuildMaterialInspector();
+                else if (m_SelectedAssetType == "shader")
+                    BuildShaderInspector();
+                else
+                    BuildGenericAssetInspector();
                 return;
             }
 
@@ -395,17 +463,59 @@ namespace CCEngine
             pathButton->SetHoverColor({ 0.13f, 0.13f, 0.14f, 1.0f });
             infoItem->AddChild(pathButton);
 
-            auto shaderButton = new UI::Button("MaterialShaderButton", "Shader: " + m_SelectedMaterial.ShaderName);
+            std::string shaderLabel = m_SelectedMaterial.ShaderPath.empty()
+                ? "Shader: Built-in/" + m_SelectedMaterial.ShaderName
+                : "Shader: " + std::filesystem::path(m_SelectedMaterial.ShaderPath).filename().string();
+            auto shaderButton = new UI::Button("MaterialShaderButton", shaderLabel);
             shaderButton->SetOnClick([this, shaderButton]()
                 {
-                    static const std::vector<std::string> shaders = { "Base3D", "Unlit", "Lit", "Transparent" };
-                    auto it = std::find(shaders.begin(), shaders.end(), m_SelectedMaterial.ShaderName);
-                    size_t nextIndex = it == shaders.end() ? 0 : ((size_t)std::distance(shaders.begin(), it) + 1) % shaders.size();
-                    m_SelectedMaterial.ShaderName = shaders[nextIndex];
-                    shaderButton->SetText("Shader: " + m_SelectedMaterial.ShaderName);
+                    std::string filepath = PlatformUtils::OpenFile("HLSL Shader (*.hlsl)\0*.hlsl\0Legacy CCEngine Shader (*.ccshader)\0*.ccshader\0");
+                    if (filepath.empty())
+                        return;
+
+                    if (AssetDatabase::GetAssetKind(filepath) != AssetKind::Shader)
+                    {
+                        ConsoleLog::Warning("Selected file is not a shader asset: " + filepath);
+                        return;
+                    }
+
+                    // Material은 셰이더 파일을 경로만으로 묶지 않는다.
+                    // GUID를 같이 저장해야 파일명을 바꾸거나 폴더를 옮겨도 같은 셰이더를 복구할 수 있다.
+                    m_SelectedMaterial.ShaderPath = filepath;
+                    m_SelectedMaterial.ShaderGuid = AssetDatabase::GetGuidFromPath(filepath);
+                    m_SelectedMaterial.ShaderName = std::filesystem::path(filepath).stem().string();
+                    shaderButton->SetText("Shader: " + std::filesystem::path(filepath).filename().string());
                     MarkSelectedMaterialDirty();
+                    m_NeedsRebuild = true;
                 });
             infoItem->AddChild(shaderButton);
+
+            auto clearShaderButton = new UI::Button("MaterialClearShaderButton", "Use Built-in Base3D");
+            clearShaderButton->SetOnClick([this, shaderButton]()
+                {
+                    m_SelectedMaterial.ShaderGuid.clear();
+                    m_SelectedMaterial.ShaderPath.clear();
+                    m_SelectedMaterial.ShaderName = "Base3D";
+                    shaderButton->SetText("Shader: Built-in/Base3D");
+                    MarkSelectedMaterialDirty();
+                    m_NeedsRebuild = true;
+                });
+            infoItem->AddChild(clearShaderButton);
+
+            auto materialShaderStatusButton = new UI::Button("MaterialShaderStatusText",
+                m_SelectedMaterial.ShaderPath.empty()
+                ? "Shader Status: Built-in Base3D"
+                : BuildShaderStatusText(m_SelectedMaterial.ShaderPath));
+            if (m_SelectedMaterial.ShaderPath.empty())
+            {
+                materialShaderStatusButton->SetNormalColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+                materialShaderStatusButton->SetHoverColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+            }
+            else
+            {
+                ApplyShaderStatusButtonStyle(materialShaderStatusButton, m_SelectedMaterial.ShaderPath);
+            }
+            infoItem->AddChild(materialShaderStatusButton);
 
             auto surfaceItem = new UI::InspectorItem("MaterialSurfaceItem", "Surface");
             surfaceItem->SetAnchorMin(0.0f, 0.0f);
@@ -483,6 +593,91 @@ namespace CCEngine
                     MarkSelectedMaterialDirty();
                 });
 
+            if (!m_SelectedMaterial.ShaderPath.empty())
+            {
+                std::vector<ShaderPropertyDefinition> shaderProperties = ShaderPropertyParser::LoadFromShaderFile(m_SelectedMaterial.ShaderPath);
+                if (!shaderProperties.empty())
+                {
+                    auto shaderPropertyItem = new UI::InspectorItem("MaterialShaderPropertiesItem", "Shader Properties");
+                    shaderPropertyItem->SetAnchorMin(0.0f, 0.0f);
+                    shaderPropertyItem->SetAnchorMax(1.0f, 0.0f);
+                    AddChild(shaderPropertyItem);
+
+                    for (const ShaderPropertyDefinition& definition : shaderProperties)
+                    {
+                        ShaderPropertyValue& value = m_SelectedMaterial.EnsureShaderPropertyValue(definition);
+                        const std::string widgetName = "ShaderProperty_" + definition.Name;
+
+                        if (definition.Type == ShaderPropertyType::Color)
+                        {
+                            InspectorUtils::AddColor4(shaderPropertyItem, widgetName, definition.DisplayName,
+                                [this, propertyName = definition.Name]() { return m_SelectedMaterial.ShaderProperties[propertyName].Color; },
+                                [this, propertyName = definition.Name](DirectX::XMFLOAT4 newValue)
+                                {
+                                    m_SelectedMaterial.ShaderProperties[propertyName].Color = newValue;
+                                    if (propertyName == "AlbedoColor")
+                                        m_SelectedMaterial.AlbedoColor = newValue;
+                                    MarkSelectedMaterialDirty();
+                                });
+                        }
+                        else if (definition.Type == ShaderPropertyType::Float)
+                        {
+                            InspectorUtils::AddDragFloat(shaderPropertyItem, widgetName, definition.DisplayName,
+                                [this, propertyName = definition.Name]() { return m_SelectedMaterial.ShaderProperties[propertyName].FloatValue; },
+                                [this, propertyName = definition.Name, definition](float newValue)
+                                {
+                                    if (definition.HasRange)
+                                        newValue = std::clamp(newValue, definition.Min, definition.Max);
+                                    m_SelectedMaterial.ShaderProperties[propertyName].FloatValue = newValue;
+                                    if (propertyName == "Roughness")
+                                        m_SelectedMaterial.Roughness = std::clamp(newValue, 0.0f, 1.0f);
+                                    else if (propertyName == "Metallic")
+                                        m_SelectedMaterial.Metallic = std::clamp(newValue, 0.0f, 1.0f);
+                                    MarkSelectedMaterialDirty();
+                                });
+                        }
+                        else if (definition.Type == ShaderPropertyType::Toggle)
+                        {
+                            auto toggleButton = new UI::Button(widgetName, definition.DisplayName + ": " + (value.BoolValue ? "On" : "Off"));
+                            toggleButton->SetOnClick([this, toggleButton, propertyName = definition.Name, label = definition.DisplayName]()
+                                {
+                                    ShaderPropertyValue& toggleValue = m_SelectedMaterial.ShaderProperties[propertyName];
+                                    toggleValue.BoolValue = !toggleValue.BoolValue;
+                                    toggleButton->SetText(label + ": " + (toggleValue.BoolValue ? "On" : "Off"));
+                                    MarkSelectedMaterialDirty();
+                                });
+                            shaderPropertyItem->AddChild(toggleButton);
+                        }
+                        else if (definition.Type == ShaderPropertyType::Texture2D)
+                        {
+                            auto textureButton = new UI::Button(widgetName,
+                                value.TexturePath.empty()
+                                ? definition.DisplayName + ": (none)"
+                                : definition.DisplayName + ": " + std::filesystem::path(value.TexturePath).filename().string());
+                            textureButton->SetOnClick([this, textureButton, propertyName = definition.Name, label = definition.DisplayName]()
+                                {
+                                    std::string filepath = PlatformUtils::OpenFile("Texture (*.png;*.jpg;*.jpeg;*.tga)\0*.png;*.jpg;*.jpeg;*.tga\0");
+                                    if (filepath.empty())
+                                        return;
+
+                                    ShaderPropertyValue& textureValue = m_SelectedMaterial.ShaderProperties[propertyName];
+                                    textureValue.TexturePath = filepath;
+                                    textureValue.TextureGuid = AssetDatabase::GetGuidFromPath(filepath);
+                                    if (propertyName == "AlbedoTexture")
+                                    {
+                                        m_SelectedMaterial.AlbedoTexturePath = filepath;
+                                        m_SelectedMaterial.AlbedoTextureGuid = textureValue.TextureGuid;
+                                        m_SelectedMaterial.AlbedoTexture.reset(Texture2D::Create(filepath));
+                                    }
+                                    textureButton->SetText(label + ": " + std::filesystem::path(filepath).filename().string());
+                                    MarkSelectedMaterialDirty();
+                                });
+                            shaderPropertyItem->AddChild(textureButton);
+                        }
+                    }
+                }
+            }
+
             auto previewLabel = new UI::Button("MaterialPreviewLabel", "Preview");
             previewLabel->SetNormalColor({ 0.12f, 0.12f, 0.13f, 1.0f });
             previewLabel->SetHoverColor({ 0.12f, 0.12f, 0.13f, 1.0f });
@@ -494,6 +689,198 @@ namespace CCEngine
             m_MaterialPreviewImage->SetAnchorMin(0.0f, 0.0f);
             m_MaterialPreviewImage->SetAnchorMax(1.0f, 0.0f);
             AddChild(m_MaterialPreviewImage);
+
+            auto& window = CCEngine::Application::Get()->GetWindow();
+            UpdateLayout({ 0.0f, 0.0f }, { (float)window.GetWidth(), (float)window.GetHeight() });
+        }
+
+        void InspectorPanel::BuildShaderInspector()
+        {
+            ShaderAsset shader;
+            if (!shader.LoadFromFile(m_SelectedAssetPath))
+            {
+                auto errorItem = new UI::InspectorItem("ShaderLoadError", "Shader");
+                errorItem->SetAnchorMin(0.0f, 0.0f);
+                errorItem->SetAnchorMax(1.0f, 0.0f);
+                auto errorButton = new UI::Button("ShaderLoadErrorText", "Failed to load shader.");
+                errorButton->SetNormalColor({ 0.20f, 0.08f, 0.08f, 1.0f });
+                errorButton->SetHoverColor({ 0.20f, 0.08f, 0.08f, 1.0f });
+                errorItem->AddChild(errorButton);
+                AddChild(errorItem);
+                return;
+            }
+
+            auto infoItem = new UI::InspectorItem("ShaderInfoItem", "Shader Asset");
+            infoItem->SetAnchorMin(0.0f, 0.0f);
+            infoItem->SetAnchorMax(1.0f, 0.0f);
+            AddChild(infoItem);
+
+            auto nameButton = new UI::Button("ShaderNameText", "Name: " + shader.Name);
+            nameButton->SetNormalColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+            nameButton->SetHoverColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+            infoItem->AddChild(nameButton);
+
+            auto pathButton = new UI::Button("ShaderPathText", "File: " + m_SelectedAssetPath.filename().string());
+            pathButton->SetNormalColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+            pathButton->SetHoverColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+            infoItem->AddChild(pathButton);
+
+            auto templateButton = new UI::Button("ShaderTemplateText", "Template: " + shader.TemplateName);
+            templateButton->SetNormalColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+            templateButton->SetHoverColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+            infoItem->AddChild(templateButton);
+
+            auto entryButton = new UI::Button("ShaderEntryText",
+                "Entries: " + shader.VertexEntry + " / " + shader.PixelEntry);
+            entryButton->SetNormalColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+            entryButton->SetHoverColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+            infoItem->AddChild(entryButton);
+
+            const bool isHlsl = ShaderCompiler::IsHlslSource(m_SelectedAssetPath);
+            auto compileStateButton = new UI::Button("ShaderCompileStateText",
+                isHlsl ? BuildShaderStatusText(m_SelectedAssetPath) : "Shader Status: legacy shader metadata");
+            ApplyShaderStatusButtonStyle(compileStateButton, m_SelectedAssetPath);
+            infoItem->AddChild(compileStateButton);
+
+            auto compileButton = new UI::Button("ShaderCompileButton", "Compile Shader");
+            compileButton->SetNormalColor({ 0.18f, 0.18f, 0.20f, 1.0f });
+            compileButton->SetHoverColor({ 0.24f, 0.24f, 0.27f, 1.0f });
+            compileButton->SetOnClick([this, compileStateButton]()
+                {
+                    if (!ShaderCompiler::IsHlslSource(m_SelectedAssetPath))
+                    {
+                        ConsoleLog::Warning("Shader compile skipped. Select an .hlsl shader source.");
+                        return;
+                    }
+
+                    RuntimeShaderLibrary::Invalidate(m_SelectedAssetPath);
+                    ShaderCompileResult result = ShaderCompiler::CompileHlslFile(m_SelectedAssetPath, true);
+                    if (result.Success)
+                    {
+                        compileStateButton->SetText(BuildShaderStatusText(m_SelectedAssetPath));
+                        ApplyShaderStatusButtonStyle(compileStateButton, m_SelectedAssetPath);
+                        ConsoleLog::Info(result.Summary);
+                    }
+                    else
+                    {
+                        compileStateButton->SetText("Shader Status: compile failed");
+                        compileStateButton->SetNormalColor({ 0.34f, 0.08f, 0.12f, 1.0f });
+                        compileStateButton->SetHoverColor({ 0.42f, 0.10f, 0.15f, 1.0f });
+                        ConsoleLog::Error(result.Summary);
+                    }
+                });
+            infoItem->AddChild(compileButton);
+
+            auto openEditorButton = new UI::Button("ShaderOpenEditorButton", "Open in Visual Studio");
+            openEditorButton->SetNormalColor({ 0.18f, 0.18f, 0.20f, 1.0f });
+            openEditorButton->SetHoverColor({ 0.24f, 0.24f, 0.27f, 1.0f });
+            openEditorButton->SetOnClick([this]()
+                {
+                    if (m_OnOpenShaderEditor)
+                        m_OnOpenShaderEditor(m_SelectedAssetPath);
+                });
+            infoItem->AddChild(openEditorButton);
+
+            if (isHlsl)
+            {
+                m_SelectedMaterial = BuildShaderPreviewMaterial(m_SelectedAssetPath);
+                m_MaterialPreviewDirty = true;
+
+                auto previewLabel = new UI::Button("ShaderPreviewLabel", "Preview");
+                previewLabel->SetNormalColor({ 0.12f, 0.12f, 0.13f, 1.0f });
+                previewLabel->SetHoverColor({ 0.12f, 0.12f, 0.13f, 1.0f });
+                AddChild(previewLabel);
+
+                EnsureMaterialPreviewResources();
+                m_MaterialPreviewImage = new UI::ImageWidget("ShaderPreviewImage",
+                    m_MaterialPreviewFramebuffer ? m_MaterialPreviewFramebuffer->GetColorAttachmentRendererID(0) : nullptr);
+                m_MaterialPreviewImage->SetAnchorMin(0.0f, 0.0f);
+                m_MaterialPreviewImage->SetAnchorMax(1.0f, 0.0f);
+                AddChild(m_MaterialPreviewImage);
+            }
+
+            auto& window = CCEngine::Application::Get()->GetWindow();
+            UpdateLayout({ 0.0f, 0.0f }, { (float)window.GetWidth(), (float)window.GetHeight() });
+        }
+
+        MaterialAsset InspectorPanel::BuildShaderPreviewMaterial(const std::filesystem::path& shaderPath) const
+        {
+            MaterialAsset preview = MaterialAsset::CreateDefault(shaderPath.stem().string() + " Preview");
+            preview.ShaderName = shaderPath.stem().string();
+            preview.ShaderPath = shaderPath.string();
+            preview.ShaderGuid = AssetDatabase::GetGuidFromPath(shaderPath);
+            preview.AlbedoColor = { 0.82f, 0.82f, 0.88f, 1.0f };
+
+            // Shader Preview는 파일을 저장하지 않는 임시 Material을 사용한다.
+            // 이 Material이 실제 Material과 같은 Property/Runtime Shader 경로를 타야, 미리보기와 실제 렌더 결과가 어긋나지 않는다.
+            for (const ShaderPropertyDefinition& definition : ShaderPropertyParser::LoadFromShaderFile(shaderPath))
+            {
+                ShaderPropertyValue& value = preview.EnsureShaderPropertyValue(definition);
+                if (definition.Name == "AlbedoColor" && definition.Type == ShaderPropertyType::Color)
+                    preview.AlbedoColor = value.Color;
+                else if (definition.Name == "Roughness" && definition.Type == ShaderPropertyType::Float)
+                    preview.Roughness = value.FloatValue;
+                else if (definition.Name == "Metallic" && definition.Type == ShaderPropertyType::Float)
+                    preview.Metallic = value.FloatValue;
+            }
+
+            return preview;
+        }
+
+        void InspectorPanel::BuildGenericAssetInspector()
+        {
+            m_SelectedMaterial = MaterialAsset{};
+            m_MaterialSavePending = false;
+            m_MaterialSaveCountdown = 0.0f;
+            m_MaterialPreviewDirty = true;
+
+            auto infoItem = new UI::InspectorItem("GenericAssetInfoItem", "Asset");
+            infoItem->SetAnchorMin(0.0f, 0.0f);
+            infoItem->SetAnchorMax(1.0f, 0.0f);
+            AddChild(infoItem);
+
+            const std::string fileName = m_SelectedAssetPath.filename().string();
+            const std::string extension = m_SelectedAssetPath.extension().string();
+
+            auto nameButton = new UI::Button("GenericAssetNameText", "Name: " + fileName);
+            nameButton->SetNormalColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+            nameButton->SetHoverColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+            infoItem->AddChild(nameButton);
+
+            auto typeButton = new UI::Button("GenericAssetTypeText", "Type: " + (m_SelectedAssetType.empty() ? "unknown" : m_SelectedAssetType));
+            typeButton->SetNormalColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+            typeButton->SetHoverColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+            infoItem->AddChild(typeButton);
+
+            auto extensionButton = new UI::Button("GenericAssetExtensionText", "Extension: " + (extension.empty() ? "(none)" : extension));
+            extensionButton->SetNormalColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+            extensionButton->SetHoverColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+            infoItem->AddChild(extensionButton);
+
+            std::error_code ec;
+            uintmax_t fileSize = std::filesystem::is_regular_file(m_SelectedAssetPath, ec)
+                ? std::filesystem::file_size(m_SelectedAssetPath, ec)
+                : 0;
+            auto sizeButton = new UI::Button("GenericAssetSizeText", "Size: " + std::to_string(fileSize) + " bytes");
+            sizeButton->SetNormalColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+            sizeButton->SetHoverColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+            infoItem->AddChild(sizeButton);
+
+            auto pathButton = new UI::Button("GenericAssetPathText", "Path: " + m_SelectedAssetPath.string());
+            pathButton->SetNormalColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+            pathButton->SetHoverColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+            infoItem->AddChild(pathButton);
+
+            if (m_SelectedAssetType == "script" || m_SelectedAssetType == "shader")
+            {
+                auto openButton = new UI::Button("GenericAssetOpenButton", "Open in External Editor");
+                openButton->SetOnClick([this]()
+                    {
+                        if (m_OnOpenShaderEditor)
+                            m_OnOpenShaderEditor(m_SelectedAssetPath);
+                    });
+                infoItem->AddChild(openButton);
+            }
 
             auto& window = CCEngine::Application::Get()->GetWindow();
             UpdateLayout({ 0.0f, 0.0f }, { (float)window.GetWidth(), (float)window.GetHeight() });
@@ -530,7 +917,7 @@ namespace CCEngine
 
         void InspectorPanel::RenderSelectedMaterialPreview()
         {
-            if (m_SelectedAssetType != "material" || m_SelectedAssetPath.empty())
+            if ((m_SelectedAssetType != "material" && m_SelectedAssetType != "shader") || m_SelectedAssetPath.empty())
                 return;
 
             EnsureMaterialPreviewResources();
@@ -1148,7 +1535,7 @@ namespace CCEngine
                     continue;
                 }
 
-                if (child->GetName() == "MaterialPreviewLabel")
+                if (child->GetName() == "MaterialPreviewLabel" || child->GetName() == "ShaderPreviewLabel")
                 {
                     child->SetAnchorMin(0.0f, 0.0f);
                     child->SetAnchorMax(1.0f, 0.0f);

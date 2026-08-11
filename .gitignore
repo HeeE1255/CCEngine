@@ -52,6 +52,7 @@ mono_crash.*
 # 테스트 로그, 임시 체크리스트, 스크린샷, 개인 메모는 이 아래에 둔다.
 # Git에서 완전히 제외되므로 Visual Studio로 푸시해도 올라가지 않는다.
 /local/
+/Sandbox/local/
 /qa-local/
 /.codex/
 /.openclaw/
@@ -62,7 +63,11 @@ mono_crash.*
 !/Sandbox/assets/fonts/
 !/Sandbox/assets/fonts/NotoSansKR-VariableFont_wght.ttf
 !/Sandbox/assets/shaders/
-!/Sandbox/assets/shaders/*.hlsl
+/Sandbox/assets/shaders/*
+!/Sandbox/assets/shaders/Base3D.hlsl
+!/Sandbox/assets/shaders/ErrorShader.hlsl
+!/Sandbox/assets/shaders/GizmoShader.hlsl
+!/Sandbox/assets/shaders/Renderer2D.hlsl
 !/Sandbox/assets/scenes/
 /Sandbox/assets/scenes/*
 !/Sandbox/assets/scenes/ActiveLifecycleTest.ccscene

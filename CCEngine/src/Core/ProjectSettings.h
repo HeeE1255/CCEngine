@@ -17,6 +17,7 @@ namespace CCEngine
         std::string MoveRightKey = "D";
         std::string MoveUpKey = "E";
         std::string MoveDownKey = "Q";
+        std::string VisualStudioPath;
     };
 
     class CC_API ProjectSettings

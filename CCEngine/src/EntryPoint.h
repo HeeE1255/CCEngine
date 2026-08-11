@@ -16,6 +16,7 @@
 #include <vector>
 #include <string>
 #include <Windows.h>
+#include "Core/Memory.h"
 
 // 엔트리 포인트 헤더: 플랫폼별로 메인 함수를 정의하는 헤더
 // 설명 : 엔진이 실행될 때 가장 먼저 호출되는 함수인 main 함수를 정의하는 헤더
@@ -96,6 +97,10 @@ int main(int argc, char** argv)
 
         delete app;
     }
+
+    // Application이 완전히 삭제된 뒤에 검사해야 한다.
+    // destructor 본문 안에서 검사하면 Window, LayerStack 같은 멤버가 아직 살아 있어 정상 해제 예정 메모리도 누수처럼 보인다.
+    CCEngine::MemoryManager::Shutdown();
 
     // 메모리 누수 확인
     //_CrtDumpMemoryLeaks();

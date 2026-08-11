@@ -1305,6 +1305,7 @@ namespace CCEngine
                         mesh.MeshData,
                         renderTexture,
                         renderColor,
+                        mesh.Material.get(),
                         (int)entityID,
                         animator.GetFinalBoneMatrices()
                     );
@@ -1312,7 +1313,7 @@ namespace CCEngine
                 else
                 {
                     DirectX::XMMATRIX worldTransform = getTransform(entity);
-                    Renderer3D::DrawMesh(worldTransform, mesh.MeshData, renderTexture, renderColor, (int)entityID);
+                    Renderer3D::DrawMesh(worldTransform, mesh.MeshData, renderTexture, renderColor, mesh.Material.get(), (int)entityID);
                 }
             });
 

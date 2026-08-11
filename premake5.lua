@@ -12,7 +12,7 @@ outputdir = "%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}"
 filter "system:windows"
     systemversion "latest"
     defines { "CC_PLATFORM_WINDOWS" }
-    buildoptions { "/utf-8" }
+    buildoptions { "/utf-8", "/bigobj" }
 filter {}
 
 -- ============================================================================

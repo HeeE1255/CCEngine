@@ -12,8 +12,10 @@
 #include "Renderer/RenderCommand.h"
 #include "Renderer/Renderer.h"
 #include "Renderer/Renderer3D.h"
+#include "Renderer/ShaderAsset.h"
 #include "Renderer/UIRenderer.h"
 #include "Renderer/Texture.h"
+#include "Renderer/VisualShaderAsset.h"
 #include "Scene/Components.h"
 #include "Scripting/ScriptCompiler.h"
 #include "Application.h"
@@ -53,7 +55,7 @@ namespace CCEngine
             constexpr float kTypeFilterButtonWidth = 126.0f;
             constexpr float kSortButtonWidth = 102.0f;
             constexpr float kDropdownItemHeight = 26.0f;
-            constexpr int kTypeFilterItemCount = 7;
+            constexpr int kTypeFilterItemCount = 8;
             constexpr int kSortItemCount = 3;
 
             bool TryAcquirePreviewSlot(std::atomic<int>& counter, int maxCount)
@@ -164,7 +166,7 @@ namespace CCEngine
             }
 
             constexpr const char* ThumbnailAlgorithmVersion = "fit2d-v3";
-            constexpr const char* MaterialThumbnailAlgorithmVersion = "material-sphere-v8";
+            constexpr const char* MaterialThumbnailAlgorithmVersion = "material-sphere-v9";
             constexpr int MaterialPreviewTextureSize = 384;
 
             void DrawPreviewBorder(float x, float y, float width, float height, const DirectX::XMFLOAT4& color)
@@ -671,6 +673,11 @@ namespace CCEngine
                 output.write(reinterpret_cast<const char*>(&width), sizeof(width));
                 output.write(reinterpret_cast<const char*>(&height), sizeof(height));
                 output.write(reinterpret_cast<const char*>(pixels.Pixels.data()), (std::streamsize)(pixels.Pixels.size() * sizeof(uint32_t)));
+            }
+
+            std::filesystem::path GetMaterialPreviewCachePath(const std::filesystem::path& materialPath)
+            {
+                return GetPreviewCachePath(materialPath, MaterialThumbnailAlgorithmVersion);
             }
 
             DecodedPreviewPixels DecodeTexturePreviewPixels(const std::string& path, int maxSize)
@@ -2191,6 +2198,8 @@ namespace CCEngine
             if (extension == ".ccscene") return AssetType::Scene;
             if (extension == ".ccprefab") return AssetType::Prefab;
             if (extension == ".ccmat") return AssetType::Material;
+            if (extension == ".hlsl" || extension == ".ccshader") return AssetType::Shader;
+            if (extension == ".ccvshader") return AssetType::VisualShader;
             if (extension == ".fbx" || extension == ".obj" || extension == ".gltf" || extension == ".glb") return AssetType::Model;
             if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".tga") return AssetType::Texture;
             if (extension == ".cs") return AssetType::Script;
@@ -2205,6 +2214,8 @@ namespace CCEngine
                 case AssetType::Scene: return "SCN";
                 case AssetType::Prefab: return "PFB";
                 case AssetType::Material: return "MAT";
+                case AssetType::Shader: return "SHD";
+                case AssetType::VisualShader: return "VSH";
                 case AssetType::Model: return "MDL";
                 case AssetType::FbxMesh: return "MSH";
                 case AssetType::Texture: return "TEX";
@@ -2220,6 +2231,8 @@ namespace CCEngine
                 case AssetType::Scene: return "scene";
                 case AssetType::Prefab: return "prefab";
                 case AssetType::Material: return "material";
+                case AssetType::Shader: return "shader";
+                case AssetType::VisualShader: return "visualshader";
                 case AssetType::Model: return "model";
                 case AssetType::FbxMesh: return "mesh";
                 case AssetType::Texture: return "texture";
@@ -2236,6 +2249,7 @@ namespace CCEngine
                 case TypeFilter::Texture: return "Texture";
                 case TypeFilter::Model: return "Model";
                 case TypeFilter::Material: return "Material";
+                case TypeFilter::Shader: return "Shader";
                 case TypeFilter::Prefab: return "Prefab";
                 case TypeFilter::Scene: return "Scene";
                 case TypeFilter::Script: return "Script";
@@ -2285,13 +2299,29 @@ namespace CCEngine
                     // FBX 내부 메쉬는 독립 파일이 아니라 컨테이너 안의 sub-asset이다.
                     // 지금 단계에서는 선택/프리뷰만 제공하고, 실제 인스턴스화는 FBX 파일 단위로 처리한다.
                     break;
+                case AssetType::Shader:
                 case AssetType::Script:
                 {
-                    // 스크립트는 운영체제에 연결된 Visual Studio나 코드 편집기로 연다.
-                    auto result = reinterpret_cast<intptr_t>(
-                        ShellExecuteW(nullptr, L"open", entry.Path.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
-                    if (result <= 32)
-                        std::cout << "[AssetBrowser] Failed to open script: " << path << std::endl;
+                    // 코드형 에셋은 프로젝트에 연결된 외부 편집기를 우선 사용한다.
+                    // Asset Browser는 경로만 넘기고, 어떤 앱으로 여는지는 EditorLayer가 프로젝트 설정을 보고 결정한다.
+                    if (m_OnCodeAssetOpened)
+                        m_OnCodeAssetOpened(path);
+                    else
+                    {
+                        auto result = reinterpret_cast<intptr_t>(
+                            ShellExecuteW(nullptr, L"open", entry.Path.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+                        if (result <= 32)
+                            std::cout << "[AssetBrowser] Failed to open code asset: " << path << std::endl;
+                    }
+                    break;
+                }
+                case AssetType::VisualShader:
+                {
+                    // Visual Shader 원본은 노드 그래프이고, 실제 컴파일 대상은 생성 HLSL이다.
+                    // 현재 1차 구현에서는 더블클릭 시 생성 HLSL을 열어 흐름을 끊지 않는다.
+                    std::filesystem::path generatedHlsl = VisualShaderAsset::GetGeneratedHlslPath(entry.Path);
+                    if (m_OnCodeAssetOpened && std::filesystem::exists(generatedHlsl))
+                        m_OnCodeAssetOpened(generatedHlsl.string());
                     break;
                 }
                 default:
@@ -2374,7 +2404,11 @@ namespace CCEngine
 
                 AssetImportResult result = AssetDatabase::ReimportAsset(entry.Path, true);
                 if (!result.Success)
+                {
+                    if (!result.Message.empty())
+                        ConsoleLog::Error(result.Message);
                     continue;
+                }
 
                 reimportedAny = true;
                 if (result.Type == AssetKind::Script)
@@ -2464,6 +2498,52 @@ namespace CCEngine
             // Material도 일반 에셋이므로 생성 즉시 meta를 만든다.
             // 그래야 씬/프리팹이 처음부터 GUID로 참조할 수 있다.
             AssetDatabase::EnsureMetaFile(materialPath);
+            AssetDatabase::MarkDirty(m_RootDirectory);
+
+            m_TreeChildCache.clear();
+            Refresh(true);
+            return true;
+        }
+
+        bool AssetBrowserPanel::CreateShaderInCurrentDirectory()
+        {
+            if (!IsPathInsideRoot(m_CurrentDirectory, true))
+                return false;
+
+            std::filesystem::path shaderPath = MakeUniquePath(m_CurrentDirectory, "New Shader", ".hlsl");
+            ShaderAsset shader = ShaderAsset::CreateTemplate(shaderPath.stem().string(), "Lit");
+            if (!shader.SaveToFile(shaderPath))
+                return false;
+
+            // Shader도 Material과 같은 프로젝트 에셋이다.
+            // 생성 직후 meta를 만들어야 Material이 파일명 대신 GUID로 안전하게 참조할 수 있다.
+            AssetDatabase::EnsureMetaFile(shaderPath);
+            AssetDatabase::MarkDirty(m_RootDirectory);
+
+            m_TreeChildCache.clear();
+            Refresh(true);
+            return true;
+        }
+
+        bool AssetBrowserPanel::CreateVisualShaderInCurrentDirectory()
+        {
+            if (!IsPathInsideRoot(m_CurrentDirectory, true))
+                return false;
+
+            std::filesystem::path graphPath = MakeUniquePath(m_CurrentDirectory, "New Visual Shader", ".ccvshader");
+            VisualShaderAsset visualShader = VisualShaderAsset::CreateDefault(graphPath.stem().string());
+            if (!visualShader.SaveToFile(graphPath))
+                return false;
+
+            if (!visualShader.SaveGeneratedHlsl(graphPath))
+                return false;
+
+            std::filesystem::path generatedHlslPath = VisualShaderAsset::GetGeneratedHlslPath(graphPath);
+
+            // Visual Shader는 그래프 원본과 생성된 HLSL을 분리한다.
+            // 원본은 노드 편집용이고, 생성 HLSL은 기존 ShaderCompiler/Material 경로가 그대로 컴파일한다.
+            AssetDatabase::EnsureMetaFile(graphPath);
+            AssetDatabase::EnsureMetaFile(generatedHlslPath);
             AssetDatabase::MarkDirty(m_RootDirectory);
 
             m_TreeChildCache.clear();
@@ -3043,6 +3123,8 @@ namespace CCEngine
                         queryTypeFilter = TypeFilter::Model;
                     else if (typeText == "material" || typeText == "mat")
                         queryTypeFilter = TypeFilter::Material;
+                    else if (typeText == "shader" || typeText == "shd")
+                        queryTypeFilter = TypeFilter::Shader;
                     else if (typeText == "prefab" || typeText == "pfb")
                         queryTypeFilter = TypeFilter::Prefab;
                     else if (typeText == "scene" || typeText == "scn")
@@ -3105,6 +3187,7 @@ namespace CCEngine
                         case TypeFilter::Texture: return entry.Type == AssetType::Texture;
                         case TypeFilter::Model: return entry.Type == AssetType::Model || entry.Type == AssetType::FbxMesh;
                         case TypeFilter::Material: return entry.Type == AssetType::Material;
+                        case TypeFilter::Shader: return entry.Type == AssetType::Shader || entry.Type == AssetType::VisualShader;
                         case TypeFilter::Prefab: return entry.Type == AssetType::Prefab;
                         case TypeFilter::Scene: return entry.Type == AssetType::Scene;
                         case TypeFilter::Script: return entry.Type == AssetType::Script;
@@ -3298,6 +3381,76 @@ namespace CCEngine
             m_ViewEntries = savedViewEntries;
             m_SortMode = savedSortMode;
 
+            {
+                std::error_code ec;
+                const std::filesystem::path qaDirectory = std::filesystem::current_path() / ".ccengine" / "QA";
+                const std::filesystem::path materialPath = qaDirectory / "MaterialThumbnailQA.ccmat";
+
+                MaterialAsset material = MaterialAsset::CreateDefault("MaterialThumbnailQA");
+                material.AlbedoColor = { 0.20f, 0.70f, 0.95f, 1.0f };
+                if (!material.SaveToFile(materialPath))
+                {
+                    fail("Material thumbnail QA material could not be written.");
+                }
+                else
+                {
+                    DecodedPreviewPixels captured;
+                    captured.Width = 16;
+                    captured.Height = 16;
+                    captured.Success = true;
+                    captured.Pixels.assign((size_t)captured.Width * (size_t)captured.Height, 0xff202024);
+                    // 썸네일 캐시는 빈 회색 프레임을 거르기 위해 배경과 다른 픽셀이 충분한지 검사한다.
+                    // QA 픽셀도 실제 머티리얼 프리뷰처럼 배경과 물체 색이 섞여 있어야 같은 경로를 검증할 수 있다.
+                    for (int y = 4; y < 12; ++y)
+                    {
+                        for (int x = 4; x < 12; ++x)
+                            captured.Pixels[(size_t)y * (size_t)captured.Width + (size_t)x] = 0xff30b2f2;
+                    }
+
+                    // Material 썸네일은 Inspector Preview에서 얻은 사진을 디스크 캐시에 남긴 뒤 다시 읽는다.
+                    // 이 왕복이 깨지면 재시작이나 Refresh 후 브라우저가 회색 fallback으로 돌아간다.
+                    const std::filesystem::path cachePath = GetMaterialPreviewCachePath(materialPath);
+                    SavePreviewCacheFile(cachePath, captured);
+
+                    DecodedPreviewPixels restored;
+                    if (!LoadPreviewCacheFile(cachePath, restored) ||
+                        restored.Width != captured.Width ||
+                        restored.Height != captured.Height ||
+                        restored.Pixels != captured.Pixels)
+                    {
+                        fail("Material thumbnail cache save/load round-trip failed.");
+                    }
+                    else
+                    {
+                        AssetEntry materialEntry;
+                        materialEntry.Path = materialPath;
+                        materialEntry.DisplayName = materialPath.filename().string();
+                        materialEntry.Type = AssetType::Material;
+
+                        const std::string materialKey = GetTreeKey(materialPath);
+                        m_MaterialPreviewCache.erase(materialKey);
+                        GetMaterialPreviewColor(materialEntry);
+
+                        auto previewIt = m_MaterialPreviewCache.find(materialKey);
+                        if (previewIt == m_MaterialPreviewCache.end() ||
+                            previewIt->second.CapturedPixels.empty() ||
+                            !previewIt->second.Rendered)
+                        {
+                            fail("Material thumbnail cache was not restored into the preview entry.");
+                        }
+
+                        m_MaterialPreviewCache.erase(materialKey);
+                    }
+
+                    std::filesystem::remove(cachePath, ec);
+                }
+
+                ec.clear();
+                std::filesystem::remove(materialPath, ec);
+                ec.clear();
+                std::filesystem::remove(qaDirectory, ec);
+            }
+
             if (failures.empty())
             {
                 ConsoleLog::Info("Asset Browser QA passed.");
@@ -3443,7 +3596,9 @@ namespace CCEngine
                 m_SelectedIndex = index;
                 m_AnchorSelectedIndex = index;
                 const AssetEntry& entry = m_ViewEntries[index];
-                if (m_OnAssetSelected && entry.Type == AssetType::Material && !IsVirtualSubAsset(entry))
+                // 선택한 에셋 종류가 바뀌면 Inspector도 즉시 컨텍스트를 바꿔야 한다.
+                // Material만 알려 주면 Script/Texture 등을 눌렀을 때 이전 Material Inspector가 계속 남는다.
+                if (m_OnAssetSelected && entry.DisplayName != ".." && !IsVirtualSubAsset(entry))
                     m_OnAssetSelected(entry.Path.string(), GetTypeKey(entry.Type));
                 return;
             }
@@ -3812,6 +3967,9 @@ namespace CCEngine
 
             ForcePreviewAlphaOpaque(capturedFrame.Pixels);
             DumpThumbnailDebugImage("material_inspector_frame_capture", (uint32_t)capturedFrame.Width, (uint32_t)capturedFrame.Height, capturedFrame.Pixels);
+            // 인스펙터 프리뷰는 사람이 확인한 최종 렌더 결과다.
+            // 이 사진을 디스크 캐시에 남겨야 재시작/재스캔 후에도 브라우저가 회색 fallback으로 돌아가지 않는다.
+            SavePreviewCacheFile(GetMaterialPreviewCachePath(materialPath), capturedFrame);
 
             std::vector<std::string> targetKeys;
             targetKeys.push_back(GetTreeKey(materialPath));
@@ -4235,7 +4393,9 @@ namespace CCEngine
 
         const DirectX::XMFLOAT4* AssetBrowserPanel::GetMaterialPreviewColor(const AssetEntry& entry)
         {
-            if (entry.Type != AssetType::Material && !IsMaterialAssetPath(entry.Path))
+            const bool isMaterialEntry = entry.Type == AssetType::Material || IsMaterialAssetPath(entry.Path);
+            const bool isShaderEntry = entry.Type == AssetType::Shader;
+            if (!isMaterialEntry && !isShaderEntry)
                 return nullptr;
 
             std::error_code ec;
@@ -4262,7 +4422,34 @@ namespace CCEngine
             preview.SourcePath = entry.Path;
             preview.LastWriteTime = writeTime;
             MaterialAsset material;
-            if (material.LoadFromFile(entry.Path))
+            bool loadedPreviewMaterial = false;
+            if (isShaderEntry)
+            {
+                material = MaterialAsset::CreateDefault(entry.Path.stem().string() + " Preview");
+                material.ShaderName = entry.Path.stem().string();
+                material.ShaderPath = entry.Path.string();
+                material.ShaderGuid = AssetDatabase::GetGuidFromPath(entry.Path);
+                material.AlbedoColor = { 0.82f, 0.82f, 0.88f, 1.0f };
+                for (const ShaderPropertyDefinition& definition : ShaderPropertyParser::LoadFromShaderFile(entry.Path))
+                {
+                    ShaderPropertyValue& value = material.EnsureShaderPropertyValue(definition);
+                    if (definition.Name == "AlbedoColor" && definition.Type == ShaderPropertyType::Color)
+                        material.AlbedoColor = value.Color;
+                    else if (definition.Name == "Roughness" && definition.Type == ShaderPropertyType::Float)
+                        material.Roughness = value.FloatValue;
+                    else if (definition.Name == "Metallic" && definition.Type == ShaderPropertyType::Float)
+                        material.Metallic = value.FloatValue;
+                }
+                // Shader 썸네일도 Material Preview 렌더러를 쓴다.
+                // 실제 Material에 붙였을 때와 같은 RuntimeShaderLibrary/Reflection 경로를 타야 미리보기만 따로 맞는 일을 막을 수 있다.
+                loadedPreviewMaterial = true;
+            }
+            else
+            {
+                loadedPreviewMaterial = material.LoadFromFile(entry.Path);
+            }
+
+            if (loadedPreviewMaterial)
             {
                 preview.Material = material;
                 preview.AlbedoColor = material.AlbedoColor;
@@ -4271,6 +4458,23 @@ namespace CCEngine
                 preview.CaptureFailed = false;
                 preview.CapturePending = false;
                 preview.CaptureAttempts = 0;
+                DecodedPreviewPixels cachedPreview;
+                if (preview.CapturedPixels.empty() &&
+                    LoadPreviewCacheFile(GetMaterialPreviewCachePath(entry.Path), cachedPreview) &&
+                    HasVisibleMaterialPreviewPixels(cachedPreview.Pixels))
+                {
+                    ForcePreviewAlphaOpaque(cachedPreview.Pixels);
+                    preview.CapturedPixels = std::move(cachedPreview.Pixels);
+                    preview.CapturedPixelWidth = cachedPreview.Width;
+                    preview.CapturedPixelHeight = cachedPreview.Height;
+                    preview.CapturedTexture.reset(Texture2D::Create((uint32_t)preview.CapturedPixelWidth, (uint32_t)preview.CapturedPixelHeight, preview.CapturedPixels.data()));
+                    preview.CapturedFromInspector = true;
+                    // 디스크 캐시에서 픽셀이 복원되면 썸네일 데이터는 이미 준비된 상태다.
+                    // GPU 텍스처 핸들은 렌더러 상태에 따라 늦게 붙을 수 있으므로 픽셀 보유 여부를 기준으로 성공 처리한다.
+                    preview.Rendered = !preview.CapturedPixels.empty();
+                    preview.Dirty = !preview.Rendered;
+                    preview.CaptureFailed = !preview.Rendered;
+                }
                 // 파일이 갱신되었어도 새 렌더 결과가 준비되기 전까지 마지막 정상 프리뷰를 유지한다.
                 // 상용 에디터처럼 썸네일이 순간적으로 빈 회색 칸으로 돌아가는 깜박임을 막기 위한 캐시 정책이다.
                 AppendThumbnailDebugLog("material cache loaded: " + key);
@@ -4533,6 +4737,8 @@ namespace CCEngine
                     preview.CapturedPixelWidth = cropped.Width;
                     preview.CapturedPixelHeight = cropped.Height;
                     preview.CapturedFromInspector = false;
+                    if (!preview.SourcePath.empty())
+                        SavePreviewCacheFile(GetMaterialPreviewCachePath(preview.SourcePath), cropped);
                 }
                 preview.CapturedTexture.reset(cropped.Success ? Texture2D::Create((uint32_t)cropped.Width, (uint32_t)cropped.Height, cropped.Pixels.data()) : nullptr);
                 AppendThumbnailDebugLog(std::string("material texture create: cropped=") + std::to_string(cropped.Success) +
@@ -4714,11 +4920,12 @@ namespace CCEngine
             constexpr int MaxPreparedMaterialPreviewsPerFrame = 48;
             for (const AssetEntry& entry : m_ViewEntries)
             {
-                if (entry.Type != AssetType::Material && !IsMaterialAssetPath(entry.Path))
+                if (entry.Type != AssetType::Material && entry.Type != AssetType::Shader && !IsMaterialAssetPath(entry.Path))
                     continue;
 
                 // 브라우저 UI가 텍스처를 그리기 전에 캐시 항목부터 만들어 둔다.
                 // 렌더는 아래 UpdateMaterialPreviewThumbnails에서 나눠 처리해서 폴더 진입 순간의 멈춤을 줄인다.
+                // Shader도 임시 Material을 만들어 같은 큐에서 렌더한다.
                 GetMaterialPreviewColor(entry);
                 if (++preparedCount >= MaxPreparedMaterialPreviewsPerFrame)
                     break;
@@ -4868,7 +5075,7 @@ namespace CCEngine
 
         void AssetBrowserPanel::DrawAssetPreview(const AssetEntry& entry, float x, float y, float size)
         {
-            if (entry.Type == AssetType::Material || IsMaterialAssetPath(entry.Path))
+            if (entry.Type == AssetType::Material || entry.Type == AssetType::Shader || IsMaterialAssetPath(entry.Path))
             {
                 DrawMaterialPreview(entry, x, y, size);
                 return;
@@ -4934,6 +5141,14 @@ namespace CCEngine
                 case AssetType::Model:
                     iconColor = { 0.35f, 0.56f, 0.38f, 1.0f };
                     label = "MDL";
+                    break;
+                case AssetType::Shader:
+                    iconColor = { 0.42f, 0.46f, 0.72f, 1.0f };
+                    label = "SHD";
+                    break;
+                case AssetType::VisualShader:
+                    iconColor = { 0.36f, 0.58f, 0.78f, 1.0f };
+                    label = "VSH";
                     break;
                 case AssetType::FbxMesh:
                     iconColor = { 0.42f, 0.62f, 0.86f, 1.0f };
@@ -5826,6 +6041,10 @@ namespace CCEngine
                             BeginCreateFolder();
                         else if (command == "Create Material")
                             CreateMaterialInCurrentDirectory();
+                        else if (command == "Create Shader")
+                            CreateShaderInCurrentDirectory();
+                        else if (command == "Create Visual Shader")
+                            CreateVisualShaderInCurrentDirectory();
                         else if (command == "Refresh")
                             RefreshCurrentFolder(false);
                         else if (command == "Refresh All")
@@ -5852,8 +6071,6 @@ namespace CCEngine
                             ShowSelectedEntryInFolder();
                         else if (command == "Show in Explorer")
                             RevealSelectedEntryInExplorer();
-                        else if (command == "Run QA Checks")
-                            RunQualityRegressionChecks();
                         else if (command == "Rename")
                             BeginRenameSelected();
                         else if (command == "Delete")
@@ -6024,9 +6241,10 @@ namespace CCEngine
                         ClearSelection();
                         m_ContextMenuItems.push_back("Create Folder");
                         m_ContextMenuItems.push_back("Create Material");
+                        m_ContextMenuItems.push_back("Create Shader");
+                        m_ContextMenuItems.push_back("Create Visual Shader");
                         m_ContextMenuItems.push_back("Refresh");
                         m_ContextMenuItems.push_back("Refresh All");
-                        m_ContextMenuItems.push_back("Run QA Checks");
                     }
 
                     m_ContextMenuVisible = !m_ContextMenuItems.empty();

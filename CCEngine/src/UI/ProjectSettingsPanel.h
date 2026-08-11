@@ -38,6 +38,7 @@ namespace CCEngine::UI
         Button* m_BtnGraphicsPage = nullptr;
         Button* m_BtnInputPage = nullptr;
         TextInput* m_ProjectNameInput = nullptr;
+        TextInput* m_VisualStudioPathInput = nullptr;
         TextInput* m_GameWidthInput = nullptr;
         TextInput* m_GameHeightInput = nullptr;
         KeyBindingInput* m_MoveForwardInput = nullptr;
@@ -48,6 +49,8 @@ namespace CCEngine::UI
         KeyBindingInput* m_MoveDownInput = nullptr;
         Button* m_BtnSetStartScene = nullptr;
         Button* m_BtnOpenStartScene = nullptr;
+        Button* m_BtnDetectVisualStudio = nullptr;
+        Button* m_BtnBrowseVisualStudio = nullptr;
         Button* m_BtnSaveSettings = nullptr;
         Button* m_BtnApplyResolution = nullptr;
     };

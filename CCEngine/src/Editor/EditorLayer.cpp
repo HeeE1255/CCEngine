@@ -8,6 +8,10 @@
 #include "Renderer/Texture.h"
 #include "Renderer/Font.h"
 #include "Renderer/RendererHandle.h"
+#include "Renderer/ShaderCompiler.h"
+#include "Renderer/RuntimeShaderLibrary.h"
+#include "Renderer/ShaderAsset.h"
+#include "Renderer/VisualShaderAsset.h"
 #include "Editor/EditorQATestRunner.h"
 #include "Scene/Components.h"
 #include "Scene/PrefabSerializer.h"
@@ -2907,6 +2911,232 @@ namespace CCEngine {
                 return RunEditorUIInputRegressionChecks();
             });
 
+        runner.AddTest("Shader.ReflectionMaterialBindings", []()
+            {
+                EditorQATestResult result;
+                result.Name = "Shader.ReflectionMaterialBindings";
+
+                std::error_code ec;
+                std::filesystem::path qaRoot = std::filesystem::current_path() / "local" / "qa" / "shader-reflection";
+                std::filesystem::create_directories(qaRoot, ec);
+                if (ec)
+                {
+                    result.Passed = false;
+                    result.Message = "Could not create shader reflection QA directory.";
+                    return result;
+                }
+
+                auto writeShader = [](const std::filesystem::path& path, const std::string& materialBufferRegister) -> bool
+                {
+                    std::ofstream shader(path, std::ios::trunc);
+                    if (!shader.is_open())
+                        return false;
+
+                    shader
+                        << "// @property Color AlbedoColor = 1,1,1,1\n"
+                        << "// @property Texture2D AlbedoTexture\n"
+                        << "cbuffer CameraBuffer : register(b0) { matrix ViewProjection; };\n"
+                        << "cbuffer ObjectBuffer : register(b1) { matrix Transform; };\n"
+                        << "cbuffer MaterialPropertyBuffer : register(" << materialBufferRegister << ") { float4 AlbedoColor; float4 PropertyColors[8]; float4 PropertyScalars[4]; float4 PropertyToggles[4]; float4 SurfaceValues; };\n"
+                        << "Texture2D AlbedoTexture : register(t0);\n"
+                        << "SamplerState LinearSampler : register(s0);\n"
+                        << "struct VSInput { float3 Position : POSITION; float3 Normal : NORMAL; float2 TexCoord : TEXCOORD0; };\n"
+                        << "struct PSInput { float4 Position : SV_POSITION; float2 TexCoord : TEXCOORD0; };\n"
+                        << "PSInput VSMain(VSInput input) { PSInput output; output.Position = mul(mul(float4(input.Position, 1.0f), Transform), ViewProjection); output.TexCoord = input.TexCoord; return output; }\n"
+                        << "float4 PSMain(PSInput input) : SV_TARGET { return AlbedoTexture.Sample(LinearSampler, input.TexCoord) * AlbedoColor; }\n";
+                    return shader.good();
+                };
+
+                const std::filesystem::path validShader = qaRoot / "ReflectionValid.hlsl";
+                const std::filesystem::path invalidShader = qaRoot / "ReflectionInvalid.hlsl";
+                if (!writeShader(validShader, "b4") || !writeShader(invalidShader, "b2"))
+                {
+                    result.Passed = false;
+                    result.Message = "Could not write shader reflection QA sources.";
+                    return result;
+                }
+
+                ShaderCompileResult validResult = ShaderCompiler::CompileHlslFile(validShader, true);
+                ShaderCompileResult invalidResult = ShaderCompiler::CompileHlslFile(invalidShader, true);
+
+                // Reflection QA는 Material UI와 HLSL 슬롯 약속이 어긋났을 때 바로 잡아내는지 확인한다.
+                // b4는 엔진이 실제로 Material 값을 넣는 슬롯이고, b2는 스킨드 메쉬 본 행렬 슬롯이라 실패해야 한다.
+                const bool invalidWasRejectedByReflection =
+                    !invalidResult.Success && !invalidResult.ReflectionErrors.empty();
+
+                result.Passed = validResult.Success && invalidWasRejectedByReflection;
+                result.Message = result.Passed
+                    ? "Shader reflection accepted b4 Material properties and rejected a conflicting b2 Material buffer."
+                    : "Shader reflection binding validation did not match expected pass/fail behavior.";
+                return result;
+            });
+
+        runner.AddTest("Shader.AssetWorkflow", []()
+            {
+                EditorQATestResult result;
+                result.Name = "Shader.AssetWorkflow";
+
+                const std::filesystem::path qaRoot = std::filesystem::current_path() / "assets" / "__qa_shader_workflow";
+                const std::filesystem::path shaderPath = qaRoot / "WorkflowShader.hlsl";
+                const std::filesystem::path movedShaderPath = qaRoot / "Moved" / "WorkflowShaderRenamed.hlsl";
+                const std::filesystem::path materialPath = qaRoot / "WorkflowMaterial.ccmat";
+                const std::filesystem::path visualShaderPath = qaRoot / "WorkflowVisual.ccvshader";
+
+                std::error_code ec;
+                std::filesystem::remove_all(qaRoot, ec);
+                ec.clear();
+                std::filesystem::create_directories(qaRoot, ec);
+                if (ec)
+                {
+                    result.Passed = false;
+                    result.Message = "Could not prepare shader workflow QA folder.";
+                    return result;
+                }
+
+                auto fail = [&result, &qaRoot](const std::string& message)
+                {
+                    std::error_code cleanupEc;
+                    std::filesystem::remove_all(qaRoot, cleanupEc);
+                    result.Passed = false;
+                    result.Message = message;
+                    return result;
+                };
+
+                ShaderAsset shader = ShaderAsset::CreateTemplate("WorkflowShader", "Lit");
+                if (!shader.SaveToFile(shaderPath))
+                    return fail("Could not save default HLSL shader asset.");
+
+                AssetDatabase::EnsureMetaFile(shaderPath);
+                const std::string shaderGuid = AssetDatabase::GetGuidFromPath(shaderPath);
+                if (shaderGuid.empty())
+                    return fail("Shader meta GUID was not created.");
+
+                ShaderCompileResult defaultCompile = ShaderCompiler::CompileHlslFile(shaderPath, true);
+                if (!defaultCompile.Success)
+                    return fail("Default shader template did not compile: " + defaultCompile.Summary);
+
+                std::ofstream customShader(shaderPath, std::ios::trunc);
+                if (!customShader.is_open())
+                    return fail("Could not rewrite shader for custom property QA.");
+
+                customShader
+                    << "// @property Color AlbedoColor = 0.8,0.6,0.4,1\n"
+                    << "// @property Texture2D AlbedoTexture\n"
+                    << "// @property Float QAIntensity = 0.5 range(0,1)\n"
+                    << "cbuffer CameraBuffer : register(b0) { matrix ViewProjection; };\n"
+                    << "cbuffer ObjectBuffer : register(b1) { matrix Transform; };\n"
+                    << "cbuffer MaterialPropertyBuffer : register(b4) { float4 AlbedoColor; float4 PropertyColors[8]; float4 PropertyScalars[4]; float4 PropertyToggles[4]; float4 SurfaceValues; };\n"
+                    << "Texture2D AlbedoTexture : register(t0);\n"
+                    << "SamplerState LinearSampler : register(s0);\n"
+                    << "struct VSInput { float3 Position : POSITION; float3 Normal : NORMAL; float2 TexCoord : TEXCOORD0; };\n"
+                    << "struct PSInput { float4 Position : SV_POSITION; float2 TexCoord : TEXCOORD0; };\n"
+                    << "PSInput VSMain(VSInput input) { PSInput output; output.Position = mul(mul(float4(input.Position, 1.0f), Transform), ViewProjection); output.TexCoord = input.TexCoord; return output; }\n"
+                    << "float4 PSMain(PSInput input) : SV_TARGET { float intensity = PropertyScalars[0].x; return AlbedoTexture.Sample(LinearSampler, input.TexCoord) * AlbedoColor * intensity; }\n";
+                customShader.close();
+
+                ShaderCompileResult customCompile = ShaderCompiler::CompileHlslFile(shaderPath, true);
+                if (!customCompile.Success)
+                    return fail("Custom shader property compile failed: " + customCompile.Summary);
+
+                ShaderCacheStatus compiledStatus = ShaderCompiler::GetHlslCacheStatus(shaderPath);
+                if (!compiledStatus.VertexBytecodeExists || !compiledStatus.PixelBytecodeExists)
+                    return fail("Compiled shader bytecode cache was not created.");
+
+                std::ofstream brokenShader(shaderPath, std::ios::trunc);
+                if (!brokenShader.is_open())
+                    return fail("Could not rewrite shader for failure QA.");
+                brokenShader << "this is not valid hlsl\n";
+                brokenShader.close();
+
+                ShaderCompileResult brokenCompile = ShaderCompiler::CompileHlslFile(shaderPath, true);
+                ShaderCacheStatus afterFailureStatus = ShaderCompiler::GetHlslCacheStatus(shaderPath);
+
+                // 실패한 컴파일은 마지막으로 성공한 bytecode를 지우면 안 된다.
+                // 상용 엔진은 사용자가 코드를 고치는 동안 화면을 완전히 잃지 않도록 이전 산출물이나 에러 셰이더를 안전망으로 둔다.
+                if (brokenCompile.Success || !afterFailureStatus.VertexBytecodeExists || !afterFailureStatus.PixelBytecodeExists)
+                    return fail("Failed shader compile did not preserve the previous bytecode cache.");
+
+                MaterialAsset brokenMaterial = MaterialAsset::CreateDefault("Broken Shader Material");
+                brokenMaterial.ShaderGuid = shaderGuid;
+                brokenMaterial.ShaderPath = shaderPath.string();
+
+                RuntimeShaderLibrary::Invalidate(shaderPath);
+                std::shared_ptr<Shader> runtimeShader = RuntimeShaderLibrary::GetShaderForMaterial(brokenMaterial);
+                RuntimeShaderStatus runtimeStatus = RuntimeShaderLibrary::GetStatusForMaterial(brokenMaterial);
+                if (!runtimeShader || !runtimeStatus.HasEntry || !runtimeStatus.Failed || !runtimeStatus.UsingErrorShader)
+                    return fail("Runtime shader failure did not switch to the error shader status.");
+
+                shader.Source = ShaderAsset::MakeTemplateSource("WorkflowShader", "Lit");
+                if (!shader.SaveToFile(shaderPath))
+                    return fail("Could not restore valid shader source.");
+                ShaderCompileResult restoredCompile = ShaderCompiler::CompileHlslFile(shaderPath, true);
+                if (!restoredCompile.Success)
+                    return fail("Restored shader source did not compile.");
+
+                MaterialAsset material = MaterialAsset::CreateDefault("WorkflowMaterial");
+                material.ShaderGuid = shaderGuid;
+                material.ShaderPath = shaderPath.string();
+                if (!material.SaveToFile(materialPath))
+                    return fail("Could not save material with shader GUID reference.");
+                AssetDatabase::EnsureMetaFile(materialPath);
+
+                if (!AssetDatabase::MoveAsset(shaderPath, movedShaderPath))
+                    return fail("Could not move shader asset with its meta file.");
+                AssetDatabase::Scan(std::filesystem::current_path() / "assets");
+
+                MaterialAsset reloadedMaterial;
+                if (!reloadedMaterial.LoadFromFile(materialPath))
+                    return fail("Could not reload material after shader move.");
+
+                // Material은 경로가 아니라 GUID를 주 참조로 쓴다.
+                // 그래서 셰이더 파일 이름이나 폴더가 바뀌어도 meta GUID만 유지되면 새 경로로 자동 복구된다.
+                std::filesystem::path resolvedShaderPath = AssetDatabase::GetPathFromGuid(shaderGuid);
+                const bool guidResolvedMove =
+                    !resolvedShaderPath.empty() &&
+                    std::filesystem::equivalent(resolvedShaderPath, movedShaderPath, ec) &&
+                    !ec;
+                ec.clear();
+                const bool materialResolvedMove =
+                    !reloadedMaterial.ShaderPath.empty() &&
+                    std::filesystem::equivalent(reloadedMaterial.ShaderPath, movedShaderPath, ec) &&
+                    !ec;
+                if (!guidResolvedMove || !materialResolvedMove)
+                    return fail(
+                        "Shader GUID reference did not resolve to the moved shader path. guidResolved=" +
+                        std::string(guidResolvedMove ? "true" : "false") +
+                        ", materialResolved=" + (materialResolvedMove ? "true" : "false") +
+                        ", resolved=" + resolvedShaderPath.string() +
+                        ", materialPath=" + reloadedMaterial.ShaderPath);
+
+                VisualShaderAsset visualShader = VisualShaderAsset::CreateDefault("WorkflowVisual");
+                if (!visualShader.SaveToFile(visualShaderPath) || !visualShader.SaveGeneratedHlsl(visualShaderPath))
+                    return fail("Could not save visual shader graph and generated HLSL.");
+
+                const std::filesystem::path generatedHlslPath = VisualShaderAsset::GetGeneratedHlslPath(visualShaderPath);
+                if (!std::filesystem::exists(visualShaderPath, ec) || ec || !std::filesystem::exists(generatedHlslPath, ec) || ec)
+                    return fail("Visual shader graph or generated HLSL file is missing.");
+
+                AssetDatabase::EnsureMetaFile(visualShaderPath);
+                AssetDatabase::EnsureMetaFile(generatedHlslPath);
+                const std::string visualShaderGuid = AssetDatabase::GetGuidFromPath(visualShaderPath);
+                const std::string generatedShaderGuid = AssetDatabase::GetGuidFromPath(generatedHlslPath);
+                if (visualShaderGuid.empty() || generatedShaderGuid.empty())
+                    return fail("Visual shader graph or generated HLSL did not receive a GUID.");
+
+                ShaderCompileResult generatedCompile = ShaderCompiler::CompileHlslFile(generatedHlslPath, true);
+                if (!generatedCompile.Success)
+                    return fail("Generated visual shader HLSL did not compile: " + generatedCompile.Summary);
+
+                RuntimeShaderLibrary::Invalidate(shaderPath);
+                RuntimeShaderLibrary::Invalidate(movedShaderPath);
+                RuntimeShaderLibrary::Invalidate(generatedHlslPath);
+                std::filesystem::remove_all(qaRoot, ec);
+
+                result.Passed = true;
+                result.Message = "Shader assets compile, fail safely, preserve GUID references, and generate Visual Shader HLSL.";
+                return result;
+            });
+
         // 테스트 러너는 결과를 구조화해서 모으고, 콘솔 출력은 마지막에 한 번만 한다.
         // 이렇게 해야 나중에 CLI 실행, UI 버튼 실행, 로그 파일 저장이 같은 결과 객체를 공유할 수 있다.
         EditorQATestSummary summary = runner.Run();
@@ -3124,9 +3354,6 @@ namespace CCEngine {
 
     void EditorLayer::SelectAssetForInspection(const std::filesystem::path& assetPath, const std::string& assetType)
     {
-        if (assetType != "material")
-            return;
-
         for (UI::InspectorPanel* inspector : m_InspectorPanels)
         {
             if (inspector && inspector->IsVisible())
@@ -3746,6 +3973,11 @@ namespace CCEngine {
                             browser->ApplyMaterialPreviewTexture(path, texture);
                     }
                 });
+            inspector->SetShaderEditorOpenCallback(
+                [this](const std::filesystem::path& path)
+                {
+                    OpenCodeAssetInExternalEditor(path);
+                });
             if (m_HierarchyPanel)
                 inspector->SetSelectedEntity(m_HierarchyPanel->GetSelectedEntity());
             m_InspectorPanels.push_back(inspector);
@@ -3759,6 +3991,7 @@ namespace CCEngine {
             browser->SetOnModelSelected([this](const std::string& path) { ImportModelAsset(path); });
             browser->SetOnSceneSelected([this](const std::string& path) { OpenScene(path); });
             browser->SetOnAssetSelected([this](const std::string& path, const std::string& type) { SelectAssetForInspection(path, type); });
+            browser->SetOnCodeAssetOpened([this](const std::string& path) { OpenCodeAssetInExternalEditor(path); });
             browser->SetOnAssetDropped([this](const std::string& path, const std::string& type, float x, float y) { HandleAssetDropped(path, type, x, y); });
             browser->SetOnAssetDatabaseChanged([this]()
                 {
@@ -3938,6 +4171,29 @@ namespace CCEngine {
         Application::Get()->SetModalInputWindow(validatorWindow);
     }
 
+    void EditorLayer::OpenCodeAssetInExternalEditor(const std::filesystem::path& assetPath)
+    {
+        if (assetPath.empty())
+            return;
+
+        std::filesystem::path editorPath = m_ProjectSettings.Data().VisualStudioPath;
+        if (editorPath.empty() || !std::filesystem::exists(editorPath))
+            editorPath = PlatformUtils::FindVisualStudioExecutable();
+
+        // 셰이더/스크립트 코드는 엔진 내부 텍스트 박스가 아니라 외부 IDE가 편집한다.
+        // 엔진은 프로젝트 설정에 저장된 IDE 경로와 에셋 GUID만 관리하고, 실제 코드 작성 경험은 Visual Studio에 맡긴다.
+        if (PlatformUtils::OpenFileWithApplication(editorPath, assetPath))
+        {
+            if (!editorPath.empty())
+                ConsoleLog::Info("Opened code asset in Visual Studio: " + assetPath.string());
+            else
+                ConsoleLog::Info("Opened code asset with OS default editor: " + assetPath.string());
+            return;
+        }
+
+        ConsoleLog::Error("Failed to open code asset: " + assetPath.string());
+    }
+
     void EditorLayer::OpenKeyBindingPickerWindow(UI::KeyBindingInput* targetInput)
     {
         if (!targetInput)
@@ -4051,6 +4307,11 @@ namespace CCEngine {
                     if (browser)
                         browser->ApplyMaterialPreviewTexture(path, texture);
                 }
+            });
+        m_InspectorPanel->SetShaderEditorOpenCallback(
+            [this](const std::filesystem::path& path)
+            {
+                OpenCodeAssetInExternalEditor(path);
             });
         m_RootUI->AddChild(m_InspectorPanel);
         m_InspectorPanels.push_back(m_InspectorPanel);

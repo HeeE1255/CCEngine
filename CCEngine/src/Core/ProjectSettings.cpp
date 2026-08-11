@@ -65,6 +65,7 @@ namespace CCEngine
         m_Data.MoveRightKey = data.value("MoveRightKey", m_Data.MoveRightKey);
         m_Data.MoveUpKey = data.value("MoveUpKey", m_Data.MoveUpKey);
         m_Data.MoveDownKey = data.value("MoveDownKey", m_Data.MoveDownKey);
+        m_Data.VisualStudioPath = data.value("VisualStudioPath", m_Data.VisualStudioPath);
         Normalize();
 
         ConsoleLog::Info("Project settings loaded: " + filepath);
@@ -87,6 +88,7 @@ namespace CCEngine
         data["MoveRightKey"] = safeData.MoveRightKey;
         data["MoveUpKey"] = safeData.MoveUpKey;
         data["MoveDownKey"] = safeData.MoveDownKey;
+        data["VisualStudioPath"] = safeData.VisualStudioPath;
 
         try
         {

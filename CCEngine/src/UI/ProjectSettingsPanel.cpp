@@ -1,11 +1,14 @@
 #include "UI/ProjectSettingsPanel.h"
 #include "Renderer/UIRenderer.h"
+#include "Core/ConsoleLog.h"
 #include "UI/Button.h"
 #include "UI/KeyBindingInput.h"
 #include "UI/TextInput.h"
+#include "Utils/PlatformUtils.h"
 #include "Events/MouseEvent.h"
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 
 namespace CCEngine::UI
 {
@@ -56,6 +59,18 @@ namespace CCEngine::UI
                     m_Settings->Data().ProjectName = text;
             });
         AddChild(m_ProjectNameInput);
+
+        m_VisualStudioPathInput = new TextInput("VisualStudioPathInput", "Visual Studio");
+        m_VisualStudioPathInput->SetAnchorMin(0.0f, 0.0f);
+        m_VisualStudioPathInput->SetAnchorMax(1.0f, 0.0f);
+        m_VisualStudioPathInput->SetOffsetMin(SidebarWidth + 120.0f, 322.0f);
+        m_VisualStudioPathInput->SetOffsetMax(-16.0f, 348.0f);
+        m_VisualStudioPathInput->SetOnTextChanged([this](const std::string& text)
+            {
+                if (m_Settings)
+                    m_Settings->Data().VisualStudioPath = text;
+            });
+        AddChild(m_VisualStudioPathInput);
 
         m_GameWidthInput = new TextInput("GameResolutionWidthInput", "Width");
         m_GameWidthInput->SetAnchorMin(0.0f, 0.0f);
@@ -128,6 +143,48 @@ namespace CCEngine::UI
         m_BtnOpenStartScene->SetOffsetMin(SidebarWidth + 120.0f, 230.0f);
         m_BtnOpenStartScene->SetOffsetMax(-16.0f, 256.0f);
         AddChild(m_BtnOpenStartScene);
+
+        m_BtnDetectVisualStudio = new Button("BtnDetectVisualStudio", "Detect Visual Studio");
+        m_BtnDetectVisualStudio->SetAnchorMin(0.0f, 0.0f);
+        m_BtnDetectVisualStudio->SetAnchorMax(0.0f, 0.0f);
+        m_BtnDetectVisualStudio->SetOffsetMin(SidebarWidth + 120.0f, 354.0f);
+        m_BtnDetectVisualStudio->SetOffsetMax(SidebarWidth + 300.0f, 380.0f);
+        m_BtnDetectVisualStudio->SetOnClick([this]()
+            {
+                std::filesystem::path visualStudio = PlatformUtils::FindVisualStudioExecutable();
+                if (visualStudio.empty())
+                {
+                    ConsoleLog::Warning("Visual Studio executable was not found. Use Browse to select devenv.exe.");
+                    return;
+                }
+
+                // 자동 탐색 결과도 바로 텍스트 필드에 반영한다.
+                // 저장은 기존 Project Settings 저장 버튼이 담당한다.
+                if (m_Settings)
+                    m_Settings->Data().VisualStudioPath = visualStudio.string();
+                if (m_VisualStudioPathInput)
+                    m_VisualStudioPathInput->SetText(visualStudio.string(), false);
+                ConsoleLog::Info("Visual Studio linked: " + visualStudio.string());
+            });
+        AddChild(m_BtnDetectVisualStudio);
+
+        m_BtnBrowseVisualStudio = new Button("BtnBrowseVisualStudio", "Browse...");
+        m_BtnBrowseVisualStudio->SetAnchorMin(0.0f, 0.0f);
+        m_BtnBrowseVisualStudio->SetAnchorMax(0.0f, 0.0f);
+        m_BtnBrowseVisualStudio->SetOffsetMin(SidebarWidth + 308.0f, 354.0f);
+        m_BtnBrowseVisualStudio->SetOffsetMax(SidebarWidth + 430.0f, 380.0f);
+        m_BtnBrowseVisualStudio->SetOnClick([this]()
+            {
+                std::string filepath = PlatformUtils::OpenFile("Visual Studio (devenv.exe)\0devenv.exe\0Executable (*.exe)\0*.exe\0");
+                if (filepath.empty())
+                    return;
+
+                if (m_Settings)
+                    m_Settings->Data().VisualStudioPath = filepath;
+                if (m_VisualStudioPathInput)
+                    m_VisualStudioPathInput->SetText(filepath, false);
+            });
+        AddChild(m_BtnBrowseVisualStudio);
 
         m_BtnSaveSettings = new Button("BtnSaveProjectSettings", "Save Project Settings");
         m_BtnSaveSettings->SetAnchorMin(0.0f, 0.0f);
@@ -223,8 +280,11 @@ namespace CCEngine::UI
         bool isGraphics = m_SelectedPage == SettingsPage::Graphics;
         bool isInput = m_SelectedPage == SettingsPage::Input;
         if (m_ProjectNameInput) m_ProjectNameInput->SetVisible(isProject);
+        if (m_VisualStudioPathInput) m_VisualStudioPathInput->SetVisible(isProject);
         if (m_BtnSetStartScene) m_BtnSetStartScene->SetVisible(isProject);
         if (m_BtnOpenStartScene) m_BtnOpenStartScene->SetVisible(isProject);
+        if (m_BtnDetectVisualStudio) m_BtnDetectVisualStudio->SetVisible(isProject);
+        if (m_BtnBrowseVisualStudio) m_BtnBrowseVisualStudio->SetVisible(isProject);
         if (m_BtnSaveSettings) m_BtnSaveSettings->SetVisible(true);
         if (m_GameWidthInput) m_GameWidthInput->SetVisible(isGraphics);
         if (m_GameHeightInput) m_GameHeightInput->SetVisible(isGraphics);
@@ -249,6 +309,8 @@ namespace CCEngine::UI
         const ProjectSettingsData& data = m_Settings->Data();
         if (m_ProjectNameInput)
             m_ProjectNameInput->SetText(data.ProjectName, false);
+        if (m_VisualStudioPathInput)
+            m_VisualStudioPathInput->SetText(data.VisualStudioPath, false);
         if (m_GameWidthInput)
             m_GameWidthInput->SetText(std::to_string(data.GameWidth), false);
         if (m_GameHeightInput)
@@ -330,6 +392,9 @@ namespace CCEngine::UI
             UIRenderer::DrawString("Game Size", detailX, y, { 0.68f, 0.68f, 0.68f, 1.0f });
             UIRenderer::DrawString(std::to_string(data.GameWidth) + " x " + std::to_string(data.GameHeight),
                 detailX + 120.0f, y, { 0.88f, 0.88f, 0.88f, 1.0f });
+            y += 74.0f;
+            UIRenderer::DrawString("External Tools", detailX, y, { 0.92f, 0.92f, 0.92f, 1.0f });
+            UIRenderer::DrawString("Visual Studio", detailX, y + 44.0f, { 0.68f, 0.68f, 0.68f, 1.0f });
         }
         else if (m_SelectedPage == SettingsPage::Graphics)
         {

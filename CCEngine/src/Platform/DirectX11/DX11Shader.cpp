@@ -1,7 +1,10 @@
 #include "Platform/DirectX11/DX11Shader.h"
 #include "Platform/DirectX11/DX11Context.h"
 #include <d3dcompiler.h> 
+#include <cstring>
+#include <fstream>
 #include <iostream>
+#include <vector>
 
 namespace CCEngine
 {
@@ -19,6 +22,34 @@ namespace CCEngine
         case ShaderDataType::Int4:   return DXGI_FORMAT_R32G32B32A32_SINT;
         }
         return DXGI_FORMAT_UNKNOWN;
+    }
+
+    namespace
+    {
+        bool ReadBytecodeFile(const std::filesystem::path& path, std::vector<char>& outBytes)
+        {
+            std::ifstream input(path, std::ios::binary | std::ios::ate);
+            if (!input.is_open())
+                return false;
+
+            const std::streamsize size = input.tellg();
+            if (size <= 0)
+                return false;
+
+            input.seekg(0, std::ios::beg);
+            outBytes.resize(static_cast<size_t>(size));
+            return input.read(outBytes.data(), size).good();
+        }
+
+        ID3DBlob* MakeBlobCopy(const std::vector<char>& bytes)
+        {
+            ID3DBlob* blob = nullptr;
+            if (FAILED(D3DCreateBlob(bytes.size(), &blob)) || !blob)
+                return nullptr;
+
+            memcpy(blob->GetBufferPointer(), bytes.data(), bytes.size());
+            return blob;
+        }
     }
 
     DX11Shader::DX11Shader(const std::string& filepath)
@@ -83,13 +114,48 @@ namespace CCEngine
 
         auto device = DX11Context::Get()->GetDevice();
 
-        device->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &m_VertexShader);
-        device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &m_PixelShader);
+        if (FAILED(device->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &m_VertexShader)) ||
+            FAILED(device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &m_PixelShader)))
+        {
+            vsBlob->Release();
+            psBlob->Release();
+            return;
+        }
 
         m_VSBlob = vsBlob;
         psBlob->Release();
+        m_IsValid = true;
 
         std::cout << "[Shader] 셰이더 로드 및 컴파일 완료: " << filepath << std::endl;
+    }
+
+    DX11Shader::DX11Shader(const std::filesystem::path& vertexBytecode, const std::filesystem::path& pixelBytecode)
+    {
+        std::vector<char> vertexBytes;
+        std::vector<char> pixelBytes;
+        if (!ReadBytecodeFile(vertexBytecode, vertexBytes) || !ReadBytecodeFile(pixelBytecode, pixelBytes))
+        {
+            std::cout << "[Shader Error] 셰이더 바이트코드를 읽을 수 없음: "
+                << vertexBytecode.string() << " / " << pixelBytecode.string() << std::endl;
+            return;
+        }
+
+        auto device = DX11Context::Get()->GetDevice();
+        if (FAILED(device->CreateVertexShader(vertexBytes.data(), vertexBytes.size(), nullptr, &m_VertexShader)) ||
+            FAILED(device->CreatePixelShader(pixelBytes.data(), pixelBytes.size(), nullptr, &m_PixelShader)))
+        {
+            std::cout << "[Shader Error] 셰이더 바이트코드로 GPU 셰이더 생성 실패: "
+                << vertexBytecode.string() << " / " << pixelBytecode.string() << std::endl;
+            return;
+        }
+
+        // InputLayout은 정점 셰이더 바이트코드가 있어야 만든다.
+        // 그래서 파일에서 읽은 VS bytecode를 Blob으로 복사해 DX11Shader가 소유하게 둔다.
+        m_VSBlob = MakeBlobCopy(vertexBytes);
+        if (!m_VSBlob)
+            return;
+
+        m_IsValid = true;
     }
 
     DX11Shader::~DX11Shader()
@@ -118,6 +184,8 @@ namespace CCEngine
     void DX11Shader::Bind() const
     {
         auto deviceContext = DX11Context::Get()->GetDeviceContext();
+        if (!m_IsValid)
+            return;
 
         deviceContext->IASetInputLayout(m_InputLayout);
         deviceContext->VSSetShader(m_VertexShader, nullptr, 0);
@@ -137,6 +205,9 @@ namespace CCEngine
     {
         if (m_InputLayout == nullptr)
         {
+            if (!m_IsValid || !m_VSBlob)
+                return;
+
             std::vector<D3D11_INPUT_ELEMENT_DESC> dx11Layout;
 
             for (const auto& element : layout)

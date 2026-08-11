@@ -2,6 +2,7 @@
 
 #include "Core.h"
 #include "Core/AssetDatabase.h"
+#include "Renderer/ShaderProperty.h"
 #include "Renderer/Texture.h"
 #include "json.hpp"
 
@@ -11,6 +12,7 @@
 #include <fstream>
 #include <memory>
 #include <string>
+#include <unordered_map>
 
 namespace CCEngine
 {
@@ -18,6 +20,8 @@ namespace CCEngine
     {
         std::string Name = "New Material";
         std::string ShaderName = "Base3D";
+        std::string ShaderGuid;
+        std::string ShaderPath;
         DirectX::XMFLOAT4 AlbedoColor = { 1.0f, 1.0f, 1.0f, 1.0f };
         float Roughness = 0.5f;
         float Metallic = 0.0f;
@@ -28,6 +32,7 @@ namespace CCEngine
         std::string NormalTexturePath;
 
         std::shared_ptr<Texture2D> AlbedoTexture;
+        std::unordered_map<std::string, ShaderPropertyValue> ShaderProperties;
 
         bool LoadFromFile(const std::filesystem::path& path)
         {
@@ -41,6 +46,10 @@ namespace CCEngine
             const nlohmann::json& data = root.contains("Material") ? root["Material"] : root;
             Name = data.value("Name", path.stem().string());
             ShaderName = data.value("Shader", "Base3D");
+            ShaderGuid = data.value("ShaderGuid", "");
+            ShaderPath = ResolveAssetPath(ShaderGuid, data.value("ShaderPath", ""));
+            if (!ShaderPath.empty())
+                ShaderName = std::filesystem::path(ShaderPath).stem().string();
             if (data.contains("AlbedoColor") && data["AlbedoColor"].is_array() && data["AlbedoColor"].size() >= 4)
             {
                 AlbedoColor = {
@@ -57,6 +66,31 @@ namespace CCEngine
             AlbedoTexturePath = ResolveAssetPath(AlbedoTextureGuid, data.value("AlbedoTexturePath", ""));
             NormalTextureGuid = data.value("NormalTextureGuid", "");
             NormalTexturePath = ResolveAssetPath(NormalTextureGuid, data.value("NormalTexturePath", ""));
+
+            ShaderProperties.clear();
+            if (data.contains("ShaderProperties") && data["ShaderProperties"].is_object())
+            {
+                for (auto it = data["ShaderProperties"].begin(); it != data["ShaderProperties"].end(); ++it)
+                {
+                    const nlohmann::json& propertyData = it.value();
+                    ShaderPropertyValue value;
+                    value.Type = ShaderPropertyParser::TypeFromString(propertyData.value("Type", "Unknown"));
+                    if (propertyData.contains("Color") && propertyData["Color"].is_array() && propertyData["Color"].size() >= 4)
+                    {
+                        value.Color = {
+                            propertyData["Color"][0].get<float>(),
+                            propertyData["Color"][1].get<float>(),
+                            propertyData["Color"][2].get<float>(),
+                            propertyData["Color"][3].get<float>()
+                        };
+                    }
+                    value.FloatValue = propertyData.value("Float", value.FloatValue);
+                    value.BoolValue = propertyData.value("Bool", value.BoolValue);
+                    value.TextureGuid = propertyData.value("TextureGuid", "");
+                    value.TexturePath = ResolveAssetPath(value.TextureGuid, propertyData.value("TexturePath", ""));
+                    ShaderProperties[it.key()] = value;
+                }
+            }
 
             AlbedoTexture.reset();
             if (!AlbedoTexturePath.empty() && std::filesystem::exists(AlbedoTexturePath))
@@ -77,6 +111,10 @@ namespace CCEngine
             auto& data = root["Material"];
             data["Name"] = Name;
             data["Shader"] = ShaderName;
+            if (!ShaderGuid.empty())
+                data["ShaderGuid"] = ShaderGuid;
+            if (!ShaderPath.empty())
+                data["ShaderPath"] = ShaderPath;
             data["AlbedoColor"] = { AlbedoColor.x, AlbedoColor.y, AlbedoColor.z, AlbedoColor.w };
             data["Roughness"] = Roughness;
             data["Metallic"] = Metallic;
@@ -92,6 +130,29 @@ namespace CCEngine
             if (!NormalTexturePath.empty())
                 data["NormalTexturePath"] = NormalTexturePath;
 
+            if (!ShaderProperties.empty())
+            {
+                auto& propertyRoot = data["ShaderProperties"];
+                for (const auto& [name, value] : ShaderProperties)
+                {
+                    auto& propertyData = propertyRoot[name];
+                    propertyData["Type"] = ShaderPropertyParser::TypeToString(value.Type);
+                    if (value.Type == ShaderPropertyType::Color)
+                        propertyData["Color"] = { value.Color.x, value.Color.y, value.Color.z, value.Color.w };
+                    else if (value.Type == ShaderPropertyType::Float)
+                        propertyData["Float"] = value.FloatValue;
+                    else if (value.Type == ShaderPropertyType::Toggle)
+                        propertyData["Bool"] = value.BoolValue;
+                    else if (value.Type == ShaderPropertyType::Texture2D)
+                    {
+                        if (!value.TextureGuid.empty())
+                            propertyData["TextureGuid"] = value.TextureGuid;
+                        if (!value.TexturePath.empty())
+                            propertyData["TexturePath"] = value.TexturePath;
+                    }
+                }
+            }
+
             std::ofstream file(path);
             if (!file.is_open())
                 return false;
@@ -105,6 +166,22 @@ namespace CCEngine
             MaterialAsset material;
             material.Name = name.empty() ? "New Material" : name;
             return material;
+        }
+
+        ShaderPropertyValue& EnsureShaderPropertyValue(const ShaderPropertyDefinition& definition)
+        {
+            ShaderPropertyValue& value = ShaderProperties[definition.Name];
+            if (value.Type == ShaderPropertyType::Unknown)
+            {
+                value.Type = definition.Type;
+                value.Color = definition.DefaultColor;
+                value.FloatValue = definition.DefaultFloat;
+                value.BoolValue = definition.DefaultBool;
+                value.TexturePath = definition.DefaultTexturePath;
+                if (!value.TexturePath.empty())
+                    value.TextureGuid = AssetDatabase::GetGuidFromPath(value.TexturePath);
+            }
+            return value;
         }
 
     private:

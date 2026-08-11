@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <filesystem>
 #include "Core.h"
 
 namespace CCEngine
@@ -12,5 +13,7 @@ namespace CCEngine
 
         // (미리 만들어두는) 파일 열기 창
         static std::string OpenFile(const char* filter, const char* initialDir = nullptr);
+        static std::filesystem::path FindVisualStudioExecutable();
+        static bool OpenFileWithApplication(const std::filesystem::path& applicationPath, const std::filesystem::path& filePath);
     };
 }

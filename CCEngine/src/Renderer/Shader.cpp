@@ -28,4 +28,28 @@ namespace CCEngine
         std::cout << "Unknown RendererAPI!" << std::endl;
         return nullptr;
     }
+
+    Shader* Shader::CreateFromBytecode(const std::filesystem::path& vertexBytecode, const std::filesystem::path& pixelBytecode)
+    {
+        switch (RendererAPI::GetAPI())
+        {
+        case RendererAPI::API::None:
+            std::cout << "RendererAPI::None is currently not supported!" << std::endl;
+            return nullptr;
+
+        case RendererAPI::API::DirectX11:
+            return new DX11Shader(vertexBytecode, pixelBytecode);
+
+        case RendererAPI::API::OpenGL:
+            std::cout << "OpenGL bytecode shader backend is currently not implemented." << std::endl;
+            return nullptr;
+
+        case RendererAPI::API::Vulkan:
+            std::cout << "Vulkan bytecode shader backend is currently not implemented." << std::endl;
+            return nullptr;
+        }
+
+        std::cout << "Unknown RendererAPI!" << std::endl;
+        return nullptr;
+    }
 }
