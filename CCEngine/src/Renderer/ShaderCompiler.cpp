@@ -312,6 +312,13 @@ namespace CCEngine
         return true;
     }
 
+    void ShaderCompiler::ClearCache()
+    {
+        // 컴파일 결과 문자열은 에디터 세션용 진단 캐시다.
+        // 종료 시 비워 두면 실제 해제되지 않은 리소스만 메모리 검사에 남는다.
+        std::unordered_map<std::string, ShaderCompileResult>().swap(s_LastCompileResults);
+    }
+
     ShaderCompileResult ShaderCompiler::CompileHlslFile(const std::filesystem::path& sourcePath, bool forceRecompile)
     {
         ShaderCompileResult result;

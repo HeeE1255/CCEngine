@@ -60,6 +60,7 @@ namespace CCEngine
             bool RequestAssetUndo();
             bool RequestAssetRedo();
             bool RunQualityRegressionChecks();
+            static void ShutdownSharedCaches();
 
             virtual void UpdateLayout(const DirectX::XMFLOAT2& parentPos, const DirectX::XMFLOAT2& parentSize) override;
             virtual void OnUpdate(float deltaTime) override;

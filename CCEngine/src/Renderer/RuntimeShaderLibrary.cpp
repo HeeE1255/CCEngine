@@ -149,7 +149,9 @@ namespace CCEngine
 
     void RuntimeShaderLibrary::Clear()
     {
-        s_ShaderCache.clear();
+        // 런타임 셰이더 캐시는 unordered_map 버킷도 메모리를 잡는다.
+        // 종료 시에는 clear가 아니라 빈 맵과 교체해서 버킷까지 반환한다.
+        std::unordered_map<std::string, RuntimeShaderEntry>().swap(s_ShaderCache);
         s_ErrorShader.reset();
     }
 }

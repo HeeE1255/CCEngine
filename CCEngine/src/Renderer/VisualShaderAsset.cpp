@@ -1,10 +1,70 @@
 #include "Renderer/VisualShaderAsset.h"
 
 #include <fstream>
+#include <functional>
+#include <unordered_map>
+#include <unordered_set>
 #include <sstream>
 
 namespace CCEngine
 {
+    namespace
+    {
+        const VisualShaderNode* FindNode(const std::unordered_map<int, const VisualShaderNode*>& nodesById, int id)
+        {
+            auto it = nodesById.find(id);
+            return it == nodesById.end() ? nullptr : it->second;
+        }
+
+        std::string BuildNodeExpression(
+            const std::unordered_map<int, const VisualShaderNode*>& nodesById,
+            int nodeId,
+            std::unordered_set<int>& visiting)
+        {
+            const VisualShaderNode* node = FindNode(nodesById, nodeId);
+            if (!node)
+                return "float4(1.0f, 0.0f, 1.0f, 1.0f)";
+
+            if (!visiting.insert(nodeId).second)
+                return "float4(1.0f, 0.0f, 1.0f, 1.0f)";
+
+            auto inputOrDefault = [&](int inputId, const char* fallback)
+            {
+                if (inputId < 0)
+                    return std::string(fallback);
+                return BuildNodeExpression(nodesById, inputId, visiting);
+            };
+
+            std::string expression;
+            switch (node->Type)
+            {
+                case VisualShaderNodeType::Color:
+                    expression = "AlbedoColor";
+                    break;
+                case VisualShaderNodeType::Texture2D:
+                    expression = "AlbedoTexture.Sample(LinearSampler, input.TexCoord)";
+                    break;
+                case VisualShaderNodeType::Multiply:
+                    expression = "(" + inputOrDefault(node->InputA, "float4(1.0f, 1.0f, 1.0f, 1.0f)") +
+                        " * " + inputOrDefault(node->InputB, "float4(1.0f, 1.0f, 1.0f, 1.0f)") + ")";
+                    break;
+                case VisualShaderNodeType::Add:
+                    expression = "saturate(" + inputOrDefault(node->InputA, "float4(0.0f, 0.0f, 0.0f, 0.0f)") +
+                        " + " + inputOrDefault(node->InputB, "float4(0.0f, 0.0f, 0.0f, 0.0f)") + ")";
+                    break;
+                case VisualShaderNodeType::Output:
+                    expression = inputOrDefault(node->InputA, "AlbedoColor");
+                    break;
+                default:
+                    expression = "AlbedoColor";
+                    break;
+            }
+
+            visiting.erase(nodeId);
+            return expression;
+        }
+    }
+
     VisualShaderAsset VisualShaderAsset::CreateDefault(const std::string& name)
     {
         VisualShaderAsset asset;
@@ -14,17 +74,20 @@ namespace CCEngine
         color.Id = 1;
         color.Type = VisualShaderNodeType::Color;
         color.Name = "Base Color";
+        color.Position = { 80.0f, 140.0f };
         color.Color = { 0.8f, 0.8f, 0.85f, 1.0f };
 
         VisualShaderNode texture;
         texture.Id = 2;
         texture.Type = VisualShaderNodeType::Texture2D;
         texture.Name = "Albedo Texture";
+        texture.Position = { 80.0f, 300.0f };
 
         VisualShaderNode multiply;
         multiply.Id = 3;
         multiply.Type = VisualShaderNodeType::Multiply;
         multiply.Name = "Texture x Color";
+        multiply.Position = { 360.0f, 220.0f };
         multiply.InputA = texture.Id;
         multiply.InputB = color.Id;
 
@@ -32,6 +95,7 @@ namespace CCEngine
         output.Id = 4;
         output.Type = VisualShaderNodeType::Output;
         output.Name = "Output";
+        output.Position = { 640.0f, 240.0f };
         output.InputA = multiply.Id;
 
         asset.Nodes = { color, texture, multiply, output };
@@ -63,6 +127,13 @@ namespace CCEngine
                 node.Id = nodeData.value("Id", 0);
                 node.Type = NodeTypeFromString(nodeData.value("Type", "Color"));
                 node.Name = nodeData.value("Name", "");
+                if (nodeData.contains("Position") && nodeData["Position"].is_array() && nodeData["Position"].size() >= 2)
+                {
+                    node.Position = {
+                        nodeData["Position"][0].get<float>(),
+                        nodeData["Position"][1].get<float>()
+                    };
+                }
                 if (nodeData.contains("Color") && nodeData["Color"].is_array() && nodeData["Color"].size() >= 4)
                 {
                     node.Color = {
@@ -95,6 +166,7 @@ namespace CCEngine
             nodeData["Id"] = node.Id;
             nodeData["Type"] = NodeTypeToString(node.Type);
             nodeData["Name"] = node.Name;
+            nodeData["Position"] = { node.Position.x, node.Position.y };
             nodeData["Color"] = { node.Color.x, node.Color.y, node.Color.z, node.Color.w };
             nodeData["InputA"] = node.InputA;
             nodeData["InputB"] = node.InputB;
@@ -128,14 +200,25 @@ namespace CCEngine
         // 그래프 원본은 JSON으로 저장하지만, 런타임은 기존 HLSL 컴파일 경로를 그대로 사용한다.
         // 노드 시스템을 키워도 최종 산출물이 같은 형식이면 Material/Reflection/캐시 코드를 다시 만들 필요가 없다.
         DirectX::XMFLOAT4 color = { 0.8f, 0.8f, 0.85f, 1.0f };
+        int outputNodeId = -1;
+        std::unordered_map<int, const VisualShaderNode*> nodesById;
         for (const VisualShaderNode& node : Nodes)
         {
+            nodesById[node.Id] = &node;
             if (node.Type == VisualShaderNodeType::Color)
             {
                 color = node.Color;
-                break;
+            }
+            else if (node.Type == VisualShaderNodeType::Output)
+            {
+                outputNodeId = node.Id;
             }
         }
+
+        std::unordered_set<int> visiting;
+        const std::string finalExpression = outputNodeId >= 0
+            ? BuildNodeExpression(nodesById, outputNodeId, visiting)
+            : "AlbedoColor";
 
         std::ostringstream source;
         source
@@ -183,8 +266,7 @@ namespace CCEngine
             << "}\n\n"
             << "float4 PSMain(PSInput input) : SV_TARGET\n"
             << "{\n"
-            << "    float4 textureColor = AlbedoTexture.Sample(LinearSampler, input.TexCoord);\n"
-            << "    return textureColor * AlbedoColor;\n"
+            << "    return " << finalExpression << ";\n"
             << "}\n";
         return source.str();
     }
@@ -196,6 +278,7 @@ namespace CCEngine
             case VisualShaderNodeType::Color: return "Color";
             case VisualShaderNodeType::Texture2D: return "Texture2D";
             case VisualShaderNodeType::Multiply: return "Multiply";
+            case VisualShaderNodeType::Add: return "Add";
             case VisualShaderNodeType::Output: return "Output";
             default: return "Color";
         }
@@ -205,6 +288,7 @@ namespace CCEngine
     {
         if (text == "Texture2D") return VisualShaderNodeType::Texture2D;
         if (text == "Multiply") return VisualShaderNodeType::Multiply;
+        if (text == "Add") return VisualShaderNodeType::Add;
         if (text == "Output") return VisualShaderNodeType::Output;
         return VisualShaderNodeType::Color;
     }

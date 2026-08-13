@@ -27,6 +27,7 @@
 #include "UI/InspectorItem.h"
 #include "UI/InspectorUtils.h"
 #include "UI/KeyBindingPickerPanel.h"
+#include "UI/MaterialGraphPanel.h"
 #include "Core/AssetDatabase.h"
 #include <windows.h>
 #include <array>
@@ -3976,7 +3977,10 @@ namespace CCEngine {
             inspector->SetShaderEditorOpenCallback(
                 [this](const std::filesystem::path& path)
                 {
-                    OpenCodeAssetInExternalEditor(path);
+                    if (path.extension() == ".ccvshader")
+                        OpenMaterialGraphEditorWindow(path);
+                    else
+                        OpenCodeAssetInExternalEditor(path);
                 });
             if (m_HierarchyPanel)
                 inspector->SetSelectedEntity(m_HierarchyPanel->GetSelectedEntity());
@@ -3991,7 +3995,14 @@ namespace CCEngine {
             browser->SetOnModelSelected([this](const std::string& path) { ImportModelAsset(path); });
             browser->SetOnSceneSelected([this](const std::string& path) { OpenScene(path); });
             browser->SetOnAssetSelected([this](const std::string& path, const std::string& type) { SelectAssetForInspection(path, type); });
-            browser->SetOnCodeAssetOpened([this](const std::string& path) { OpenCodeAssetInExternalEditor(path); });
+            browser->SetOnCodeAssetOpened([this](const std::string& path)
+                {
+                    std::filesystem::path assetPath = path;
+                    if (assetPath.extension() == ".ccvshader")
+                        OpenMaterialGraphEditorWindow(assetPath);
+                    else
+                        OpenCodeAssetInExternalEditor(assetPath);
+                });
             browser->SetOnAssetDropped([this](const std::string& path, const std::string& type, float x, float y) { HandleAssetDropped(path, type, x, y); });
             browser->SetOnAssetDatabaseChanged([this]()
                 {
@@ -4171,6 +4182,55 @@ namespace CCEngine {
         Application::Get()->SetModalInputWindow(validatorWindow);
     }
 
+    void EditorLayer::OpenMaterialGraphEditorWindow(const std::filesystem::path& graphPath)
+    {
+        if (!m_RootUI || graphPath.empty())
+            return;
+
+        if (!m_MaterialGraphPanel)
+        {
+            m_MaterialGraphPanel = new UI::MaterialGraphPanel("MaterialGraphEditorPanel");
+            m_MaterialGraphPanel->SetAnchorMin(0.0f, 0.0f);
+            m_MaterialGraphPanel->SetAnchorMax(0.0f, 0.0f);
+            m_MaterialGraphPanel->SetOffsetMin(280.0f, 120.0f);
+            m_MaterialGraphPanel->SetOffsetMax(1000.0f, 640.0f);
+            m_MaterialGraphPanel->SetGraphSavedCallback(
+                [this](const std::filesystem::path& savedGraph)
+                {
+                    for (UI::AssetBrowserPanel* browser : m_AssetBrowserPanels)
+                    {
+                        if (browser)
+                            browser->Refresh(false);
+                    }
+
+                    for (UI::InspectorPanel* inspector : m_InspectorPanels)
+                    {
+                        if (inspector)
+                            inspector->RequestRebuild();
+                    }
+
+                    QueueAssetReferenceValidation();
+                    ConsoleLog::Info("Generated shader updated: " + VisualShaderAsset::GetGeneratedHlslPath(savedGraph).string());
+                });
+            m_RootUI->AddChild(m_MaterialGraphPanel);
+        }
+
+        // .ccvshader는 사용자가 수정하는 원본 그래프이고, generated.hlsl은 저장 시 갱신되는 산출물이다.
+        // 두 경로를 섞으면 사용자가 HLSL을 직접 고쳐도 다음 저장에서 덮이는 문제가 생긴다.
+        if (!m_MaterialGraphPanel->LoadGraph(graphPath))
+        {
+            ConsoleLog::Error("Failed to open material graph: " + graphPath.string());
+            return;
+        }
+
+        // 닫힌 패널을 다시 열 때는 같은 객체를 재사용하므로 visible/front 상태를 명시적으로 복구한다.
+        // 창 객체가 살아 있어도 hidden 상태면 사용자는 "열리지 않았다"고 보게 된다.
+        m_MaterialGraphPanel->SetVisible(true);
+        m_MaterialGraphPanel->BringToFront();
+        ConsoleLog::Info("Material graph editor opened: " + graphPath.string());
+        BringEditorOverlaysToFront();
+    }
+
     void EditorLayer::OpenCodeAssetInExternalEditor(const std::filesystem::path& assetPath)
     {
         if (assetPath.empty())
@@ -4311,7 +4371,10 @@ namespace CCEngine {
         m_InspectorPanel->SetShaderEditorOpenCallback(
             [this](const std::filesystem::path& path)
             {
-                OpenCodeAssetInExternalEditor(path);
+                if (path.extension() == ".ccvshader")
+                    OpenMaterialGraphEditorWindow(path);
+                else
+                    OpenCodeAssetInExternalEditor(path);
             });
         m_RootUI->AddChild(m_InspectorPanel);
         m_InspectorPanels.push_back(m_InspectorPanel);
@@ -4470,6 +4533,14 @@ namespace CCEngine {
         m_AssetBrowserPanel->SetOnModelSelected([this](const std::string& path) { ImportModelAsset(path); });
         m_AssetBrowserPanel->SetOnSceneSelected([this](const std::string& path) { OpenScene(path); });
         m_AssetBrowserPanel->SetOnAssetSelected([this](const std::string& path, const std::string& type) { SelectAssetForInspection(path, type); });
+        m_AssetBrowserPanel->SetOnCodeAssetOpened([this](const std::string& path)
+            {
+                std::filesystem::path assetPath = path;
+                if (assetPath.extension() == ".ccvshader")
+                    OpenMaterialGraphEditorWindow(assetPath);
+                else
+                    OpenCodeAssetInExternalEditor(assetPath);
+            });
         m_AssetBrowserPanel->SetOnAssetDropped([this](const std::string& path, const std::string& type, float x, float y) { HandleAssetDropped(path, type, x, y); });
         m_AssetBrowserPanel->SetOnAssetDatabaseChanged([this]()
             {

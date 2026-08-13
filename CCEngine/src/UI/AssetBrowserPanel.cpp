@@ -50,6 +50,11 @@ namespace CCEngine
         {
             std::atomic<int> s_ActivePreviewLoads{ 0 };
             std::atomic<int> s_ActiveFbxMeshPreviewLoads{ 0 };
+            std::unordered_map<int, std::shared_ptr<Mesh>> s_PreviewMeshCache;
+            std::mutex s_ThumbnailDebugDumpMutex;
+            std::unordered_set<std::string> s_ThumbnailDebugDumpedLabels;
+            std::mutex s_ThumbnailDebugLogOnceMutex;
+            std::unordered_set<std::string> s_ThumbnailDebugLoggedKeys;
             constexpr float kToolbarButtonHeight = 22.0f;
             constexpr float kToolbarButtonGap = 8.0f;
             constexpr float kTypeFilterButtonWidth = 126.0f;
@@ -278,18 +283,15 @@ namespace CCEngine
                 if (!IsThumbnailDebugDumpEnabled())
                     return;
 
-                static std::mutex s_DumpMutex;
-                static std::unordered_set<std::string> s_DumpedLabels;
-
-                std::lock_guard<std::mutex> lock(s_DumpMutex);
-                if (s_DumpedLabels.contains(label) || s_DumpedLabels.size() >= 4)
+                std::lock_guard<std::mutex> lock(s_ThumbnailDebugDumpMutex);
+                if (s_ThumbnailDebugDumpedLabels.contains(label) || s_ThumbnailDebugDumpedLabels.size() >= 4)
                     return;
 
-                s_DumpedLabels.insert(label);
+                s_ThumbnailDebugDumpedLabels.insert(label);
                 std::filesystem::create_directories(GetThumbnailDebugDirectory());
 
                 std::ostringstream name;
-                name << std::setw(2) << std::setfill('0') << s_DumpedLabels.size() << "_" << SanitizeDebugFileName(label) << ".bmp";
+                name << std::setw(2) << std::setfill('0') << s_ThumbnailDebugDumpedLabels.size() << "_" << SanitizeDebugFileName(label) << ".bmp";
 
                 // 썸네일 문제는 렌더, 크롭, GPU 텍스처 업로드 중 어디서 깨지는지 나눠서 봐야 한다.
                 // 그래서 최종 UI가 아니라 썸네일 생성 중간 픽셀을 로컬 BMP로 남긴다.
@@ -318,11 +320,8 @@ namespace CCEngine
                 if (!IsThumbnailDebugDumpEnabled())
                     return;
 
-                static std::mutex s_LogOnceMutex;
-                static std::unordered_set<std::string> s_LoggedKeys;
-
-                std::lock_guard<std::mutex> lock(s_LogOnceMutex);
-                if (!s_LoggedKeys.insert(key).second)
+                std::lock_guard<std::mutex> lock(s_ThumbnailDebugLogOnceMutex);
+                if (!s_ThumbnailDebugLoggedKeys.insert(key).second)
                     return;
 
                 AppendThumbnailDebugLog(message);
@@ -330,10 +329,9 @@ namespace CCEngine
 
             std::shared_ptr<Mesh> CreatePreviewMeshForType(MeshComponent::MeshType type)
             {
-                static std::unordered_map<int, std::shared_ptr<Mesh>> s_MeshCache;
                 int key = static_cast<int>(type);
-                auto found = s_MeshCache.find(key);
-                if (found != s_MeshCache.end())
+                auto found = s_PreviewMeshCache.find(key);
+                if (found != s_PreviewMeshCache.end())
                     return found->second;
 
                 std::shared_ptr<Mesh> mesh;
@@ -350,7 +348,7 @@ namespace CCEngine
                 }
 
                 if (mesh)
-                    s_MeshCache[key] = mesh;
+                    s_PreviewMeshCache[key] = mesh;
                 return mesh;
             }
 
@@ -1886,6 +1884,34 @@ namespace CCEngine
             SetRootDirectory(std::filesystem::current_path() / "assets");
         }
 
+        void AssetBrowserPanel::ShutdownSharedCaches()
+        {
+            auto waitForPreviewJobs = [](std::atomic<int>& counter)
+            {
+                // 썸네일 로더는 백그라운드에서 파일을 읽는다.
+                // 종료 검사 직전에 작업이 남아 있으면 실제 누수가 아니어도 job 메모리가 살아 있으므로 짧게 합류 시간을 준다.
+                for (int i = 0; i < 200 && counter.load() > 0; ++i)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            };
+
+            waitForPreviewJobs(s_ActivePreviewLoads);
+            waitForPreviewJobs(s_ActiveFbxMeshPreviewLoads);
+
+            // 썸네일/프리팹 프리뷰에 쓰는 기본 메쉬는 모든 에셋 브라우저가 공유한다.
+            // 창 인스턴스가 사라져도 남는 캐시라 종료 루틴에서 별도로 반환한다.
+            std::unordered_map<int, std::shared_ptr<Mesh>>().swap(s_PreviewMeshCache);
+
+            {
+                std::lock_guard<std::mutex> lock(s_ThumbnailDebugDumpMutex);
+                std::unordered_set<std::string>().swap(s_ThumbnailDebugDumpedLabels);
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(s_ThumbnailDebugLogOnceMutex);
+                std::unordered_set<std::string>().swap(s_ThumbnailDebugLoggedKeys);
+            }
+        }
+
         void AssetBrowserPanel::SetRootDirectory(const std::filesystem::path& rootDirectory)
         {
             m_RootDirectory = rootDirectory;
@@ -2317,11 +2343,10 @@ namespace CCEngine
                 }
                 case AssetType::VisualShader:
                 {
-                    // Visual Shader 원본은 노드 그래프이고, 실제 컴파일 대상은 생성 HLSL이다.
-                    // 현재 1차 구현에서는 더블클릭 시 생성 HLSL을 열어 흐름을 끊지 않는다.
-                    std::filesystem::path generatedHlsl = VisualShaderAsset::GetGeneratedHlslPath(entry.Path);
-                    if (m_OnCodeAssetOpened && std::filesystem::exists(generatedHlsl))
-                        m_OnCodeAssetOpened(generatedHlsl.string());
+                    // Visual Shader는 원본 그래프가 사용자가 편집하는 에셋이다.
+                    // 생성 HLSL은 저장 결과물이므로 더블클릭은 그래프 편집기를 여는 쪽이 맞다.
+                    if (m_OnCodeAssetOpened)
+                        m_OnCodeAssetOpened(entry.Path.string());
                     break;
                 }
                 default:

@@ -329,6 +329,28 @@ namespace CCEngine
         s_Data.ActiveScene = nullptr;
     }
 
+    void ScriptEngine::Shutdown()
+    {
+        Stop();
+
+        // hostfxr.dll은 C# 런타임을 붙이기 위해 명시적으로 로드한 모듈이다.
+        // 엔진 종료 시 핸들을 놓아야 다음 실행과 누수 검사에서 스크립트 호스트 상태가 남지 않는다.
+        if (s_Data.HostfxrModule)
+        {
+            FreeLibrary(s_Data.HostfxrModule);
+            s_Data.HostfxrModule = nullptr;
+        }
+
+        s_Data.Initialize = nullptr;
+        s_Data.Shutdown = nullptr;
+        s_Data.Create = nullptr;
+        s_Data.Destroy = nullptr;
+        s_Data.InvokeLifecycle = nullptr;
+        s_Data.InvokePhysicsEvent = nullptr;
+        s_Data.Update = nullptr;
+        s_Data.RuntimeLoaded = false;
+    }
+
     bool ScriptEngine::CreateInstance(uint32_t entityID, const ScriptComponent& script)
     {
         if (!s_Data.Running || script.ClassName.empty())

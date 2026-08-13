@@ -33,6 +33,13 @@ namespace CCEngine {
                 }
             }
 
+            static void Clear()
+            {
+                // 컴포넌트 그리기 함수는 에디터 실행 중에만 쓰는 등록 테이블이다.
+                // 종료 시 비워 두면 람다 내부 캡처와 맵 버킷이 누수 검사에 남지 않는다.
+                std::unordered_map<std::type_index, std::function<void(Widget*, CCEngine::Entity)>>().swap(s_DrawFunctions);
+            }
+
         private:
             // 타입 인덱스를 키로 사용하여 렌더링 함수들을 저장하는 맵
             inline static std::unordered_map<std::type_index, std::function<void(Widget*, CCEngine::Entity)>> s_DrawFunctions;

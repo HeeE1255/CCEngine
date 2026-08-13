@@ -27,7 +27,9 @@ namespace CCEngine
 
     void ConsoleLog::Clear()
     {
-        s_Entries.clear();
+        // 로그 패널은 실행 중에는 capacity를 재사용해도 되지만,
+        // 종료 검사 전에는 버퍼까지 반환해야 남은 메모리가 누수로 보이지 않는다.
+        std::vector<ConsoleLogEntry>().swap(s_Entries);
     }
 
     const std::vector<ConsoleLogEntry>& ConsoleLog::GetEntries()

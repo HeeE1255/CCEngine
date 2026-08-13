@@ -244,6 +244,7 @@
     <ClInclude Include="src\UI\InspectorUtils.h" />
     <ClInclude Include="src\UI\KeyBindingInput.h" />
     <ClInclude Include="src\UI\KeyBindingPickerPanel.h" />
+    <ClInclude Include="src\UI\MaterialGraphPanel.h" />
     <ClInclude Include="src\UI\Panel.h" />
     <ClInclude Include="src\UI\ProjectSettingsPanel.h" />
     <ClInclude Include="src\UI\ScriptFieldWidget.h" />
@@ -328,6 +329,7 @@
     <ClCompile Include="src\UI\InspectorUtils.cpp" />
     <ClCompile Include="src\UI\KeyBindingInput.cpp" />
     <ClCompile Include="src\UI\KeyBindingPickerPanel.cpp" />
+    <ClCompile Include="src\UI\MaterialGraphPanel.cpp" />
     <ClCompile Include="src\UI\Panel.cpp" />
     <ClCompile Include="src\UI\ProjectSettingsPanel.cpp" />
     <ClCompile Include="src\UI\ScriptFieldWidget.cpp" />

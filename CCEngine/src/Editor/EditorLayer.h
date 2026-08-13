@@ -33,6 +33,7 @@
 #include "UI/HierarchyPanel.h"
 #include "UI/InspectorPanel.h"
 #include "UI/KeyBindingInput.h"
+#include "UI/MaterialGraphPanel.h"
 #include "GizmoSystem.h"
 
 #include <chrono>
@@ -108,6 +109,7 @@ namespace CCEngine {
         void OpenEditorWindow(int windowKind);
         void OpenProjectSettingsWindow();
         void OpenAssetReferenceValidatorWindow();
+        void OpenMaterialGraphEditorWindow(const std::filesystem::path& graphPath);
         void OpenCodeAssetInExternalEditor(const std::filesystem::path& assetPath);
         void OpenKeyBindingPickerWindow(UI::KeyBindingInput* targetInput);
         void BringEditorOverlaysToFront();
@@ -194,6 +196,7 @@ namespace CCEngine {
         UI::ConsolePanel* m_ConsolePanel = nullptr;
         UI::ProjectSettingsPanel* m_ProjectSettingsPanel = nullptr;
         UI::AssetReferenceValidatorPanel* m_AssetReferenceValidatorPanel = nullptr;
+        UI::MaterialGraphPanel* m_MaterialGraphPanel = nullptr;
         UI::Panel* m_HistoryContentPanel = nullptr;
         UI::VBoxContainer* m_HierarchyContainer = nullptr;
 

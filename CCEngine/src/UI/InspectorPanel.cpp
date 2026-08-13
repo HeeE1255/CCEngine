@@ -9,6 +9,7 @@
 #include "Renderer/ShaderAsset.h"
 #include "Renderer/ShaderCompiler.h"
 #include "Renderer/Texture.h"
+#include "Renderer/VisualShaderAsset.h"
 #include "Renderer/UIRenderer.h"
 #include "Renderer/Renderer2D.h"
 #include "Renderer/Framebuffer.h"
@@ -44,6 +45,9 @@ namespace CCEngine
     {
         namespace
         {
+            std::mutex s_MaterialPreviewDebugDumpMutex;
+            std::unordered_set<std::string> s_MaterialPreviewDebugDumpedLabels;
+
             DirectX::XMFLOAT4 ScaleColor(const DirectX::XMFLOAT4& color, float scale)
             {
                 return {
@@ -295,19 +299,16 @@ namespace CCEngine
                 if (!IsMaterialPreviewDebugEnabled())
                     return;
 
-                static std::mutex s_DumpMutex;
-                static std::unordered_set<std::string> s_DumpedLabels;
-
                 std::string label = "inspector_preview_" + SanitizeMaterialPreviewDebugName(materialPath.filename().string());
-                std::lock_guard<std::mutex> lock(s_DumpMutex);
-                if (s_DumpedLabels.contains(label) || s_DumpedLabels.size() >= 4)
+                std::lock_guard<std::mutex> lock(s_MaterialPreviewDebugDumpMutex);
+                if (s_MaterialPreviewDebugDumpedLabels.contains(label) || s_MaterialPreviewDebugDumpedLabels.size() >= 4)
                     return;
 
-                s_DumpedLabels.insert(label);
+                s_MaterialPreviewDebugDumpedLabels.insert(label);
                 std::filesystem::create_directories(GetMaterialPreviewDebugDirectory());
 
                 std::ostringstream name;
-                name << std::setw(2) << std::setfill('0') << s_DumpedLabels.size() << "_" << label << ".bmp";
+                name << std::setw(2) << std::setfill('0') << s_MaterialPreviewDebugDumpedLabels.size() << "_" << label << ".bmp";
 
                 // 인스펙터 프리뷰가 실제로 읽어 낸 원본 픽셀을 그대로 저장한다.
                 // 여기서 이미 회색이면 렌더 타깃 캡처 문제이고, 정상이면 이후 캐시/표시 단계 문제다.
@@ -328,6 +329,12 @@ namespace CCEngine
         {
             delete m_MaterialPreviewFramebuffer;
             m_MaterialPreviewFramebuffer = nullptr;
+        }
+
+        void InspectorPanel::ShutdownSharedCaches()
+        {
+            std::lock_guard<std::mutex> lock(s_MaterialPreviewDebugDumpMutex);
+            std::unordered_set<std::string>().swap(s_MaterialPreviewDebugDumpedLabels);
         }
 
         void InspectorPanel::SetSelectedEntity(Entity entity)
@@ -401,7 +408,7 @@ namespace CCEngine
             {
                 if (m_SelectedAssetType == "material")
                     BuildMaterialInspector();
-                else if (m_SelectedAssetType == "shader")
+                else if (m_SelectedAssetType == "shader" || m_SelectedAssetType == "visualshader")
                     BuildShaderInspector();
                 else
                     BuildGenericAssetInspector();
@@ -696,6 +703,76 @@ namespace CCEngine
 
         void InspectorPanel::BuildShaderInspector()
         {
+            if (m_SelectedAssetPath.extension() == ".ccvshader")
+            {
+                VisualShaderAsset graph;
+                if (!graph.LoadFromFile(m_SelectedAssetPath))
+                    graph = VisualShaderAsset::CreateDefault(m_SelectedAssetPath.stem().string());
+
+                auto infoItem = new UI::InspectorItem("VisualShaderInfoItem", "Material Graph");
+                infoItem->SetAnchorMin(0.0f, 0.0f);
+                infoItem->SetAnchorMax(1.0f, 0.0f);
+                AddChild(infoItem);
+
+                auto nameButton = new UI::Button("VisualShaderNameText", "Name: " + graph.Name);
+                nameButton->SetNormalColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+                nameButton->SetHoverColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+                infoItem->AddChild(nameButton);
+
+                auto pathButton = new UI::Button("VisualShaderPathText", "File: " + m_SelectedAssetPath.filename().string());
+                pathButton->SetNormalColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+                pathButton->SetHoverColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+                infoItem->AddChild(pathButton);
+
+                std::filesystem::path generatedPath = VisualShaderAsset::GetGeneratedHlslPath(m_SelectedAssetPath);
+                auto generatedButton = new UI::Button("VisualShaderGeneratedText", "Generated: " + generatedPath.filename().string());
+                generatedButton->SetNormalColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+                generatedButton->SetHoverColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+                infoItem->AddChild(generatedButton);
+
+                auto openGraphButton = new UI::Button("VisualShaderOpenGraphButton", "Open Material Graph");
+                openGraphButton->SetOnClick([this]()
+                    {
+                        if (m_OnOpenShaderEditor)
+                            m_OnOpenShaderEditor(m_SelectedAssetPath);
+                    });
+                infoItem->AddChild(openGraphButton);
+
+                auto generateButton = new UI::Button("VisualShaderGenerateButton", "Generate HLSL");
+                generateButton->SetOnClick([this]()
+                    {
+                        VisualShaderAsset currentGraph;
+                        if (!currentGraph.LoadFromFile(m_SelectedAssetPath))
+                        {
+                            ConsoleLog::Error("Visual shader graph load failed: " + m_SelectedAssetPath.string());
+                            return;
+                        }
+
+                        // 그래프 에셋은 편집 데이터이고 generated.hlsl은 컴파일 입력이다.
+                        // 사용자가 명시적으로 Generate를 누르면 두 파일의 관계를 즉시 다시 맞춘다.
+                        if (currentGraph.SaveGeneratedHlsl(m_SelectedAssetPath))
+                        {
+                            AssetDatabase::EnsureMetaFile(VisualShaderAsset::GetGeneratedHlslPath(m_SelectedAssetPath));
+                            ConsoleLog::Info("Visual shader HLSL generated: " + VisualShaderAsset::GetGeneratedHlslPath(m_SelectedAssetPath).string());
+                            if (m_OnAssetChanged)
+                                m_OnAssetChanged(m_SelectedAssetPath, m_SelectedAssetType);
+                        }
+                    });
+                infoItem->AddChild(generateButton);
+
+                auto openGeneratedButton = new UI::Button("VisualShaderOpenGeneratedButton", "Open Generated HLSL");
+                openGeneratedButton->SetOnClick([this, generatedPath]()
+                    {
+                        if (m_OnOpenShaderEditor)
+                            m_OnOpenShaderEditor(generatedPath);
+                    });
+                infoItem->AddChild(openGeneratedButton);
+
+                auto& window = CCEngine::Application::Get()->GetWindow();
+                UpdateLayout({ 0.0f, 0.0f }, { (float)window.GetWidth(), (float)window.GetHeight() });
+                return;
+            }
+
             ShaderAsset shader;
             if (!shader.LoadFromFile(m_SelectedAssetPath))
             {

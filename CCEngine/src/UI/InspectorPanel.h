@@ -21,6 +21,7 @@ namespace CCEngine
         public:
             InspectorPanel(const std::string& name, const std::string& title);
             ~InspectorPanel() override;
+            static void ShutdownSharedCaches();
 
             // 외부(하이어라키 등)에서 선택된 엔티티를 세팅
             void SetSelectedEntity(Entity entity);

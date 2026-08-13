@@ -35,6 +35,7 @@ namespace CCEngine
     public:
         static bool Start(Scene* scene);
         static void Stop();
+        static void Shutdown();
         static bool CreateInstance(uint32_t entityID, const ScriptComponent& script);
         static void DestroyInstance(uint32_t entityID);
         static void InvokeLifecycle(uint32_t entityID, ScriptLifecycleEvent eventType, float deltaTime = 0.0f);

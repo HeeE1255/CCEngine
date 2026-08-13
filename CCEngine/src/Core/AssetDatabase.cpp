@@ -933,6 +933,20 @@ namespace CCEngine
         }
     }
 
+    void AssetDatabase::Shutdown()
+    {
+        // 에셋 DB는 실행 중에는 계속 유지되는 캐시다.
+        // 종료 직전에는 직접 비워야 메모리 검사에서 정상 캐시가 누수로 남지 않는다.
+        std::unordered_map<std::string, AssetMetadata>().swap(s_GuidToMetadata);
+        std::unordered_map<std::string, std::string>().swap(s_PathToGuid);
+        std::unordered_map<std::string, std::filesystem::path>().swap(s_RecentAssetPathRedirects);
+        std::vector<OrphanMetaFile>().swap(s_LastOrphanMetas);
+        std::unordered_set<std::string>().swap(s_LoggedOrphanMetaKeys);
+        s_LastScanRoot = "assets";
+        s_HasScanned = false;
+        s_IsDirty = true;
+    }
+
     void AssetDatabase::MarkDirty(const std::filesystem::path& rootDirectory)
     {
         if (!rootDirectory.empty())

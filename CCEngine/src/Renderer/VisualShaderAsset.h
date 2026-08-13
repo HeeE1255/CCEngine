@@ -15,6 +15,7 @@ namespace CCEngine
         Color,
         Texture2D,
         Multiply,
+        Add,
         Output
     };
 
@@ -23,6 +24,7 @@ namespace CCEngine
         int Id = 0;
         VisualShaderNodeType Type = VisualShaderNodeType::Color;
         std::string Name;
+        DirectX::XMFLOAT2 Position = { 0.0f, 0.0f };
         DirectX::XMFLOAT4 Color = { 1.0f, 1.0f, 1.0f, 1.0f };
         int InputA = -1;
         int InputB = -1;

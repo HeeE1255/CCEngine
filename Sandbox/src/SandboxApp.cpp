@@ -16,7 +16,6 @@ public:
 
     ~Sandbox()
     {
-        CCEngine::Renderer::Shutdown();
     }
 };
 

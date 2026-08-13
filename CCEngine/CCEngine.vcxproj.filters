@@ -303,6 +303,9 @@
     <ClInclude Include="src\UI\KeyBindingPickerPanel.h">
       <Filter>src\UI</Filter>
     </ClInclude>
+    <ClInclude Include="src\UI\MaterialGraphPanel.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
     <ClInclude Include="src\UI\Panel.h">
       <Filter>src\UI</Filter>
     </ClInclude>
@@ -549,6 +552,9 @@
       <Filter>src\UI</Filter>
     </ClCompile>
     <ClCompile Include="src\UI\KeyBindingPickerPanel.cpp">
+      <Filter>src\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UI\MaterialGraphPanel.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
     <ClCompile Include="src\UI\Panel.cpp">

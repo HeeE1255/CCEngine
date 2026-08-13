@@ -8,10 +8,10 @@
 namespace CCEngine {
     namespace
     {
+        std::unordered_map<std::string, std::weak_ptr<Model>> s_ModelCache;
+
         std::shared_ptr<Model> GetOrLoadModel(const std::string& filepath)
         {
-            static std::unordered_map<std::string, std::weak_ptr<Model>> s_ModelCache;
-
             std::filesystem::path canonicalPath = std::filesystem::weakly_canonical(std::filesystem::path(filepath));
             std::string cacheKey = canonicalPath.string();
 
@@ -28,6 +28,13 @@ namespace CCEngine {
             s_ModelCache[cacheKey] = model;
             return model;
         }
+    }
+
+    void ModelImporter::ClearCache()
+    {
+        // 모델 캐시는 같은 FBX를 여러 번 불러올 때 파싱 비용을 줄이기 위한 세션 캐시다.
+        // weak_ptr만 담고 있어도 맵 버킷 메모리는 남으므로 종료 시 비워 준다.
+        std::unordered_map<std::string, std::weak_ptr<Model>>().swap(s_ModelCache);
     }
 
     Entity ModelImporter::ImportModel(Scene* scene, const std::string& filepath)

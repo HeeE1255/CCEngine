@@ -79,6 +79,7 @@ namespace CCEngine
     public:
         static void Scan(const std::filesystem::path& rootDirectory = "assets");
         static void ScanIfNeeded(const std::filesystem::path& rootDirectory = "assets");
+        static void Shutdown();
         static void MarkDirty(const std::filesystem::path& rootDirectory = {});
 
         static std::string GetGuidFromPath(const std::filesystem::path& assetPath);

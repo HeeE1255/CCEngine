@@ -54,6 +54,7 @@ namespace CCEngine
         static ShaderCacheStatus GetHlslCacheStatus(const std::filesystem::path& sourcePath);
         static bool GetLastCompileResult(const std::filesystem::path& sourcePath, ShaderCompileResult& outResult);
         static ShaderCompileResult CompileHlslFile(const std::filesystem::path& sourcePath, bool forceRecompile);
+        static void ClearCache();
 
     private:
         static ShaderCompileStageResult CompileStage(

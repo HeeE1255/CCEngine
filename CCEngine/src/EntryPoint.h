@@ -16,7 +16,17 @@
 #include <vector>
 #include <string>
 #include <Windows.h>
+#include "Core/AssetDatabase.h"
+#include "Core/ConsoleLog.h"
 #include "Core/Memory.h"
+#include "Renderer/ModelImporter.h"
+#include "Renderer/Renderer.h"
+#include "Renderer/RuntimeShaderLibrary.h"
+#include "Renderer/ShaderCompiler.h"
+#include "Scripting/ScriptEngine.h"
+#include "UI/AssetBrowserPanel.h"
+#include "UI/InspectorPanel.h"
+#include "UI/InspectorRegistry.h"
 
 // 엔트리 포인트 헤더: 플랫폼별로 메인 함수를 정의하는 헤더
 // 설명 : 엔진이 실행될 때 가장 먼저 호출되는 함수인 main 함수를 정의하는 헤더
@@ -98,7 +108,24 @@ int main(int argc, char** argv)
         delete app;
     }
 
-    // Application이 완전히 삭제된 뒤에 검사해야 한다.
+    // Application이 완전히 삭제된 뒤 세션 캐시를 먼저 비운다.
+    // 렌더 리소스를 물고 있는 캐시는 렌더러가 살아 있을 때 놓아야 종료 순서가 안전하다.
+    CCEngine::UI::AssetBrowserPanel::ShutdownSharedCaches();
+    CCEngine::ModelImporter::ClearCache();
+    CCEngine::RuntimeShaderLibrary::Clear();
+    CCEngine::ScriptEngine::Shutdown();
+
+    // 레이어와 UI가 모두 사라지고 렌더 캐시도 해제된 뒤 렌더러를 종료한다.
+    // UI가 렌더 리소스를 참조하는 동안 렌더러부터 끄면 종료 순서가 꼬여 누수와 해제 오류를 구분하기 어려워진다.
+    CCEngine::Renderer::Shutdown();
+
+    // 순수 CPU 세션 캐시는 렌더러 종료 뒤에 비워도 된다.
+    CCEngine::ShaderCompiler::ClearCache();
+    CCEngine::AssetDatabase::Shutdown();
+    CCEngine::ConsoleLog::Clear();
+    CCEngine::UI::InspectorPanel::ShutdownSharedCaches();
+    CCEngine::UI::InspectorRegistry::Clear();
+
     // destructor 본문 안에서 검사하면 Window, LayerStack 같은 멤버가 아직 살아 있어 정상 해제 예정 메모리도 누수처럼 보인다.
     CCEngine::MemoryManager::Shutdown();
 
