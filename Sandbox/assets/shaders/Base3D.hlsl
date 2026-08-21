@@ -1,6 +1,8 @@
 // =====================================================================
-// 1. 상수 버퍼 (Constant Buffers)
+// Base3D - 기본 3D Lit 셰이더
 // =====================================================================
+// 이 셰이더는 엔진의 기본 표시용이다.
+// 기존 씬의 색감이 바뀌지 않도록 PBR 계산은 넣지 않고, 가벼운 Lambert 조명만 사용한다.
 
 struct LightInfo
 {
@@ -13,6 +15,8 @@ struct LightInfo
 cbuffer CameraBuffer : register(b0)
 {
     matrix g_ViewProjection;
+    float3 g_CameraPosition;
+    float g_CameraPadding;
 };
 
 cbuffer TransformBuffer : register(b1)
@@ -36,9 +40,14 @@ cbuffer SceneBuffer : register(b3)
     float3 g_ScenePad2;
 };
 
-// =====================================================================
-// 2. 구조체 (Structs)
-// =====================================================================
+cbuffer MaterialPropertyBuffer : register(b4)
+{
+    float4 g_AlbedoColor;
+    float4 g_PropertyColors[8];
+    float4 g_PropertyScalars[4];
+    float4 g_PropertyToggles[4];
+    float4 g_SurfaceValues;
+};
 
 struct VS_INPUT
 {
@@ -55,18 +64,18 @@ struct PS_INPUT
     float3 WorldPos : POSITION;
     float3 Normal : NORMAL;
     float2 TexCoord : TEXCOORD;
-    float4 Color : COLOR; // C++에서 보낸 BaseColor를 담을 그릇
+    float4 Color : COLOR;
 };
 
 struct PS_OUTPUT
 {
-    float4 Color : SV_Target0; // 우리가 보는 실제 색상
-    int EntityID : SV_Target1; // 백그라운드 피킹용 ID 버퍼
+    float4 Color : SV_Target0;
+    int EntityID : SV_Target1;
 };
 
-// =====================================================================
-// 3. 버텍스 셰이더 (Vertex Shader)
-// =====================================================================
+Texture2D g_AlbedoMap : register(t0);
+SamplerState g_Sampler : register(s0);
+
 PS_INPUT VSMain(VS_INPUT input)
 {
     PS_INPUT output;
@@ -79,12 +88,9 @@ PS_INPUT VSMain(VS_INPUT input)
         for (int i = 0; i < 4; i++)
         {
             if (input.BoneIDs[i] == -1)
-            {
                 continue;
-            }
 
             matrix boneMatrix = g_FinalBoneMatrices[input.BoneIDs[i]];
-
             float4 localPos = mul(float4(input.Pos, 1.0f), boneMatrix);
             totalLocalPos += localPos * input.Weights[i];
 
@@ -94,48 +100,37 @@ PS_INPUT VSMain(VS_INPUT input)
     }
     else
     {
-        // 정적 메쉬(큐브 등)는 로컬 정점 그대로 사용
         totalLocalPos = float4(input.Pos, 1.0f);
         totalNormal = input.Normal;
     }
 
     float4 worldPos = mul(totalLocalPos, g_World);
-    
+
     output.SV_Pos = mul(worldPos, g_ViewProjection);
     output.WorldPos = worldPos.xyz;
     output.Normal = normalize(mul(totalNormal, (float3x3) g_World));
     output.TexCoord = input.TexCoord;
-    
-    // 컴포넌트에서 세팅한 색상을 어떤 가공도 없이 그대로 픽셀 셰이더로 토스!
     output.Color = g_BaseColor;
-
     return output;
 }
-
-// =====================================================================
-// 4. 픽셀 셰이더 (Pixel Shader)
-// =====================================================================
-Texture2D g_AlbedoMap : register(t0);
-SamplerState g_Sampler : register(s0);
 
 PS_OUTPUT PSMain(PS_INPUT input) : SV_TARGET
 {
     PS_OUTPUT output;
 
     float4 texColor = g_AlbedoMap.Sample(g_Sampler, input.TexCoord);
-    float3 totalDiffuse = float3(0.1f, 0.1f, 0.1f);
+    float4 baseColor = texColor * input.Color * g_AlbedoColor;
+    float3 normal = normalize(input.Normal);
 
-    for (int j = 0; j < g_LightCount; j++)
+    float3 litColor = baseColor.rgb * 0.18f;
+    for (int i = 0; i < g_LightCount; ++i)
     {
-        float3 lightDir = normalize(g_Lights[j].Direction);
-        float diff = max(dot(input.Normal, -lightDir), 0.0f);
-        totalDiffuse += diff * g_Lights[j].Color * g_Lights[j].Intensity;
+        float3 lightDir = normalize(-g_Lights[i].Direction);
+        float ndotl = saturate(dot(normal, lightDir));
+        litColor += baseColor.rgb * g_Lights[i].Color * g_Lights[i].Intensity * ndotl;
     }
 
-    output.Color = texColor * float4(totalDiffuse, 1.0f) * input.Color;
-
-     // [핵심!] TransformBuffer에서 받아온 ID를 두 번째 타겟으로 출력!
+    output.Color = float4(saturate(litColor), baseColor.a);
     output.EntityID = g_EntityID;
-
     return output;
 }

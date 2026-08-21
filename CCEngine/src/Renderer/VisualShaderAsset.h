@@ -16,6 +16,16 @@ namespace CCEngine
         Texture2D,
         Multiply,
         Add,
+        Lerp,
+        Fresnel,
+        Normal,
+        Roughness,
+        Metallic,
+        OneMinus,
+        Power,
+        Saturate,
+        UV,
+        Time,
         Output
     };
 
@@ -26,6 +36,9 @@ namespace CCEngine
         std::string Name;
         DirectX::XMFLOAT2 Position = { 0.0f, 0.0f };
         DirectX::XMFLOAT4 Color = { 1.0f, 1.0f, 1.0f, 1.0f };
+        // 노드마다 하나씩 필요한 숫자 값을 저장한다.
+        // Lerp는 섞는 비율, Fresnel/Power는 지수처럼 노드 타입에 맞춰 해석한다.
+        float Value = 0.5f;
         int InputA = -1;
         int InputB = -1;
     };

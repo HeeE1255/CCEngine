@@ -814,11 +814,19 @@ namespace CCEngine {
         if (m_HierarchyPanel && m_InspectorPanel)
         {
             Entity selected = m_HierarchyPanel->GetSelectedEntity();
+            uint64_t selectionRevision = m_HierarchyPanel->GetSelectionRevision();
+            bool hierarchySelectionChanged = selectionRevision != m_LastInspectorSelectionRevision;
             for (UI::InspectorPanel* inspector : m_InspectorPanels)
             {
-                if (inspector)
+                if (!inspector)
+                    continue;
+
+                // Asset Browser에서 선택한 셰이더/머티리얼은 Inspector의 명시적 선택 상태다.
+                // 하이어라키 선택이 실제로 바뀐 프레임이 아니라면 기존 오브젝트 선택으로 덮어쓰지 않는다.
+                if (!inspector->HasSelectedAsset() || hierarchySelectionChanged)
                     inspector->SetSelectedEntity(selected);
             }
+            m_LastInspectorSelectionRevision = selectionRevision;
         }
         AddEditorHitchStage(editorHitchStages, "SelectionSync", editorStageStartedAt);
 
@@ -3355,6 +3363,9 @@ namespace CCEngine {
 
     void EditorLayer::SelectAssetForInspection(const std::filesystem::path& assetPath, const std::string& assetType)
     {
+        if (m_HierarchyPanel)
+            m_LastInspectorSelectionRevision = m_HierarchyPanel->GetSelectionRevision();
+
         for (UI::InspectorPanel* inspector : m_InspectorPanels)
         {
             if (inspector && inspector->IsVisible())
@@ -3982,7 +3993,10 @@ namespace CCEngine {
                     else
                         OpenCodeAssetInExternalEditor(path);
                 });
-            if (m_HierarchyPanel)
+            // 새 Inspector를 만들 때 현재 하이어라키 선택을 기본값으로 넣는다.
+            // 단, Asset Browser에서 셰이더/머티리얼을 명시적으로 선택한 Inspector는
+            // 매 프레임 하이어라키 선택으로 덮어쓰면 안 된다.
+            if (m_HierarchyPanel && !inspector->HasSelectedAsset())
                 inspector->SetSelectedEntity(m_HierarchyPanel->GetSelectedEntity());
             m_InspectorPanels.push_back(inspector);
         };

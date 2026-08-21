@@ -23,6 +23,7 @@ namespace CCEngine
             void UpdateSelectionVisuals(Widget* widget);
             void UpdateActiveVisuals(Widget* widget);
             Entity GetSelectedEntity() const { return m_SelectionContext; }
+            uint64_t GetSelectionRevision() const { return m_SelectionRevision; }
             std::vector<Entity> GetSelectedEntities() const;
             bool IsSelected(Entity entity) const;
             Entity GetEntityAt(float mouseX, float mouseY) const;
@@ -49,6 +50,7 @@ namespace CCEngine
             std::vector<entt::entity> m_SelectedEntities;
             std::unordered_set<entt::entity> m_SelectedEntitySet;
             entt::entity m_SelectionAnchor = entt::null;
+            uint64_t m_SelectionRevision = 0;
             std::map<uint32_t, bool> m_ExpandedStates;
             bool m_NeedsRefresh = false;
             bool m_NeedsSelectionUpdate = false;

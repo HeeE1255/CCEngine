@@ -61,8 +61,63 @@ namespace CCEngine
             }
         }
 
+        std::shared_ptr<MaterialAsset> LoadMaterialForSlot(MeshComponent::MaterialSlot& slot)
+        {
+            std::string resolvedPath;
+            if (!slot.MaterialAssetGuid.empty())
+                resolvedPath = AssetDatabase::GetPathFromGuid(slot.MaterialAssetGuid).string();
+
+            if (resolvedPath.empty())
+                resolvedPath = slot.MaterialPath;
+
+            slot.MaterialPath = resolvedPath;
+            slot.Missing = !resolvedPath.empty() && !std::filesystem::exists(resolvedPath);
+            if (resolvedPath.empty() || slot.Missing)
+                return nullptr;
+
+            auto material = std::make_shared<MaterialAsset>();
+            if (!material->LoadFromFile(resolvedPath))
+            {
+                slot.Missing = true;
+                return nullptr;
+            }
+
+            slot.Material = material;
+            return material;
+        }
+
         std::shared_ptr<MaterialAsset> LoadMaterialReference(MeshComponent& mesh, const nlohmann::json& meshData)
         {
+            mesh.MaterialSlots.clear();
+
+            if (meshData.contains("MaterialSlots") && meshData["MaterialSlots"].is_array())
+            {
+                int index = 0;
+                for (const auto& slotData : meshData["MaterialSlots"])
+                {
+                    MeshComponent::MaterialSlot slot;
+                    std::string fallbackName = std::string("Element ") + std::to_string(index);
+                    slot.Name = slotData.value("Name", fallbackName);
+                    slot.MaterialAssetGuid = slotData.value("MaterialGuid", "");
+                    slot.MaterialPath = slotData.value("MaterialPath", "");
+                    LoadMaterialForSlot(slot);
+                    mesh.MaterialSlots.push_back(slot);
+                    ++index;
+                }
+
+                if (!mesh.MaterialSlots.empty())
+                {
+                    // 현재 렌더러는 slot 0을 실제 Draw에 쓴다.
+                    // 배열과 기존 단일 필드를 함께 맞춰 둬야 구버전 코드와 새 슬롯 UI가 서로 다른 재질을 보지 않는다.
+                    auto& firstSlot = mesh.MaterialSlots.front();
+                    mesh.Material = firstSlot.Material;
+                    mesh.MaterialAssetGuid = firstSlot.MaterialAssetGuid;
+                    mesh.MaterialPath = firstSlot.MaterialPath;
+                    mesh.MaterialMissing = firstSlot.Missing && (!firstSlot.MaterialPath.empty() || !firstSlot.MaterialAssetGuid.empty());
+                    return firstSlot.Material;
+                }
+            }
+
             std::string materialGuid = meshData.value("MaterialGuid", "");
             std::string materialPath;
             if (!materialGuid.empty())
@@ -81,13 +136,15 @@ namespace CCEngine
             }
 
             mesh.MaterialPath = materialPath;
-            if (materialPath.empty() || !std::filesystem::exists(materialPath))
-                return nullptr;
+            MeshComponent::MaterialSlot slot;
+            slot.Name = "Element 0";
+            slot.MaterialAssetGuid = mesh.MaterialAssetGuid;
+            slot.MaterialPath = mesh.MaterialPath;
+            auto material = LoadMaterialForSlot(slot);
+            mesh.MaterialSlots.push_back(slot);
 
-            auto material = std::make_shared<MaterialAsset>();
-            if (!material->LoadFromFile(materialPath))
-                return nullptr;
-
+            mesh.Material = material;
+            mesh.MaterialMissing = slot.Missing && (!slot.MaterialPath.empty() || !slot.MaterialAssetGuid.empty());
             return material;
         }
 
@@ -141,6 +198,25 @@ namespace CCEngine
                             entityData["MeshComponent"]["MaterialGuid"] = guid;
                     }
                 }
+
+                if (!mesh.MaterialSlots.empty())
+                {
+                    nlohmann::json slots = nlohmann::json::array();
+                    for (size_t slotIndex = 0; slotIndex < mesh.MaterialSlots.size(); ++slotIndex)
+                    {
+                        const auto& slot = mesh.MaterialSlots[slotIndex];
+                        nlohmann::json slotData;
+                        slotData["Name"] = slot.Name.empty() ? (std::string("Element ") + std::to_string(slotIndex)) : slot.Name;
+                        if (!slot.MaterialAssetGuid.empty())
+                            slotData["MaterialGuid"] = slot.MaterialAssetGuid;
+                        if (!slot.MaterialPath.empty())
+                            slotData["MaterialPath"] = slot.MaterialPath;
+                        slots.push_back(slotData);
+                    }
+                    // MaterialSlots는 상용 엔진의 Element 슬롯 구조를 저장하는 새 경로다.
+                    // 기존 MaterialGuid/Path는 slot 0 호환용으로 계속 남겨 둔다.
+                    entityData["MeshComponent"]["MaterialSlots"] = slots;
+                }
             }
 
             if (entity.HasComponent<ModelComponent>())
@@ -174,6 +250,32 @@ namespace CCEngine
                 entityData["CameraComponent"]["NearClip"] = camera.NearClip;
                 entityData["CameraComponent"]["FarClip"] = camera.FarClip;
                 entityData["CameraComponent"]["Primary"] = camera.Primary;
+            }
+
+            if (entity.HasComponent<AnimatorComponent>())
+            {
+                const auto& animator = entity.GetComponent<AnimatorComponent>();
+                auto& data = entityData["AnimatorComponent"];
+                data["SourceGuid"] = animator.SourceAssetGuid;
+                data["SourcePath"] = animator.SourcePath;
+                data["SelectedClipIndex"] = animator.SelectedClipIndex;
+                data["SelectedClipName"] = animator.SelectedClipName;
+                data["AutoPlay"] = animator.AutoPlay;
+                data["PreviewInEdit"] = animator.PreviewInEdit;
+                data["Loop"] = animator.Loop;
+                data["Speed"] = animator.Speed;
+                data["ActiveStateIndex"] = animator.ActiveStateIndex;
+
+                data["States"] = nlohmann::json::array();
+                for (const auto& state : animator.States)
+                {
+                    data["States"].push_back({
+                        { "Name", state.Name },
+                        { "ClipIndex", state.ClipIndex },
+                        { "Loop", state.Loop },
+                        { "Speed", state.Speed }
+                        });
+                }
             }
 
             if (entity.HasComponent<Rigidbody2DComponent>())
@@ -326,6 +428,37 @@ namespace CCEngine
                     model.TargetModel = std::make_shared<Model>(path);
                     if (!model.TargetModel->GetBoneInfoMap().empty() && !entity.HasComponent<AnimatorComponent>())
                         entity.AddComponent<AnimatorComponent>();
+                }
+            }
+
+            if (entityData.contains("AnimatorComponent"))
+            {
+                const auto& data = entityData["AnimatorComponent"];
+                auto& animator = entity.HasComponent<AnimatorComponent>() ? entity.GetComponent<AnimatorComponent>() : entity.AddComponent<AnimatorComponent>();
+                animator.SourceAssetGuid = data.value("SourceGuid", "");
+                animator.SourcePath = data.value("SourcePath", "");
+                animator.SelectedClipIndex = data.value("SelectedClipIndex", 0);
+                animator.SelectedClipName = data.value("SelectedClipName", "");
+                animator.AutoPlay = data.value("AutoPlay", true);
+                animator.PreviewInEdit = data.value("PreviewInEdit", false);
+                animator.Loop = data.value("Loop", true);
+                animator.Speed = data.value("Speed", 1.0f);
+                animator.ActiveStateIndex = data.value("ActiveStateIndex", 0);
+                animator.IsPlaying = false;
+                animator.RuntimeClip.reset();
+                animator.RuntimeClipKey.clear();
+                animator.States.clear();
+                if (data.contains("States") && data["States"].is_array())
+                {
+                    for (const auto& stateData : data["States"])
+                    {
+                        AnimatorComponent::State state;
+                        state.Name = stateData.value("Name", "State");
+                        state.ClipIndex = stateData.value("ClipIndex", 0);
+                        state.Loop = stateData.value("Loop", true);
+                        state.Speed = stateData.value("Speed", 1.0f);
+                        animator.States.push_back(state);
+                    }
                 }
             }
 

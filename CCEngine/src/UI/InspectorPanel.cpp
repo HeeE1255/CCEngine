@@ -23,6 +23,7 @@
 #include "Renderer/MeshFactory.h"
 #include "Core/AssetDatabase.h"
 #include "Core/ConsoleLog.h"
+#include "Events/KeyEvent.h"
 #include "Scripting/ScriptCompiler.h"
 #include "Scripting/ScriptMetadata.h"
 #include "Utils/PlatformUtils.h"
@@ -38,6 +39,7 @@
 #include <sstream>
 #include <unordered_set>
 #include <vector>
+#include <Windows.h>
 
 namespace CCEngine
 {
@@ -317,6 +319,109 @@ namespace CCEngine
                     " size=" + std::to_string(width) + "x" + std::to_string(height) +
                     " pixels=" + std::to_string(pixels.size()));
             }
+
+            bool IsSurfaceBackedShaderProperty(const ShaderPropertyDefinition& definition)
+            {
+                if (definition.Name == "AlbedoColor" && definition.Type == ShaderPropertyType::Color)
+                    return true;
+                if ((definition.Name == "Roughness" || definition.Name == "Metallic") && definition.Type == ShaderPropertyType::Float)
+                    return true;
+                return definition.Name == "AlbedoTexture" || definition.Name == "NormalTexture";
+            }
+
+            bool HasShaderProperty(const std::vector<ShaderPropertyDefinition>& definitions, const std::string& name, ShaderPropertyType type)
+            {
+                return std::any_of(definitions.begin(), definitions.end(),
+                    [&](const ShaderPropertyDefinition& definition)
+                    {
+                        return definition.Name == name && definition.Type == type;
+                    });
+            }
+
+            ShaderPropertyValue& EnsureSurfaceBackedShaderProperty(MaterialAsset& material, const ShaderPropertyDefinition& definition)
+            {
+                const auto existing = material.ShaderProperties.find(definition.Name);
+                const bool hadSavedValue = existing != material.ShaderProperties.end() && existing->second.Type != ShaderPropertyType::Unknown;
+                ShaderPropertyValue& value = material.EnsureShaderPropertyValue(definition);
+
+                // Surface에 이미 있는 값은 인스펙터에서 한 번만 보여준다.
+                // 내부 ShaderProperty에도 같은 값을 넣어 두어 커스텀 HLSL이 같은 버퍼를 읽어도 결과가 갈라지지 않는다.
+                if (definition.Name == "AlbedoColor" && definition.Type == ShaderPropertyType::Color)
+                {
+                    if (hadSavedValue)
+                        material.AlbedoColor = value.Color;
+                    else
+                        value.Color = material.AlbedoColor;
+                }
+                else if (definition.Name == "Roughness" && definition.Type == ShaderPropertyType::Float)
+                {
+                    if (hadSavedValue)
+                        material.Roughness = std::clamp(value.FloatValue, 0.0f, 1.0f);
+                    else
+                        value.FloatValue = material.Roughness;
+                }
+                else if (definition.Name == "Metallic" && definition.Type == ShaderPropertyType::Float)
+                {
+                    if (hadSavedValue)
+                        material.Metallic = std::clamp(value.FloatValue, 0.0f, 1.0f);
+                    else
+                        value.FloatValue = material.Metallic;
+                }
+                else if (definition.Name == "AlbedoTexture" && definition.Type == ShaderPropertyType::Texture2D)
+                {
+                    if (hadSavedValue)
+                    {
+                        material.AlbedoTextureGuid = value.TextureGuid;
+                        material.AlbedoTexturePath = value.TexturePath;
+                    }
+                    else
+                    {
+                        value.TextureGuid = material.AlbedoTextureGuid;
+                        value.TexturePath = material.AlbedoTexturePath;
+                    }
+                }
+                else if (definition.Name == "NormalTexture" && definition.Type == ShaderPropertyType::Texture2D)
+                {
+                    if (hadSavedValue)
+                    {
+                        material.NormalTextureGuid = value.TextureGuid;
+                        material.NormalTexturePath = value.TexturePath;
+                    }
+                    else
+                    {
+                        value.TextureGuid = material.NormalTextureGuid;
+                        value.TexturePath = material.NormalTexturePath;
+                    }
+                }
+
+                return value;
+            }
+
+            void SyncSurfaceValueToShaderProperty(MaterialAsset& material, const std::string& name)
+            {
+                auto it = material.ShaderProperties.find(name);
+                if (it == material.ShaderProperties.end())
+                    return;
+
+                // 렌더러는 같은 이름의 ShaderProperty를 우선 읽는다.
+                // 그래서 Surface 값을 바꿀 때 이 값을 같이 바꾸지 않으면 화면에서는 아래 프로퍼티만 먹는 것처럼 보인다.
+                if (name == "AlbedoColor" && it->second.Type == ShaderPropertyType::Color)
+                    it->second.Color = material.AlbedoColor;
+                else if (name == "Roughness" && it->second.Type == ShaderPropertyType::Float)
+                    it->second.FloatValue = material.Roughness;
+                else if (name == "Metallic" && it->second.Type == ShaderPropertyType::Float)
+                    it->second.FloatValue = material.Metallic;
+                else if (name == "AlbedoTexture" && it->second.Type == ShaderPropertyType::Texture2D)
+                {
+                    it->second.TextureGuid = material.AlbedoTextureGuid;
+                    it->second.TexturePath = material.AlbedoTexturePath;
+                }
+                else if (name == "NormalTexture" && it->second.Type == ShaderPropertyType::Texture2D)
+                {
+                    it->second.TextureGuid = material.NormalTextureGuid;
+                    it->second.TexturePath = material.NormalTexturePath;
+                }
+            }
         }
 
         InspectorPanel::InspectorPanel(const std::string& name, const std::string& title)
@@ -363,6 +468,7 @@ namespace CCEngine
                 m_SelectedMaterial = MaterialAsset{};
                 m_MaterialSavePending = false;
                 m_MaterialSaveCountdown = 0.0f;
+                m_HasMaterialUndoBaseline = false;
             }
             m_MaterialPreviewImage = nullptr;
             m_MaterialPreviewDirty = true;
@@ -387,6 +493,7 @@ namespace CCEngine
             m_SelectedMaterial = MaterialAsset{};
             m_MaterialPreviewImage = nullptr;
             m_MaterialPreviewDirty = true;
+            m_HasMaterialUndoBaseline = false;
             RebuildInspector();
             return true;
         }
@@ -451,6 +558,9 @@ namespace CCEngine
                 return;
             }
 
+            if (!m_HasMaterialUndoBaseline)
+                ResetMaterialUndoBaseline();
+
             auto infoItem = new UI::InspectorItem("MaterialInfoItem", "Material Asset");
             infoItem->SetAnchorMin(0.0f, 0.0f);
             infoItem->SetAnchorMax(1.0f, 0.0f);
@@ -497,6 +607,27 @@ namespace CCEngine
                 });
             infoItem->AddChild(shaderButton);
 
+            auto pbrShaderButton = new UI::Button("MaterialUsePBRShaderButton", "Use Base3D PBR Shader");
+            pbrShaderButton->SetOnClick([this, shaderButton]()
+                {
+                    std::filesystem::path shaderPath = std::filesystem::current_path() / "assets" / "shaders" / "Base3D_PBR.hlsl";
+                    if (!std::filesystem::exists(shaderPath))
+                    {
+                        ConsoleLog::Error("Base3D PBR shader is missing: " + shaderPath.string());
+                        return;
+                    }
+
+                    // 기본 Base3D는 호환용 Lit로 유지하고, PBR은 Material이 명시적으로 선택한다.
+                    // 이렇게 해야 새 렌더 기능을 추가해도 기존 씬의 기본 색감이 갑자기 바뀌지 않는다.
+                    m_SelectedMaterial.ShaderPath = shaderPath.string();
+                    m_SelectedMaterial.ShaderGuid = AssetDatabase::GetGuidFromPath(shaderPath);
+                    m_SelectedMaterial.ShaderName = shaderPath.stem().string();
+                    shaderButton->SetText("Shader: " + shaderPath.filename().string());
+                    MarkSelectedMaterialDirty();
+                    m_NeedsRebuild = true;
+                });
+            infoItem->AddChild(pbrShaderButton);
+
             auto clearShaderButton = new UI::Button("MaterialClearShaderButton", "Use Built-in Base3D");
             clearShaderButton->SetOnClick([this, shaderButton]()
                 {
@@ -524,86 +655,130 @@ namespace CCEngine
             }
             infoItem->AddChild(materialShaderStatusButton);
 
+            std::vector<ShaderPropertyDefinition> shaderProperties;
+            const bool hasCustomShader = !m_SelectedMaterial.ShaderPath.empty();
+            if (!m_SelectedMaterial.ShaderPath.empty())
+            {
+                shaderProperties = ShaderPropertyParser::LoadFromShaderFile(m_SelectedMaterial.ShaderPath);
+                for (const ShaderPropertyDefinition& definition : shaderProperties)
+                {
+                    if (IsSurfaceBackedShaderProperty(definition))
+                        EnsureSurfaceBackedShaderProperty(m_SelectedMaterial, definition);
+                }
+            }
+
             auto surfaceItem = new UI::InspectorItem("MaterialSurfaceItem", "Surface");
             surfaceItem->SetAnchorMin(0.0f, 0.0f);
             surfaceItem->SetAnchorMax(1.0f, 0.0f);
             AddChild(surfaceItem);
 
             // Material 에셋을 직접 편집한다. MeshComponent 값과 섞지 않아야 같은 재질을 쓰는 오브젝트들이 한 기준을 공유한다.
-            InspectorUtils::AddColor4(surfaceItem, "MaterialAssetAlbedo", "Albedo",
-                [this]() { return m_SelectedMaterial.AlbedoColor; },
-                [this](DirectX::XMFLOAT4 value)
-                {
-                    m_SelectedMaterial.AlbedoColor = value;
-                    MarkSelectedMaterialDirty();
-                });
+            const bool showAlbedoColor = !hasCustomShader || HasShaderProperty(shaderProperties, "AlbedoColor", ShaderPropertyType::Color);
+            const bool showAlbedoTexture = !hasCustomShader || HasShaderProperty(shaderProperties, "AlbedoTexture", ShaderPropertyType::Texture2D);
+            const bool showNormalTexture = HasShaderProperty(shaderProperties, "NormalTexture", ShaderPropertyType::Texture2D);
+            const bool showRoughness = !hasCustomShader || HasShaderProperty(shaderProperties, "Roughness", ShaderPropertyType::Float);
+            const bool showMetallic = !hasCustomShader || HasShaderProperty(shaderProperties, "Metallic", ShaderPropertyType::Float);
 
-            auto albedoButton = new UI::Button("MaterialAlbedoTextureButton",
-                m_SelectedMaterial.AlbedoTexturePath.empty()
-                ? "Albedo Texture: (none)"
-                : "Albedo Texture: " + std::filesystem::path(m_SelectedMaterial.AlbedoTexturePath).filename().string());
-            albedoButton->SetOnClick([this, albedoButton]()
-                {
-                    std::string filepath = PlatformUtils::OpenFile("Texture (*.png;*.jpg;*.jpeg;*.tga)\0*.png;*.jpg;*.jpeg;*.tga\0");
-                    if (filepath.empty())
-                        return;
-
-                    m_SelectedMaterial.AlbedoTexturePath = filepath;
-                    m_SelectedMaterial.AlbedoTextureGuid = AssetDatabase::GetGuidFromPath(filepath);
-                    m_SelectedMaterial.AlbedoTexture.reset(Texture2D::Create(filepath));
-                    albedoButton->SetText("Albedo Texture: " + std::filesystem::path(filepath).filename().string());
-                    MarkSelectedMaterialDirty();
-                });
-            surfaceItem->AddChild(albedoButton);
-
-            auto clearAlbedoButton = new UI::Button("MaterialClearAlbedoTextureButton", "Clear Albedo Texture");
-            clearAlbedoButton->SetOnClick([this, albedoButton]()
-                {
-                    m_SelectedMaterial.AlbedoTexturePath.clear();
-                    m_SelectedMaterial.AlbedoTextureGuid.clear();
-                    m_SelectedMaterial.AlbedoTexture.reset();
-                    albedoButton->SetText("Albedo Texture: (none)");
-                    MarkSelectedMaterialDirty();
-                });
-            surfaceItem->AddChild(clearAlbedoButton);
-
-            auto normalButton = new UI::Button("MaterialNormalTextureButton",
-                m_SelectedMaterial.NormalTexturePath.empty()
-                ? "Normal Texture: (none)"
-                : "Normal Texture: " + std::filesystem::path(m_SelectedMaterial.NormalTexturePath).filename().string());
-            normalButton->SetOnClick([this, normalButton]()
-                {
-                    std::string filepath = PlatformUtils::OpenFile("Texture (*.png;*.jpg;*.jpeg;*.tga)\0*.png;*.jpg;*.jpeg;*.tga\0");
-                    if (filepath.empty())
-                        return;
-
-                    m_SelectedMaterial.NormalTexturePath = filepath;
-                    m_SelectedMaterial.NormalTextureGuid = AssetDatabase::GetGuidFromPath(filepath);
-                    normalButton->SetText("Normal Texture: " + std::filesystem::path(filepath).filename().string());
-                    MarkSelectedMaterialDirty();
-                });
-            surfaceItem->AddChild(normalButton);
-
-            InspectorUtils::AddDragFloat(surfaceItem, "MaterialAssetRoughness", "Roughness",
-                [this]() { return m_SelectedMaterial.Roughness; },
-                [this](float value)
-                {
-                    m_SelectedMaterial.Roughness = std::clamp(value, 0.0f, 1.0f);
-                    MarkSelectedMaterialDirty();
-                });
-
-            InspectorUtils::AddDragFloat(surfaceItem, "MaterialAssetMetallic", "Metallic",
-                [this]() { return m_SelectedMaterial.Metallic; },
-                [this](float value)
-                {
-                    m_SelectedMaterial.Metallic = std::clamp(value, 0.0f, 1.0f);
-                    MarkSelectedMaterialDirty();
-                });
-
-            if (!m_SelectedMaterial.ShaderPath.empty())
+            if (showAlbedoColor)
             {
-                std::vector<ShaderPropertyDefinition> shaderProperties = ShaderPropertyParser::LoadFromShaderFile(m_SelectedMaterial.ShaderPath);
-                if (!shaderProperties.empty())
+                InspectorUtils::AddColor4(surfaceItem, "MaterialAssetAlbedo", "Albedo",
+                    [this]() { return m_SelectedMaterial.AlbedoColor; },
+                    [this](DirectX::XMFLOAT4 value)
+                    {
+                        m_SelectedMaterial.AlbedoColor = value;
+                        SyncSurfaceValueToShaderProperty(m_SelectedMaterial, "AlbedoColor");
+                        MarkSelectedMaterialDirty();
+                    });
+            }
+
+            if (showAlbedoTexture)
+            {
+                auto albedoButton = new UI::Button("MaterialAlbedoTextureButton",
+                    m_SelectedMaterial.AlbedoTexturePath.empty()
+                    ? "Albedo Texture: (none)"
+                    : "Albedo Texture: " + std::filesystem::path(m_SelectedMaterial.AlbedoTexturePath).filename().string());
+                albedoButton->SetOnClick([this, albedoButton]()
+                    {
+                        std::string filepath = PlatformUtils::OpenFile("Texture (*.png;*.jpg;*.jpeg;*.tga)\0*.png;*.jpg;*.jpeg;*.tga\0");
+                        if (filepath.empty())
+                            return;
+
+                        m_SelectedMaterial.AlbedoTexturePath = filepath;
+                        m_SelectedMaterial.AlbedoTextureGuid = AssetDatabase::GetGuidFromPath(filepath);
+                        m_SelectedMaterial.AlbedoTexture.reset(Texture2D::Create(filepath));
+                        SyncSurfaceValueToShaderProperty(m_SelectedMaterial, "AlbedoTexture");
+                        albedoButton->SetText("Albedo Texture: " + std::filesystem::path(filepath).filename().string());
+                        MarkSelectedMaterialDirty();
+                    });
+                surfaceItem->AddChild(albedoButton);
+
+                auto clearAlbedoButton = new UI::Button("MaterialClearAlbedoTextureButton", "Clear Albedo Texture");
+                clearAlbedoButton->SetOnClick([this, albedoButton]()
+                    {
+                        m_SelectedMaterial.AlbedoTexturePath.clear();
+                        m_SelectedMaterial.AlbedoTextureGuid.clear();
+                        m_SelectedMaterial.AlbedoTexture.reset();
+                        SyncSurfaceValueToShaderProperty(m_SelectedMaterial, "AlbedoTexture");
+                        albedoButton->SetText("Albedo Texture: (none)");
+                        MarkSelectedMaterialDirty();
+                    });
+                surfaceItem->AddChild(clearAlbedoButton);
+            }
+
+            if (showNormalTexture)
+            {
+                auto normalButton = new UI::Button("MaterialNormalTextureButton",
+                    m_SelectedMaterial.NormalTexturePath.empty()
+                    ? "Normal Texture: (none)"
+                    : "Normal Texture: " + std::filesystem::path(m_SelectedMaterial.NormalTexturePath).filename().string());
+                normalButton->SetOnClick([this, normalButton]()
+                    {
+                        std::string filepath = PlatformUtils::OpenFile("Texture (*.png;*.jpg;*.jpeg;*.tga)\0*.png;*.jpg;*.jpeg;*.tga\0");
+                        if (filepath.empty())
+                            return;
+
+                        m_SelectedMaterial.NormalTexturePath = filepath;
+                        m_SelectedMaterial.NormalTextureGuid = AssetDatabase::GetGuidFromPath(filepath);
+                        SyncSurfaceValueToShaderProperty(m_SelectedMaterial, "NormalTexture");
+                        normalButton->SetText("Normal Texture: " + std::filesystem::path(filepath).filename().string());
+                        MarkSelectedMaterialDirty();
+                    });
+                surfaceItem->AddChild(normalButton);
+            }
+
+            if (showRoughness)
+            {
+                InspectorUtils::AddDragFloat(surfaceItem, "MaterialAssetRoughness", "Roughness",
+                    [this]() { return m_SelectedMaterial.Roughness; },
+                    [this](float value)
+                    {
+                        m_SelectedMaterial.Roughness = std::clamp(value, 0.0f, 1.0f);
+                        SyncSurfaceValueToShaderProperty(m_SelectedMaterial, "Roughness");
+                        MarkSelectedMaterialDirty();
+                    });
+            }
+
+            if (showMetallic)
+            {
+                InspectorUtils::AddDragFloat(surfaceItem, "MaterialAssetMetallic", "Metallic",
+                    [this]() { return m_SelectedMaterial.Metallic; },
+                    [this](float value)
+                    {
+                        m_SelectedMaterial.Metallic = std::clamp(value, 0.0f, 1.0f);
+                        SyncSurfaceValueToShaderProperty(m_SelectedMaterial, "Metallic");
+                        MarkSelectedMaterialDirty();
+                    });
+            }
+
+            if (!shaderProperties.empty())
+            {
+                const bool hasVisibleShaderProperties = std::any_of(shaderProperties.begin(), shaderProperties.end(),
+                    [](const ShaderPropertyDefinition& definition)
+                    {
+                        return !IsSurfaceBackedShaderProperty(definition);
+                    });
+
+                if (hasVisibleShaderProperties)
                 {
                     auto shaderPropertyItem = new UI::InspectorItem("MaterialShaderPropertiesItem", "Shader Properties");
                     shaderPropertyItem->SetAnchorMin(0.0f, 0.0f);
@@ -613,6 +788,9 @@ namespace CCEngine
                     for (const ShaderPropertyDefinition& definition : shaderProperties)
                     {
                         ShaderPropertyValue& value = m_SelectedMaterial.EnsureShaderPropertyValue(definition);
+                        if (IsSurfaceBackedShaderProperty(definition))
+                            continue;
+
                         const std::string widgetName = "ShaderProperty_" + definition.Name;
 
                         if (definition.Type == ShaderPropertyType::Color)
@@ -899,6 +1077,8 @@ namespace CCEngine
                     preview.Roughness = value.FloatValue;
                 else if (definition.Name == "Metallic" && definition.Type == ShaderPropertyType::Float)
                     preview.Metallic = value.FloatValue;
+                // 셰이더 파일은 어떤 입력이 필요한지만 정의한다.
+                // 실제 텍스처 선택은 Material 인스펙터에서만 다루어야 에셋과 렌더 상태가 섞이지 않는다.
             }
 
             return preview;
@@ -1063,6 +1243,19 @@ namespace CCEngine
             if (m_SelectedAssetPath.empty() || m_SelectedAssetType != "material")
                 return;
 
+            if (m_HasMaterialUndoBaseline && !SameMaterialForUndo(m_MaterialUndoBaseline, m_SelectedMaterial))
+            {
+                MaterialUndoRecord record;
+                record.Path = m_SelectedAssetPath;
+                record.Label = "Edit Material " + m_SelectedAssetPath.filename().string();
+                record.Before = m_MaterialUndoBaseline;
+                record.After = m_SelectedMaterial;
+                m_MaterialUndoStack.push_back(record);
+                if (m_MaterialUndoStack.size() > MaxMaterialUndoRecords)
+                    m_MaterialUndoStack.erase(m_MaterialUndoStack.begin());
+                m_MaterialRedoStack.clear();
+            }
+
             if (!m_SelectedMaterial.SaveToFile(m_SelectedAssetPath))
             {
                 ConsoleLog::Error("Failed to save material: " + m_SelectedAssetPath.string());
@@ -1074,6 +1267,98 @@ namespace CCEngine
             AssetDatabase::MarkDirty(m_SelectedAssetPath.parent_path());
             if (m_OnAssetChanged)
                 m_OnAssetChanged(m_SelectedAssetPath, m_SelectedAssetType);
+
+            ResetMaterialUndoBaseline();
+        }
+
+        bool InspectorPanel::UndoMaterialEdit()
+        {
+            if (m_SelectedAssetPath.empty() || m_SelectedAssetType != "material")
+                return false;
+
+            FlushSelectedMaterialSave();
+            if (m_MaterialUndoStack.empty())
+                return false;
+
+            MaterialUndoRecord record = m_MaterialUndoStack.back();
+            m_MaterialUndoStack.pop_back();
+            m_MaterialRedoStack.push_back(record);
+
+            m_SelectedMaterial = record.Before;
+            m_SelectedMaterial.SaveToFile(record.Path);
+            m_MaterialPreviewDirty = true;
+            ResetMaterialUndoBaseline();
+            if (m_OnMaterialPreviewChanged)
+                m_OnMaterialPreviewChanged(record.Path, m_SelectedMaterial);
+            if (m_OnAssetChanged)
+                m_OnAssetChanged(record.Path, "material");
+            m_NeedsRebuild = true;
+            ConsoleLog::Info("Undo material edit: " + record.Path.filename().string());
+            return true;
+        }
+
+        bool InspectorPanel::RedoMaterialEdit()
+        {
+            if (m_SelectedAssetPath.empty() || m_SelectedAssetType != "material")
+                return false;
+
+            FlushSelectedMaterialSave();
+            if (m_MaterialRedoStack.empty())
+                return false;
+
+            MaterialUndoRecord record = m_MaterialRedoStack.back();
+            m_MaterialRedoStack.pop_back();
+            m_MaterialUndoStack.push_back(record);
+
+            m_SelectedMaterial = record.After;
+            m_SelectedMaterial.SaveToFile(record.Path);
+            m_MaterialPreviewDirty = true;
+            ResetMaterialUndoBaseline();
+            if (m_OnMaterialPreviewChanged)
+                m_OnMaterialPreviewChanged(record.Path, m_SelectedMaterial);
+            if (m_OnAssetChanged)
+                m_OnAssetChanged(record.Path, "material");
+            m_NeedsRebuild = true;
+            ConsoleLog::Info("Redo material edit: " + record.Path.filename().string());
+            return true;
+        }
+
+        void InspectorPanel::ResetMaterialUndoBaseline()
+        {
+            m_MaterialUndoBaseline = m_SelectedMaterial;
+            m_HasMaterialUndoBaseline = (m_SelectedAssetType == "material" && !m_SelectedAssetPath.empty());
+        }
+
+        bool InspectorPanel::SameMaterialForUndo(const MaterialAsset& a, const MaterialAsset& b) const
+        {
+            auto sameFloat4 = [](const DirectX::XMFLOAT4& left, const DirectX::XMFLOAT4& right)
+            {
+                return left.x == right.x && left.y == right.y && left.z == right.z && left.w == right.w;
+            };
+
+            if (a.Name != b.Name || a.ShaderName != b.ShaderName || a.ShaderGuid != b.ShaderGuid || a.ShaderPath != b.ShaderPath)
+                return false;
+            if (!sameFloat4(a.AlbedoColor, b.AlbedoColor) || a.Roughness != b.Roughness || a.Metallic != b.Metallic)
+                return false;
+            if (a.AlbedoTextureGuid != b.AlbedoTextureGuid || a.AlbedoTexturePath != b.AlbedoTexturePath ||
+                a.NormalTextureGuid != b.NormalTextureGuid || a.NormalTexturePath != b.NormalTexturePath)
+                return false;
+            if (a.ShaderProperties.size() != b.ShaderProperties.size())
+                return false;
+
+            for (const auto& [name, left] : a.ShaderProperties)
+            {
+                auto it = b.ShaderProperties.find(name);
+                if (it == b.ShaderProperties.end())
+                    return false;
+                const auto& right = it->second;
+                if (left.Type != right.Type || !sameFloat4(left.Color, right.Color) ||
+                    left.FloatValue != right.FloatValue || left.BoolValue != right.BoolValue ||
+                    left.TextureGuid != right.TextureGuid || left.TexturePath != right.TexturePath)
+                    return false;
+            }
+
+            return true;
         }
 
         void InspectorPanel::BuildAddComponentMenu()
@@ -1496,6 +1781,25 @@ namespace CCEngine
         {
             if (!m_IsVisible)
                 return false;
+
+            if (e.GetEventType() == EventType::KeyPressed && m_SelectedAssetType == "material" && Widget::IsKeyboardFocusOwner(this))
+            {
+                auto& ke = static_cast<KeyPressedEvent&>(e);
+                const bool ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+                const bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+                if (ctrl && ke.GetKeyCode() == 'Z')
+                {
+                    const bool handled = shift ? RedoMaterialEdit() : UndoMaterialEdit();
+                    e.Handled = handled;
+                    return handled;
+                }
+                if (ctrl && ke.GetKeyCode() == 'Y')
+                {
+                    const bool handled = RedoMaterialEdit();
+                    e.Handled = handled;
+                    return handled;
+                }
+            }
 
             if (e.GetEventType() == EventType::MouseButtonPressed)
             {

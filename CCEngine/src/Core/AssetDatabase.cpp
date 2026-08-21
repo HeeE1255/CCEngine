@@ -578,6 +578,11 @@ namespace CCEngine
                             true);
                         return;
                     }
+
+                    // GUID 캐시에 아직 안 올라온 첫 스캔 상태라도, 저장 경로가 살아 있고
+                    // meta의 GUID가 같으면 정상 참조다. 여기서 끝내지 않으면 정상 파일을 Missing으로 오판한다.
+                    if (guid.empty() || recoveredGuid.empty() || recoveredGuid == guid)
+                        return;
                 }
 
                 std::filesystem::path redirectedPath = ResolveRecentAssetRedirect(storedPath);
@@ -651,6 +656,29 @@ namespace CCEngine
                     "Material",
                     repairFiles,
                     report);
+
+                if (object["MeshComponent"].contains("MaterialSlots") && object["MeshComponent"]["MaterialSlots"].is_array())
+                {
+                    auto& slots = object["MeshComponent"]["MaterialSlots"];
+                    for (size_t i = 0; i < slots.size(); ++i)
+                    {
+                        if (!slots[i].is_object())
+                            continue;
+
+                        // MaterialSlots는 새 저장 방식이다. 슬롯마다 GUID/Path를 검사해야
+                        // FBX 하위 메시나 프리팹의 Element 참조도 자동 복구 대상에 들어간다.
+                        ValidateGuidPathPair(
+                            slots[i],
+                            "MaterialGuid",
+                            "MaterialPath",
+                            AssetKind::Material,
+                            sourceFile,
+                            jsonLocation + "/MeshComponent/MaterialSlots[" + std::to_string(i) + "]",
+                            "Material Slot",
+                            repairFiles,
+                            report);
+                    }
+                }
             }
 
             if (object.contains("ModelComponent") && object["ModelComponent"].is_object())

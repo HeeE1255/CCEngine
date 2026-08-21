@@ -27,6 +27,7 @@ namespace CCEngine
             void SetSelectedEntity(Entity entity);
             void SetSelectedAsset(const std::filesystem::path& assetPath, const std::string& assetType);
             Entity GetSelectedEntity() const { return m_SelectedEntity; }
+            bool HasSelectedAsset() const { return !m_SelectedAssetPath.empty(); }
             bool ClearSelectedAssetIfMissing();
             void RequestRebuild() { m_NeedsRebuild = true; }
             void SetAssetChangedCallback(std::function<void(const std::filesystem::path&, const std::string&)> callback)
@@ -90,6 +91,10 @@ namespace CCEngine
             void MarkSelectedMaterialDirty();
             void FlushSelectedMaterialSave();
             void SaveSelectedMaterial();
+            bool UndoMaterialEdit();
+            bool RedoMaterialEdit();
+            void ResetMaterialUndoBaseline();
+            bool SameMaterialForUndo(const MaterialAsset& a, const MaterialAsset& b) const;
             void EnsureMaterialPreviewResources();
             void RenderSelectedMaterialPreview();
             bool IsMaterialPreviewPoint(float mouseX, float mouseY) const;
@@ -141,6 +146,18 @@ namespace CCEngine
             bool m_MaterialSavePending = false;
             float m_MaterialSaveCountdown = 0.0f;
             static constexpr float MaterialSaveDelaySeconds = 0.35f;
+            struct MaterialUndoRecord
+            {
+                std::filesystem::path Path;
+                std::string Label;
+                MaterialAsset Before;
+                MaterialAsset After;
+            };
+            MaterialAsset m_MaterialUndoBaseline;
+            bool m_HasMaterialUndoBaseline = false;
+            std::vector<MaterialUndoRecord> m_MaterialUndoStack;
+            std::vector<MaterialUndoRecord> m_MaterialRedoStack;
+            static constexpr size_t MaxMaterialUndoRecords = 80;
         };
 
     }

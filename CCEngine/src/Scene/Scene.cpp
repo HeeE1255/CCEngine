@@ -4,8 +4,10 @@
 #include "Renderer/Renderer2D.h"
 #include "Renderer/Renderer3D.h"
 #include "Scripting/ScriptEngine.h"
+#include "Core/AssetDatabase.h"
 #include <box2d/box2d.h>
 #include <algorithm>
+#include <filesystem>
 #include <functional>
 #include <string>
 #include <unordered_map>
@@ -26,6 +28,63 @@ namespace CCEngine
                     return true;
             }
             return false;
+        }
+
+        std::string ResolveAnimatorSourcePath(AnimatorComponent& animator, const ModelComponent& model)
+        {
+            if (animator.SourceAssetGuid.empty())
+                animator.SourceAssetGuid = model.AssetGuid;
+
+            if (!animator.SourceAssetGuid.empty())
+            {
+                std::filesystem::path path = AssetDatabase::GetPathFromGuid(animator.SourceAssetGuid);
+                if (!path.empty() && std::filesystem::exists(path))
+                {
+                    animator.SourcePath = path.string();
+                    return animator.SourcePath;
+                }
+            }
+
+            if (!animator.SourcePath.empty() && std::filesystem::exists(animator.SourcePath))
+                return animator.SourcePath;
+
+            if (model.TargetModel && !model.TargetModel->GetFilePath().empty())
+            {
+                animator.SourcePath = model.TargetModel->GetFilePath();
+                if (animator.SourceAssetGuid.empty())
+                    animator.SourceAssetGuid = AssetDatabase::GetGuidFromPath(animator.SourcePath);
+            }
+
+            return animator.SourcePath;
+        }
+
+        void PrepareAnimatorClip(AnimatorComponent& animator, const ModelComponent& model)
+        {
+            std::string sourcePath = ResolveAnimatorSourcePath(animator, model);
+            if (sourcePath.empty() || !std::filesystem::exists(sourcePath))
+                return;
+
+            std::string key = sourcePath + "#" + std::to_string(animator.SelectedClipIndex);
+            if (animator.RuntimeClip && animator.RuntimeClipKey == key)
+            {
+                return;
+            }
+
+            // 클립 목록 검사는 Assimp가 FBX를 다시 여는 작업이라 매 프레임 돌리면 UI가 끊긴다.
+            // 런타임에서는 선택 클립이 바뀌었을 때만 검사하고, 평소에는 이미 로드된 RuntimeClip을 재사용한다.
+            auto clips = AnimationClip::InspectClips(sourcePath);
+            if (clips.empty())
+                return;
+
+            animator.SelectedClipIndex = std::clamp(animator.SelectedClipIndex, 0, static_cast<int>(clips.size() - 1));
+            animator.SelectedClipName = clips[animator.SelectedClipIndex].Name;
+
+            key = sourcePath + "#" + std::to_string(animator.SelectedClipIndex);
+            if (animator.RuntimeClipKey != key || !animator.RuntimeClip)
+            {
+                animator.RuntimeClip = AnimationClip::LoadShared(sourcePath, static_cast<uint32_t>(animator.SelectedClipIndex));
+                animator.RuntimeClipKey = key;
+            }
         }
 
         std::string MakeDuplicateName(Scene* scene, const std::string& sourceName)
@@ -1118,6 +1177,33 @@ namespace CCEngine
                 {
                     auto& modelComponent = current.GetComponent<ModelComponent>();
                     auto& model = modelComponent.TargetModel;
+                    if (!model)
+                        return;
+
+                    PrepareAnimatorClip(animComp, modelComponent);
+                    bool shouldPlay = false;
+                    if (m_State == SceneState::Play)
+                    {
+                        shouldPlay = animComp.AutoPlay || animComp.IsPlaying;
+                        if (animComp.AutoPlay)
+                            animComp.IsPlaying = true;
+                    }
+                    else
+                    {
+                        shouldPlay = animComp.PreviewInEdit && animComp.IsPlaying;
+                    }
+
+                    animComp.AnimPlayer.SetLoop(animComp.Loop);
+                    animComp.AnimPlayer.SetSpeed(animComp.Speed);
+                    if (shouldPlay && animComp.RuntimeClip)
+                    {
+                        bool sameClip = animComp.AnimPlayer.GetCurrentClip() == animComp.RuntimeClip.get();
+                        animComp.AnimPlayer.PlayAnimation(animComp.RuntimeClip, !sameClip);
+                    }
+                    else if (animComp.AnimPlayer.IsPlaying())
+                    {
+                        animComp.AnimPlayer.StopAnimation();
+                    }
 
                     const auto& nodeMap = modelComponent.NodePathEntityMap.empty() ? modelComponent.NodeEntityMap : modelComponent.NodePathEntityMap;
                     animComp.AnimPlayer.Update(deltaTime, model.get(), this, &nodeMap);
@@ -1294,6 +1380,7 @@ namespace CCEngine
                     if (mesh.Material->AlbedoTexture)
                         renderTexture = mesh.Material->AlbedoTexture;
                 }
+                const bool forceErrorShader = mesh.MaterialMissing;
 
                 if (animatorComp)
                 {
@@ -1307,13 +1394,14 @@ namespace CCEngine
                         renderColor,
                         mesh.Material.get(),
                         (int)entityID,
-                        animator.GetFinalBoneMatrices()
+                        animator.GetFinalBoneMatrices(),
+                        forceErrorShader
                     );
                 }
                 else
                 {
                     DirectX::XMMATRIX worldTransform = getTransform(entity);
-                    Renderer3D::DrawMesh(worldTransform, mesh.MeshData, renderTexture, renderColor, mesh.Material.get(), (int)entityID);
+                    Renderer3D::DrawMesh(worldTransform, mesh.MeshData, renderTexture, renderColor, mesh.Material.get(), (int)entityID, forceErrorShader);
                 }
             });
 

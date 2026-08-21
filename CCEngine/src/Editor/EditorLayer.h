@@ -256,6 +256,7 @@ namespace CCEngine {
         Entity m_PrefabDragEntity = {};
         bool m_IsDraggingPrefabToAssetBrowser = false;
         bool m_IsMultiTransformUndoOpen = false;
+        uint64_t m_LastInspectorSelectionRevision = 0;
         float m_PrefabDragStartX = 0.0f;
         float m_PrefabDragStartY = 0.0f;
         std::chrono::steady_clock::time_point m_LastViewportRightClickTime = {};

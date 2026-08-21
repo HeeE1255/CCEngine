@@ -54,6 +54,9 @@ namespace CCEngine {
                 m_SelectionAnchor = entt::null;
             }
 
+            // 선택 Revision은 인스펙터 동기화에서 사용한다.
+            // 같은 오브젝트를 다시 클릭해도 에셋 인스펙터에서 오브젝트 인스펙터로 돌아올 수 있어야 한다.
+            ++m_SelectionRevision;
             m_NeedsSelectionUpdate = true;
         }
 
@@ -83,6 +86,7 @@ namespace CCEngine {
                 m_SelectionContext = {};
 
             m_SelectionAnchor = m_SelectionContext ? (entt::entity)m_SelectionContext : entt::null;
+            ++m_SelectionRevision;
             m_NeedsSelectionUpdate = true;
         }
 
@@ -92,6 +96,7 @@ namespace CCEngine {
             m_SelectedEntities.clear();
             m_SelectedEntitySet.clear();
             m_SelectionAnchor = entt::null;
+            ++m_SelectionRevision;
             m_NeedsSelectionUpdate = true;
         }
 

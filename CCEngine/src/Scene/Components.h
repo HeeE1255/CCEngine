@@ -203,6 +203,15 @@ namespace CCEngine
 
     struct MeshComponent
     {
+        struct MaterialSlot
+        {
+            std::string Name = "Element 0";
+            std::shared_ptr<MaterialAsset> Material;
+            std::string MaterialAssetGuid;
+            std::string MaterialPath;
+            bool Missing = false;
+        };
+
         // 기존 값 순서 유지. 새 프리미티브는 뒤에 추가해 기존 프리팹 Type 숫자를 깨지 않습니다.
         enum class MeshType { Custom = 0, Cube, Sphere, Plane, Quad, Capsule, Cylinder, Torus };
         MeshType Type = MeshType::Cube;
@@ -220,6 +229,12 @@ namespace CCEngine
         // 실제 색/텍스처 값은 렌더 직전에 Material 파일을 해석해 사용한다.
         std::string MaterialAssetGuid;
         std::string MaterialPath;
+        // None과 Missing은 다르다. None은 기본 머티리얼로 그리고, Missing은 에러 쉐이더로 보여야 한다.
+        bool MaterialMissing = false;
+        // 상용 엔진은 Mesh Renderer 안에 Element 0, Element 1 같은 Material 슬롯을 둔다.
+        // 현재 렌더러는 Mesh 하나를 통째로 그리므로 slot 0을 실제 렌더에 사용하고,
+        // 배열 구조는 FBX submesh와 향후 부분 렌더링을 같은 데이터 구조로 받기 위한 기반이다.
+        std::vector<MaterialSlot> MaterialSlots;
 
         MeshComponent() = default;
         MeshComponent(const MeshComponent&) = default;
@@ -273,10 +288,49 @@ namespace CCEngine
 
     struct AnimatorComponent
     {
+        struct State
+        {
+            std::string Name = "Default";
+            int ClipIndex = 0;
+            bool Loop = true;
+            float Speed = 1.0f;
+        };
+
         Animator AnimPlayer;
+        std::string SourceAssetGuid;
+        std::string SourcePath;
+        int SelectedClipIndex = 0;
+        std::string SelectedClipName;
+        bool AutoPlay = true;
+        bool PreviewInEdit = false;
+        bool Loop = true;
+        float Speed = 1.0f;
+        bool IsPlaying = false;
+        int ActiveStateIndex = 0;
+        std::vector<State> States;
+
+        // RuntimeClip은 실행 중에만 쓰는 캐시다.
+        // 씬 파일에는 경로/GUID와 ClipIndex만 저장하고, 실제 클립 데이터는 필요할 때 다시 읽는다.
+        std::shared_ptr<AnimationClip> RuntimeClip;
+        std::string RuntimeClipKey;
 
         AnimatorComponent() = default;
-        AnimatorComponent(const AnimatorComponent&) = default;
+        AnimatorComponent(const AnimatorComponent& other)
+            : SourceAssetGuid(other.SourceAssetGuid),
+            SourcePath(other.SourcePath),
+            SelectedClipIndex(other.SelectedClipIndex),
+            SelectedClipName(other.SelectedClipName),
+            AutoPlay(other.AutoPlay),
+            PreviewInEdit(other.PreviewInEdit),
+            Loop(other.Loop),
+            Speed(other.Speed),
+            IsPlaying(false),
+            ActiveStateIndex(other.ActiveStateIndex),
+            States(other.States)
+        {
+            // Animator와 RuntimeClip은 현재 재생 위치를 들고 있는 실행 상태다.
+            // 복제/Play Scene 생성 시에는 설정만 복사하고, 실제 클립은 새 씬에서 다시 로드한다.
+        }
     };
 
     // ==========================================================

@@ -14,6 +14,8 @@ namespace CCEngine
     struct CameraData
     {
         DirectX::XMMATRIX ViewProjection;
+        DirectX::XMFLOAT3 CameraPosition = { 0.0f, 0.0f, 0.0f };
+        float Padding = 0.0f;
     };
 
     struct SceneBufferData
@@ -52,7 +54,7 @@ namespace CCEngine
         DirectX::XMFLOAT4 ColorProperties[MaxMaterialColorProperties] = {};
         DirectX::XMFLOAT4 ScalarProperties[4] = {};
         DirectX::XMFLOAT4 ToggleProperties[4] = {};
-        DirectX::XMFLOAT4 SurfaceValues = { 0.5f, 0.0f, 0.0f, 0.0f }; // x: Roughness, y: Metallic
+        DirectX::XMFLOAT4 SurfaceValues = { 0.5f, 0.0f, 0.0f, 0.0f }; // x: Roughness, y: Metallic, w: NormalTexture 사용 여부
     };
 
     Renderer3D::RenderData* Renderer3D::s_Data = new Renderer3D::RenderData();
@@ -95,6 +97,7 @@ namespace CCEngine
         // 매 프레임 시작 시, 카메라 행렬(ViewProjection)을 계산하여 상수 버퍼에 세팅!
         CameraData camData;
 		camData.ViewProjection = CCEngine::Math::MathUtils::GetMatrixForShader(camera.GetViewProjectionMatrix());
+        camData.CameraPosition = camera.GetPosition();
             //CCEngine::Math::MathUtils::GetMatrixForShader(camera.GetViewProjectionMatrix());
 
         s_Data->CameraConstantBuffer->SetData(&camData, sizeof(CameraData));
@@ -166,7 +169,7 @@ namespace CCEngine
         return texture;
     }
 
-    void Renderer3D::BindMaterialProperties(const MaterialAsset* material, const std::shared_ptr<Texture2D>& fallbackAlbedo)
+    void Renderer3D::BindMaterialProperties(const MaterialAsset* material, const std::shared_ptr<Texture2D>& fallbackAlbedo, bool useBasePbrLayout)
     {
         MaterialPropertyBufferData buffer;
         const MaterialAsset* source = material;
@@ -177,11 +180,27 @@ namespace CCEngine
             buffer.SurfaceValues.y = source->Metallic;
         }
 
+        bool materialUsesNormalTexture = source && !source->NormalTexturePath.empty();
+        if (source && !materialUsesNormalTexture)
+        {
+            for (const auto& [name, value] : source->ShaderProperties)
+            {
+                if (name == "NormalTexture" && value.Type == ShaderPropertyType::Texture2D && !value.TexturePath.empty())
+                {
+                    materialUsesNormalTexture = true;
+                    break;
+                }
+            }
+        }
+
         uint32_t colorIndex = 0;
         uint32_t scalarIndex = 0;
         uint32_t toggleIndex = 0;
-        uint32_t textureIndex = 1;
+        // t0는 Albedo, t1은 NormalTexture가 필요할 때 예약한다.
+        // 예약 여부를 먼저 정해야 다른 커스텀 텍스처가 같은 슬롯을 덮어쓰지 않는다.
+        uint32_t textureIndex = (useBasePbrLayout || materialUsesNormalTexture) ? 2 : 1;
         bool albedoSlotBound = false;
+        bool normalSlotBound = false;
 
         if (source)
         {
@@ -218,11 +237,31 @@ namespace CCEngine
                             albedoSlotBound = true;
                         }
                     }
+                    else if (name == "NormalTexture")
+                    {
+                        if (texture)
+                        {
+                            texture->Bind(1);
+                            buffer.SurfaceValues.w = 1.0f;
+                            normalSlotBound = true;
+                        }
+                    }
                     else if (texture && textureIndex < MaxMaterialTextureSlots)
                     {
                         texture->Bind(textureIndex++);
                     }
                 }
+            }
+        }
+
+        if (!normalSlotBound && source && !source->NormalTexturePath.empty())
+        {
+            std::shared_ptr<Texture2D> normalTexture = GetCachedMaterialTexture(source->NormalTexturePath);
+            if (normalTexture)
+            {
+                normalTexture->Bind(1);
+                buffer.SurfaceValues.w = 1.0f;
+                normalSlotBound = true;
             }
         }
 
@@ -243,7 +282,7 @@ namespace CCEngine
         DrawMesh(transform, mesh, texture, color, nullptr, entityID);
     }
 
-    void Renderer3D::DrawMesh(const DirectX::XMMATRIX& transform, const std::shared_ptr<Mesh>& mesh, const std::shared_ptr<Texture2D>& texture, const DirectX::XMFLOAT4& color, const MaterialAsset* material, int entityID)
+    void Renderer3D::DrawMesh(const DirectX::XMMATRIX& transform, const std::shared_ptr<Mesh>& mesh, const std::shared_ptr<Texture2D>& texture, const DirectX::XMFLOAT4& color, const MaterialAsset* material, int entityID, bool forceErrorShader)
     {
         if (!mesh)
         {
@@ -261,14 +300,15 @@ namespace CCEngine
         s_Data->TransformConstantBuffer->SetData(&transformData, sizeof(TransformData));
         s_Data->TransformConstantBuffer->Bind(1);
 
-        BindMaterialProperties(material, texture);
-
-        // Material에 커스텀 HLSL이 연결된 경우 런타임 셰이더 캐시에서 가져온다.
-        // 컴파일 실패 시에는 RuntimeShaderLibrary가 에러 셰이더를 반환해 씬에서 바로 보이게 한다.
-        std::shared_ptr<Shader> runtimeShader = material ? RuntimeShaderLibrary::GetShaderForMaterial(*material) : nullptr;
+        // Missing Material은 None과 다르다. None은 기본 셰이더로 그리고, Missing은 에러 셰이더로 보여준다.
+        // 이렇게 해야 깨진 참조가 씬 뷰에서 바로 드러난다.
+        std::shared_ptr<Shader> runtimeShader = forceErrorShader
+            ? RuntimeShaderLibrary::GetErrorShader()
+            : (material ? RuntimeShaderLibrary::GetShaderForMaterial(*material) : nullptr);
         Shader* activeShader = runtimeShader && runtimeShader->IsValid()
             ? runtimeShader.get()
             : s_Data->Base3DShader.get();
+        BindMaterialProperties(material, texture, activeShader == s_Data->Base3DShader.get());
 
         // 2. 셰이더 활성화 및 레이아웃 설정
         activeShader->Bind();
@@ -313,7 +353,7 @@ namespace CCEngine
         DrawSkinnedMesh(transform, mesh, texture, color, nullptr, entityID, boneMatrices);
     }
 
-    void Renderer3D::DrawSkinnedMesh(const DirectX::XMMATRIX& transform, const std::shared_ptr<Mesh>& mesh, const std::shared_ptr<Texture2D>& texture, const DirectX::XMFLOAT4& color, const MaterialAsset* material, int entityID, const std::vector<DirectX::XMMATRIX>& boneMatrices)
+    void Renderer3D::DrawSkinnedMesh(const DirectX::XMMATRIX& transform, const std::shared_ptr<Mesh>& mesh, const std::shared_ptr<Texture2D>& texture, const DirectX::XMFLOAT4& color, const MaterialAsset* material, int entityID, const std::vector<DirectX::XMMATRIX>& boneMatrices, bool forceErrorShader)
     {
         if (!mesh)
         {
@@ -350,12 +390,13 @@ namespace CCEngine
         s_Data->BoneConstantBuffer->SetData(&boneData, sizeof(BoneData));
         s_Data->BoneConstantBuffer->Bind(2);
 
-        BindMaterialProperties(material, texture);
-
-        std::shared_ptr<Shader> runtimeShader = material ? RuntimeShaderLibrary::GetShaderForMaterial(*material) : nullptr;
+        std::shared_ptr<Shader> runtimeShader = forceErrorShader
+            ? RuntimeShaderLibrary::GetErrorShader()
+            : (material ? RuntimeShaderLibrary::GetShaderForMaterial(*material) : nullptr);
         Shader* activeShader = runtimeShader && runtimeShader->IsValid()
             ? runtimeShader.get()
             : s_Data->Base3DShader.get();
+        BindMaterialProperties(material, texture, activeShader == s_Data->Base3DShader.get());
 
         activeShader->Bind();
         activeShader->BindLayout(mesh->GetVertexBuffer()->GetLayout());

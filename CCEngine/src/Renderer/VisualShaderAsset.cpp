@@ -2,6 +2,8 @@
 
 #include <fstream>
 #include <functional>
+#include <algorithm>
+#include <iomanip>
 #include <unordered_map>
 #include <unordered_set>
 #include <sstream>
@@ -14,6 +16,23 @@ namespace CCEngine
         {
             auto it = nodesById.find(id);
             return it == nodesById.end() ? nullptr : it->second;
+        }
+
+        float GetDefaultNodeValue(VisualShaderNodeType type)
+        {
+            switch (type)
+            {
+                case VisualShaderNodeType::Fresnel: return 4.0f;
+                case VisualShaderNodeType::Power: return 2.0f;
+                default: return 0.5f;
+            }
+        }
+
+        std::string FloatLiteral(float value)
+        {
+            std::ostringstream stream;
+            stream << std::fixed << std::setprecision(3) << value << "f";
+            return stream.str();
         }
 
         std::string BuildNodeExpression(
@@ -51,6 +70,40 @@ namespace CCEngine
                 case VisualShaderNodeType::Add:
                     expression = "saturate(" + inputOrDefault(node->InputA, "float4(0.0f, 0.0f, 0.0f, 0.0f)") +
                         " + " + inputOrDefault(node->InputB, "float4(0.0f, 0.0f, 0.0f, 0.0f)") + ")";
+                    break;
+                case VisualShaderNodeType::Lerp:
+                    expression = "lerp(" + inputOrDefault(node->InputA, "float4(0.0f, 0.0f, 0.0f, 1.0f)") +
+                        ", " + inputOrDefault(node->InputB, "float4(1.0f, 1.0f, 1.0f, 1.0f)") + ", " +
+                        FloatLiteral((std::clamp)(node->Value, 0.0f, 1.0f)) + ")";
+                    break;
+                case VisualShaderNodeType::Fresnel:
+                    expression = "float4(pow(1.0f - saturate(abs(normalize(input.Normal).z)), " +
+                        FloatLiteral((std::clamp)(node->Value, 0.1f, 12.0f)) + ").xxx, 1.0f)";
+                    break;
+                case VisualShaderNodeType::Normal:
+                    expression = "float4(normalize(input.Normal) * 0.5f + 0.5f, 1.0f)";
+                    break;
+                case VisualShaderNodeType::Roughness:
+                    expression = "float4(SurfaceValues.xxx, 1.0f)";
+                    break;
+                case VisualShaderNodeType::Metallic:
+                    expression = "float4(SurfaceValues.yyy, 1.0f)";
+                    break;
+                case VisualShaderNodeType::OneMinus:
+                    expression = "saturate(1.0f - " + inputOrDefault(node->InputA, "float4(0.0f, 0.0f, 0.0f, 0.0f)") + ")";
+                    break;
+                case VisualShaderNodeType::Power:
+                    expression = "pow(saturate(" + inputOrDefault(node->InputA, "AlbedoColor") + "), " +
+                        FloatLiteral((std::clamp)(node->Value, 0.1f, 12.0f)) + ")";
+                    break;
+                case VisualShaderNodeType::Saturate:
+                    expression = "saturate(" + inputOrDefault(node->InputA, "AlbedoColor") + ")";
+                    break;
+                case VisualShaderNodeType::UV:
+                    expression = "float4(input.TexCoord, 0.0f, 1.0f)";
+                    break;
+                case VisualShaderNodeType::Time:
+                    expression = "float4(SurfaceValues.zzz, 1.0f)";
                     break;
                 case VisualShaderNodeType::Output:
                     expression = inputOrDefault(node->InputA, "AlbedoColor");
@@ -127,6 +180,7 @@ namespace CCEngine
                 node.Id = nodeData.value("Id", 0);
                 node.Type = NodeTypeFromString(nodeData.value("Type", "Color"));
                 node.Name = nodeData.value("Name", "");
+                node.Value = nodeData.value("Value", GetDefaultNodeValue(node.Type));
                 if (nodeData.contains("Position") && nodeData["Position"].is_array() && nodeData["Position"].size() >= 2)
                 {
                     node.Position = {
@@ -168,6 +222,7 @@ namespace CCEngine
             nodeData["Name"] = node.Name;
             nodeData["Position"] = { node.Position.x, node.Position.y };
             nodeData["Color"] = { node.Color.x, node.Color.y, node.Color.z, node.Color.w };
+            nodeData["Value"] = node.Value;
             nodeData["InputA"] = node.InputA;
             nodeData["InputB"] = node.InputB;
             data["Nodes"].push_back(nodeData);
@@ -279,6 +334,16 @@ namespace CCEngine
             case VisualShaderNodeType::Texture2D: return "Texture2D";
             case VisualShaderNodeType::Multiply: return "Multiply";
             case VisualShaderNodeType::Add: return "Add";
+            case VisualShaderNodeType::Lerp: return "Lerp";
+            case VisualShaderNodeType::Fresnel: return "Fresnel";
+            case VisualShaderNodeType::Normal: return "Normal";
+            case VisualShaderNodeType::Roughness: return "Roughness";
+            case VisualShaderNodeType::Metallic: return "Metallic";
+            case VisualShaderNodeType::OneMinus: return "OneMinus";
+            case VisualShaderNodeType::Power: return "Power";
+            case VisualShaderNodeType::Saturate: return "Saturate";
+            case VisualShaderNodeType::UV: return "UV";
+            case VisualShaderNodeType::Time: return "Time";
             case VisualShaderNodeType::Output: return "Output";
             default: return "Color";
         }
@@ -289,6 +354,16 @@ namespace CCEngine
         if (text == "Texture2D") return VisualShaderNodeType::Texture2D;
         if (text == "Multiply") return VisualShaderNodeType::Multiply;
         if (text == "Add") return VisualShaderNodeType::Add;
+        if (text == "Lerp") return VisualShaderNodeType::Lerp;
+        if (text == "Fresnel") return VisualShaderNodeType::Fresnel;
+        if (text == "Normal") return VisualShaderNodeType::Normal;
+        if (text == "Roughness") return VisualShaderNodeType::Roughness;
+        if (text == "Metallic") return VisualShaderNodeType::Metallic;
+        if (text == "OneMinus") return VisualShaderNodeType::OneMinus;
+        if (text == "Power") return VisualShaderNodeType::Power;
+        if (text == "Saturate") return VisualShaderNodeType::Saturate;
+        if (text == "UV") return VisualShaderNodeType::UV;
+        if (text == "Time") return VisualShaderNodeType::Time;
         if (text == "Output") return VisualShaderNodeType::Output;
         return VisualShaderNodeType::Color;
     }

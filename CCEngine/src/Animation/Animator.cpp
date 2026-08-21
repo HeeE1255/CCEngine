@@ -2,7 +2,11 @@
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
+#include <algorithm>
 #include <cmath>
+#include <filesystem>
+#include <mutex>
+#include <sstream>
 #include <windows.h> // 디버그
 
 #include "Scene/Scene.h"
@@ -13,6 +17,41 @@
 
 namespace CCEngine
 {
+    namespace
+    {
+        template<typename TValue>
+        float GetKeyAlpha(const std::vector<std::pair<float, TValue>>& keys, float currentTime, size_t& outIndex)
+        {
+            outIndex = 0;
+            if (keys.size() <= 1)
+                return 0.0f;
+
+            for (size_t i = 0; i + 1 < keys.size(); ++i)
+            {
+                if (currentTime < keys[i + 1].first)
+                {
+                    outIndex = i;
+                    const float span = keys[i + 1].first - keys[i].first;
+                    return span > 0.0f ? (currentTime - keys[i].first) / span : 0.0f;
+                }
+            }
+
+            outIndex = keys.size() - 2;
+            return 1.0f;
+        }
+
+        std::string MakeClipCacheKey(const std::string& path, uint32_t clipIndex)
+        {
+            std::error_code ec;
+            auto writeTime = std::filesystem::last_write_time(path, ec);
+            std::ostringstream stream;
+            stream << path << "#" << clipIndex;
+            if (!ec)
+                stream << "#" << writeTime.time_since_epoch().count();
+            return stream.str();
+        }
+    }
+
     // =========================================================
     // 1. BoneAnimChannel (현재 시간에 맞는 프레임 찾기)
     // =========================================================
@@ -20,55 +59,54 @@ namespace CCEngine
     {
         if (!PositionKeys.empty())
         {
-            outPos = PositionKeys[0].second;
-            for (size_t i = 0; i < PositionKeys.size() - 1; ++i)
-            {
-                if (currentTime < PositionKeys[i + 1].first)
-                {
-                    outPos = PositionKeys[i].second;
-                    break;
-                }
-            }
+            size_t keyIndex = 0;
+            float alpha = GetKeyAlpha(PositionKeys, currentTime, keyIndex);
+            auto a = DirectX::XMLoadFloat3(&PositionKeys[keyIndex].second);
+            auto b = DirectX::XMLoadFloat3(&PositionKeys[(std::min)(keyIndex + 1, PositionKeys.size() - 1)].second);
+            DirectX::XMStoreFloat3(&outPos, DirectX::XMVectorLerp(a, b, alpha));
         }
 
         if (!RotationKeys.empty())
         {
-            outRot = RotationKeys[0].second;
-            for (size_t i = 0; i < RotationKeys.size() - 1; ++i)
-            {
-                if (currentTime < RotationKeys[i + 1].first)
-                {
-                    outRot = RotationKeys[i].second;
-                    break;
-                }
-            }
+            size_t keyIndex = 0;
+            float alpha = GetKeyAlpha(RotationKeys, currentTime, keyIndex);
+            auto a = DirectX::XMLoadFloat4(&RotationKeys[keyIndex].second);
+            auto b = DirectX::XMLoadFloat4(&RotationKeys[(std::min)(keyIndex + 1, RotationKeys.size() - 1)].second);
+            DirectX::XMStoreFloat4(&outRot, DirectX::XMQuaternionSlerp(a, b, alpha));
         }
 
         if (!ScaleKeys.empty())
         {
-            outScale = ScaleKeys[0].second;
-            for (size_t i = 0; i < ScaleKeys.size() - 1; ++i)
-            {
-                if (currentTime < ScaleKeys[i + 1].first)
-                {
-                    outScale = ScaleKeys[i].second;
-                    break;
-                }
-            }
+            size_t keyIndex = 0;
+            float alpha = GetKeyAlpha(ScaleKeys, currentTime, keyIndex);
+            auto a = DirectX::XMLoadFloat3(&ScaleKeys[keyIndex].second);
+            auto b = DirectX::XMLoadFloat3(&ScaleKeys[(std::min)(keyIndex + 1, ScaleKeys.size() - 1)].second);
+            DirectX::XMStoreFloat3(&outScale, DirectX::XMVectorLerp(a, b, alpha));
         }
     }
 
     // =========================================================
     // 2. AnimationClip (파일에서 애니메이션 추출)
     // =========================================================
-    AnimationClip::AnimationClip(const std::string& path)
+    AnimationClip::AnimationClip(const std::string& path, uint32_t clipIndex)
+        : m_SourcePath(path), m_ClipIndex(clipIndex)
     {
         Assimp::Importer importer;
-        const aiScene* scene = importer.ReadFile(path, aiProcess_Triangulate);
+        const aiScene* scene = importer.ReadFile(path,
+            aiProcess_Triangulate |
+            aiProcess_GenSmoothNormals |
+            aiProcess_FlipUVs |
+            aiProcess_JoinIdenticalVertices |
+            aiProcess_ConvertToLeftHanded
+        );
 
-        if (scene && scene->mAnimations)
+        if (scene && scene->mAnimations && scene->mNumAnimations > 0)
         {
-            aiAnimation* anim = scene->mAnimations[0]; // 0번째 애니메이션 로드
+            uint32_t lastIndex = scene->mNumAnimations - 1;
+            uint32_t safeIndex = clipIndex < lastIndex ? clipIndex : lastIndex;
+            aiAnimation* anim = scene->mAnimations[safeIndex];
+            m_ClipIndex = safeIndex;
+            m_Name = anim->mName.length > 0 ? anim->mName.C_Str() : ("Clip " + std::to_string(safeIndex));
             m_Duration = static_cast<float>(anim->mDuration);
             m_TicksPerSecond = anim->mTicksPerSecond != 0.0 ? static_cast<float>(anim->mTicksPerSecond) : 25.0f;
 
@@ -124,8 +162,30 @@ namespace CCEngine
 
     void Animator::PlayAnimation(AnimationClip* clip)
     {
-        m_CurrentClip = clip;
+        m_CurrentClip.reset();
+        m_LegacyCurrentClip = clip;
         m_CurrentTime = 0.0f;
+        m_Playing = clip != nullptr;
+        m_StaticPoseInitialized = false;
+    }
+
+    void Animator::PlayAnimation(const std::shared_ptr<AnimationClip>& clip, bool restart)
+    {
+        if (restart || m_CurrentClip != clip)
+            m_CurrentTime = 0.0f;
+
+        m_CurrentClip = clip;
+        m_LegacyCurrentClip = nullptr;
+        m_Playing = clip != nullptr;
+        m_StaticPoseInitialized = false;
+    }
+
+    void Animator::StopAnimation()
+    {
+        m_CurrentClip.reset();
+        m_LegacyCurrentClip = nullptr;
+        m_CurrentTime = 0.0f;
+        m_Playing = false;
         m_StaticPoseInitialized = false;
     }
 
@@ -136,11 +196,24 @@ namespace CCEngine
 
     void Animator::Update(float deltaTime, Model* model, Scene* scene, const std::unordered_map<std::string, entt::entity>* nodeEntityMap)
     {
-        if (m_CurrentClip)
+        AnimationClip* currentClip = m_CurrentClip ? m_CurrentClip.get() : m_LegacyCurrentClip;
+        if (currentClip && m_Playing)
         {
-            // 시간에 따른 프레임 진행
-            m_CurrentTime += m_CurrentClip->GetTicksPerSecond() * deltaTime;
-            m_CurrentTime = fmod(m_CurrentTime, m_CurrentClip->GetDuration()); // 무한 반복
+            // 클립 시간은 초가 아니라 FBX 내부 tick 단위다.
+            // deltaTime(초)에 tick/sec와 speed를 곱해야 원본 애니메이션 속도를 그대로 따라간다.
+            m_CurrentTime += currentClip->GetTicksPerSecond() * deltaTime * (std::max)(0.0f, m_Speed);
+            if (currentClip->GetDuration() > 0.0f)
+            {
+                if (m_Loop)
+                {
+                    m_CurrentTime = fmod(m_CurrentTime, currentClip->GetDuration());
+                }
+                else if (m_CurrentTime >= currentClip->GetDuration())
+                {
+                    m_CurrentTime = currentClip->GetDuration();
+                    m_Playing = false;
+                }
+            }
         }
         else if (!StaticPoseChanged(scene, nodeEntityMap))
         {
@@ -193,7 +266,8 @@ namespace CCEngine
         DirectX::XMMATRIX nodeTransform;
 
         // 현재 클립이 없으면 원본 노드 또는 씬 엔티티 트랜스폼을 사용합니다.
-        BoneAnimChannel* channel = m_CurrentClip ? m_CurrentClip->GetBoneChannel(nodeName) : nullptr;
+        AnimationClip* currentClip = m_CurrentClip ? m_CurrentClip.get() : m_LegacyCurrentClip;
+        BoneAnimChannel* channel = (currentClip && m_Playing) ? currentClip->GetBoneChannel(nodeName) : nullptr;
 
         if (channel)
         {
@@ -259,6 +333,69 @@ namespace CCEngine
         {
             CalculateBoneTransform(child, globalTransform, model, scene, nodeEntityMap);
         }
+    }
+
+    std::vector<AnimationClipInfo> AnimationClip::InspectClips(const std::string& path)
+    {
+        static std::mutex cacheMutex;
+        static std::unordered_map<std::string, std::vector<AnimationClipInfo>> cache;
+
+        const std::string cacheKey = MakeClipCacheKey(path, 0);
+        {
+            std::lock_guard<std::mutex> lock(cacheMutex);
+            auto found = cache.find(cacheKey);
+            if (found != cache.end())
+                return found->second;
+        }
+
+        std::vector<AnimationClipInfo> clips;
+        Assimp::Importer importer;
+        const aiScene* scene = importer.ReadFile(path,
+            aiProcess_Triangulate |
+            aiProcess_GenSmoothNormals |
+            aiProcess_FlipUVs |
+            aiProcess_JoinIdenticalVertices |
+            aiProcess_ConvertToLeftHanded
+        );
+        if (scene && scene->mAnimations && scene->mNumAnimations > 0)
+        {
+            for (uint32_t i = 0; i < scene->mNumAnimations; ++i)
+            {
+                aiAnimation* anim = scene->mAnimations[i];
+                AnimationClipInfo info;
+                info.Index = i;
+                info.Name = anim->mName.length > 0 ? anim->mName.C_Str() : ("Clip " + std::to_string(i));
+                info.DurationTicks = static_cast<float>(anim->mDuration);
+                info.TicksPerSecond = anim->mTicksPerSecond != 0.0 ? static_cast<float>(anim->mTicksPerSecond) : 25.0f;
+                info.ChannelCount = anim->mNumChannels;
+                clips.push_back(info);
+            }
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(cacheMutex);
+            cache[cacheKey] = clips;
+        }
+        return clips;
+    }
+
+    std::shared_ptr<AnimationClip> AnimationClip::LoadShared(const std::string& path, uint32_t clipIndex)
+    {
+        static std::mutex cacheMutex;
+        static std::unordered_map<std::string, std::weak_ptr<AnimationClip>> cache;
+
+        const std::string cacheKey = MakeClipCacheKey(path, clipIndex);
+        std::lock_guard<std::mutex> lock(cacheMutex);
+        auto found = cache.find(cacheKey);
+        if (found != cache.end())
+        {
+            if (auto alive = found->second.lock())
+                return alive;
+        }
+
+        auto clip = std::make_shared<AnimationClip>(path, clipIndex);
+        cache[cacheKey] = clip;
+        return clip;
     }
 
     bool Animator::StaticPoseChanged(Scene* scene, const std::unordered_map<std::string, entt::entity>* nodeEntityMap)
