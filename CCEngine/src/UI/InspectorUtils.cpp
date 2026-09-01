@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <sstream>
 #include <type_traits>
+#include <chrono>
 
 namespace CCEngine {
     namespace UI {
@@ -975,6 +976,99 @@ namespace CCEngine {
                     item->SetAnchorMin(0.0f, 0.0f); item->SetAnchorMax(1.0f, 0.0f);
                     parent->AddChild(item);
 
+                    std::filesystem::path controllerPath = animator.ControllerPath;
+                    if (!animator.ControllerAssetGuid.empty())
+                    {
+                        std::filesystem::path guidPath = AssetDatabase::GetPathFromGuid(animator.ControllerAssetGuid);
+                        if (!guidPath.empty())
+                            controllerPath = guidPath;
+                    }
+                    const std::string controllerLabel = controllerPath.empty()
+                        ? "Controller: None (create/assign .ccanimcontroller)"
+                        : "Controller: " + controllerPath.filename().string();
+
+                    auto controllerButton = new UI::Button("AnimatorControllerAsset", controllerLabel);
+                    controllerButton->SetAnchorMin(0.0f, 0.0f); controllerButton->SetAnchorMax(1.0f, 0.0f);
+                    controllerButton->SetOffsetMin(15.0f, 0.0f); controllerButton->SetOffsetMax(-10.0f, 28.0f);
+                    controllerButton->SetOnClick([entity]() mutable
+                        {
+                            static entt::entity lastClicked = entt::null;
+                            static auto lastClickTime = std::chrono::steady_clock::now() - std::chrono::seconds(2);
+
+                            auto now = std::chrono::steady_clock::now();
+                            const bool doubleClick =
+                                lastClicked == (entt::entity)entity &&
+                                std::chrono::duration<float>(now - lastClickTime).count() <= 0.45f;
+
+                            lastClicked = (entt::entity)entity;
+                            lastClickTime = now;
+
+                            if (doubleClick && entity && entity.HasComponent<AnimatorComponent>())
+                                entity.GetComponent<AnimatorComponent>().EditorOpenGraphRequested = true;
+                        });
+                    item->AddChild(controllerButton);
+
+                    Entity controllerModelRoot = FindModelRoot(entity);
+                    std::string sourceLabel = "Animation Source: (none)";
+                    if (controllerModelRoot && controllerModelRoot.HasComponent<ModelComponent>())
+                    {
+                        const auto& model = controllerModelRoot.GetComponent<ModelComponent>();
+                        std::filesystem::path sourcePath = animator.SourcePath;
+                        if (!animator.SourceAssetGuid.empty())
+                        {
+                            std::filesystem::path guidPath = AssetDatabase::GetPathFromGuid(animator.SourceAssetGuid);
+                            if (!guidPath.empty())
+                                sourcePath = guidPath;
+                        }
+                        if (sourcePath.empty() && !model.AssetGuid.empty())
+                            sourcePath = AssetDatabase::GetPathFromGuid(model.AssetGuid);
+                        if (!sourcePath.empty())
+                            sourceLabel = "Animation Source: " + sourcePath.filename().string();
+                    }
+                    auto sourceButton = new UI::Button("AnimatorSourceAsset", sourceLabel);
+                    sourceButton->SetAnchorMin(0.0f, 0.0f); sourceButton->SetAnchorMax(1.0f, 0.0f);
+                    sourceButton->SetOffsetMin(15.0f, 0.0f); sourceButton->SetOffsetMax(-10.0f, 28.0f);
+                    item->AddChild(sourceButton);
+
+                    auto openGraphButton = new UI::Button("AnimatorOpenGraph", "Open Animator Graph");
+                    openGraphButton->SetAnchorMin(0.0f, 0.0f); openGraphButton->SetAnchorMax(1.0f, 0.0f);
+                    openGraphButton->SetOffsetMin(15.0f, 0.0f); openGraphButton->SetOffsetMax(-10.0f, 28.0f);
+                    openGraphButton->SetOnClick([entity]() mutable
+                        {
+                            if (entity && entity.HasComponent<AnimatorComponent>())
+                                entity.GetComponent<AnimatorComponent>().EditorOpenGraphRequested = true;
+                        });
+                    item->AddChild(openGraphButton);
+
+                    const std::string stateSummary = animator.States.empty()
+                        ? "States: 0"
+                        : "States: " + std::to_string(animator.States.size()) + " / Entry: " +
+                            animator.States[std::clamp(animator.EntryStateIndex, 0, static_cast<int>(animator.States.size() - 1))].Name;
+                    auto summaryButton = new UI::Button("AnimatorSummary", stateSummary);
+                    summaryButton->SetAnchorMin(0.0f, 0.0f); summaryButton->SetAnchorMax(1.0f, 0.0f);
+                    summaryButton->SetOffsetMin(15.0f, 0.0f); summaryButton->SetOffsetMax(-10.0f, 28.0f);
+                    item->AddChild(summaryButton);
+
+                    auto autoPlayButtonSimple = new UI::Button("AnimatorAutoPlaySimple", animator.AutoPlay ? "Auto Play: On" : "Auto Play: Off");
+                    autoPlayButtonSimple->SetAnchorMin(0.0f, 0.0f); autoPlayButtonSimple->SetAnchorMax(1.0f, 0.0f);
+                    autoPlayButtonSimple->SetOffsetMin(15.0f, 0.0f); autoPlayButtonSimple->SetOffsetMax(-10.0f, 28.0f);
+                    autoPlayButtonSimple->SetActive(animator.AutoPlay);
+                    autoPlayButtonSimple->SetOnClick([entity, autoPlayButtonSimple]() mutable
+                        {
+                            if (!entity || !entity.HasComponent<AnimatorComponent>())
+                                return;
+                            auto& anim = entity.GetComponent<AnimatorComponent>();
+                            anim.AutoPlay = !anim.AutoPlay;
+                            autoPlayButtonSimple->SetActive(anim.AutoPlay);
+                            autoPlayButtonSimple->SetText(anim.AutoPlay ? "Auto Play: On" : "Auto Play: Off");
+                        });
+                    item->AddChild(autoPlayButtonSimple);
+
+                    // Animator Component는 실행 옵션과 컨트롤러 참조만 보여준다.
+                    // 상태/파라미터/노드 위치 편집은 별도 Animator Graph 창에서 다뤄 인스펙터가 비대해지는 것을 막는다.
+                    AddRemoveComponentButton<AnimatorComponent>(parent, item, entity, "Animator");
+                    return;
+
                     Entity modelRoot = FindModelRoot(entity);
                     if (!modelRoot || !modelRoot.HasComponent<ModelComponent>())
                     {
@@ -1005,7 +1099,7 @@ namespace CCEngine {
                     animator.SelectedClipIndex = std::clamp(animator.SelectedClipIndex, 0, static_cast<int>(clips.size() - 1));
                     animator.SelectedClipName = clips[animator.SelectedClipIndex].Name;
 
-                    auto clipButton = new UI::Button("AnimatorClip", "Clip: " + animator.SelectedClipName);
+                    auto clipButton = new UI::Button("AnimatorClip", "Source Clip: " + animator.SelectedClipName);
                     clipButton->SetAnchorMin(0.0f, 0.0f); clipButton->SetAnchorMax(1.0f, 0.0f);
                     clipButton->SetOffsetMin(15.0f, 0.0f); clipButton->SetOffsetMax(-10.0f, 28.0f);
                     clipButton->SetOnClick([entity, clipButton, clips]() mutable
@@ -1021,11 +1115,200 @@ namespace CCEngine {
                             // 클립을 바꾸면 기존 재생 위치가 다른 클립 시간에 남지 않도록 멈춘다.
                             anim.AnimPlayer.StopAnimation();
                             anim.IsPlaying = false;
-                            clipButton->SetText("Clip: " + anim.SelectedClipName);
+                            clipButton->SetText("Source Clip: " + anim.SelectedClipName);
                         });
                     item->AddChild(clipButton);
 
-                    auto playButton = new UI::Button("AnimatorPreview", animator.IsPlaying ? "Preview: Playing" : "Preview: Stopped");
+                    auto addStateButton = new UI::Button("AnimatorAddState", "Add State From Source Clip");
+                    addStateButton->SetAnchorMin(0.0f, 0.0f); addStateButton->SetAnchorMax(1.0f, 0.0f);
+                    addStateButton->SetOffsetMin(15.0f, 0.0f); addStateButton->SetOffsetMax(-10.0f, 28.0f);
+                    addStateButton->SetOnClick([entity, clips]() mutable
+                        {
+                            if (!entity || !entity.HasComponent<AnimatorComponent>())
+                                return;
+
+                            auto& anim = entity.GetComponent<AnimatorComponent>();
+                            anim.SelectedClipIndex = std::clamp(anim.SelectedClipIndex, 0, static_cast<int>(clips.size() - 1));
+
+                            AnimatorComponent::State state;
+                            state.Name = clips[anim.SelectedClipIndex].Name.empty()
+                                ? ("State " + std::to_string(anim.States.size() + 1))
+                                : clips[anim.SelectedClipIndex].Name;
+                            state.ClipIndex = anim.SelectedClipIndex;
+                            state.Loop = true;
+                            state.Speed = 1.0f;
+                            state.WriteDefaults = true;
+                            anim.States.push_back(state);
+
+                            // 엔진이 기본 상태를 몰래 만들지 않고, 사용자가 처음 추가한 상태를 Entry로 삼는다.
+                            // 이후에는 Entry State 버튼으로 시작 상태를 직접 바꿀 수 있다.
+                            if (anim.ActiveStateIndex < 0)
+                                anim.ActiveStateIndex = 0;
+                            if (anim.EntryStateIndex < 0)
+                                anim.EntryStateIndex = 0;
+
+                            anim.RuntimeClip.reset();
+                            anim.RuntimeClipKey.clear();
+                            anim.AnimPlayer.StopAnimation();
+                            anim.IsPlaying = false;
+                        });
+                    item->AddChild(addStateButton);
+
+                    if (animator.States.empty())
+                    {
+                        auto emptyState = new UI::Button("AnimatorNoStates", "State Machine: empty. Add states manually.");
+                        emptyState->SetAnchorMin(0.0f, 0.0f); emptyState->SetAnchorMax(1.0f, 0.0f);
+                        emptyState->SetOffsetMin(15.0f, 0.0f); emptyState->SetOffsetMax(-10.0f, 28.0f);
+                        item->AddChild(emptyState);
+                        AddRemoveComponentButton<AnimatorComponent>(parent, item, entity, "Animator");
+                        return;
+                    }
+
+                    animator.ActiveStateIndex = std::clamp(animator.ActiveStateIndex, 0, static_cast<int>(animator.States.size() - 1));
+                    animator.EntryStateIndex = std::clamp(animator.EntryStateIndex, 0, static_cast<int>(animator.States.size() - 1));
+                    auto& activeState = animator.States[animator.ActiveStateIndex];
+                    activeState.ClipIndex = std::clamp(activeState.ClipIndex, 0, static_cast<int>(clips.size() - 1));
+
+                    auto activeStateButton = new UI::Button("AnimatorActiveState", "Active State: " + activeState.Name);
+                    activeStateButton->SetAnchorMin(0.0f, 0.0f); activeStateButton->SetAnchorMax(1.0f, 0.0f);
+                    activeStateButton->SetOffsetMin(15.0f, 0.0f); activeStateButton->SetOffsetMax(-10.0f, 28.0f);
+                    activeStateButton->SetOnClick([entity, activeStateButton]() mutable
+                        {
+                            if (!entity || !entity.HasComponent<AnimatorComponent>())
+                                return;
+                            auto& anim = entity.GetComponent<AnimatorComponent>();
+                            if (anim.States.empty())
+                                return;
+
+                            anim.ActiveStateIndex = (anim.ActiveStateIndex + 1) % static_cast<int>(anim.States.size());
+                            auto& state = anim.States[anim.ActiveStateIndex];
+                            anim.SelectedClipIndex = state.ClipIndex;
+                            anim.Loop = state.Loop;
+                            anim.Speed = state.Speed;
+                            anim.RuntimeClip.reset();
+                            anim.RuntimeClipKey.clear();
+                            anim.AnimPlayer.StopAnimation();
+                            anim.IsPlaying = false;
+                            activeStateButton->SetText("Active State: " + state.Name);
+                        });
+                    item->AddChild(activeStateButton);
+
+                    auto entryButton = new UI::Button("AnimatorEntryState", "Entry State: " + animator.States[animator.EntryStateIndex].Name);
+                    entryButton->SetAnchorMin(0.0f, 0.0f); entryButton->SetAnchorMax(1.0f, 0.0f);
+                    entryButton->SetOffsetMin(15.0f, 0.0f); entryButton->SetOffsetMax(-10.0f, 28.0f);
+                    entryButton->SetOnClick([entity, entryButton]() mutable
+                        {
+                            if (!entity || !entity.HasComponent<AnimatorComponent>())
+                                return;
+                            auto& anim = entity.GetComponent<AnimatorComponent>();
+                            if (anim.States.empty())
+                                return;
+
+                            anim.EntryStateIndex = anim.ActiveStateIndex;
+                            entryButton->SetText("Entry State: " + anim.States[anim.EntryStateIndex].Name);
+                        });
+                    item->AddChild(entryButton);
+
+                    auto stateName = new UI::TextInput("AnimatorStateName", "State Name");
+                    stateName->SetText(activeState.Name, false);
+                    stateName->SetAnchorMin(0.0f, 0.0f); stateName->SetAnchorMax(1.0f, 0.0f);
+                    stateName->SetOffsetMin(15.0f, 0.0f); stateName->SetOffsetMax(-10.0f, 28.0f);
+                    stateName->SetOnTextChanged([entity](const std::string& text) mutable
+                        {
+                            if (!entity || !entity.HasComponent<AnimatorComponent>())
+                                return;
+                            auto& anim = entity.GetComponent<AnimatorComponent>();
+                            if (anim.States.empty())
+                                return;
+
+                            int index = std::clamp(anim.ActiveStateIndex, 0, static_cast<int>(anim.States.size() - 1));
+                            anim.States[index].Name = text.empty() ? "State" : text;
+                        });
+                    item->AddChild(stateName);
+
+                    auto stateClipButton = new UI::Button("AnimatorStateClip", "State Clip: " + clips[activeState.ClipIndex].Name);
+                    stateClipButton->SetAnchorMin(0.0f, 0.0f); stateClipButton->SetAnchorMax(1.0f, 0.0f);
+                    stateClipButton->SetOffsetMin(15.0f, 0.0f); stateClipButton->SetOffsetMax(-10.0f, 28.0f);
+                    stateClipButton->SetOnClick([entity, stateClipButton, clips]() mutable
+                        {
+                            if (!entity || !entity.HasComponent<AnimatorComponent>())
+                                return;
+                            auto& anim = entity.GetComponent<AnimatorComponent>();
+                            if (anim.States.empty())
+                                return;
+
+                            int stateIndex = std::clamp(anim.ActiveStateIndex, 0, static_cast<int>(anim.States.size() - 1));
+                            auto& state = anim.States[stateIndex];
+                            state.ClipIndex = (state.ClipIndex + 1) % static_cast<int>(clips.size());
+                            anim.SelectedClipIndex = state.ClipIndex;
+                            anim.RuntimeClip.reset();
+                            anim.RuntimeClipKey.clear();
+                            anim.AnimPlayer.StopAnimation();
+                            anim.IsPlaying = false;
+                            stateClipButton->SetText("State Clip: " + clips[state.ClipIndex].Name);
+                        });
+                    item->AddChild(stateClipButton);
+
+                    auto stateLoopButton = new UI::Button("AnimatorStateLoop", activeState.Loop ? "State Loop: On" : "State Loop: Off");
+                    stateLoopButton->SetAnchorMin(0.0f, 0.0f); stateLoopButton->SetAnchorMax(1.0f, 0.0f);
+                    stateLoopButton->SetOffsetMin(15.0f, 0.0f); stateLoopButton->SetOffsetMax(-10.0f, 28.0f);
+                    stateLoopButton->SetOnClick([entity, stateLoopButton]() mutable
+                        {
+                            if (!entity || !entity.HasComponent<AnimatorComponent>())
+                                return;
+                            auto& anim = entity.GetComponent<AnimatorComponent>();
+                            if (anim.States.empty())
+                                return;
+
+                            int stateIndex = std::clamp(anim.ActiveStateIndex, 0, static_cast<int>(anim.States.size() - 1));
+                            auto& state = anim.States[stateIndex];
+                            state.Loop = !state.Loop;
+                            anim.Loop = state.Loop;
+                            stateLoopButton->SetText(state.Loop ? "State Loop: On" : "State Loop: Off");
+                        });
+                    item->AddChild(stateLoopButton);
+
+                    auto writeDefaultsButton = new UI::Button("AnimatorStateWriteDefaults", activeState.WriteDefaults ? "Write Defaults: On" : "Write Defaults: Off");
+                    writeDefaultsButton->SetAnchorMin(0.0f, 0.0f); writeDefaultsButton->SetAnchorMax(1.0f, 0.0f);
+                    writeDefaultsButton->SetOffsetMin(15.0f, 0.0f); writeDefaultsButton->SetOffsetMax(-10.0f, 28.0f);
+                    writeDefaultsButton->SetOnClick([entity, writeDefaultsButton]() mutable
+                        {
+                            if (!entity || !entity.HasComponent<AnimatorComponent>())
+                                return;
+                            auto& anim = entity.GetComponent<AnimatorComponent>();
+                            if (anim.States.empty())
+                                return;
+
+                            int stateIndex = std::clamp(anim.ActiveStateIndex, 0, static_cast<int>(anim.States.size() - 1));
+                            auto& state = anim.States[stateIndex];
+                            state.WriteDefaults = !state.WriteDefaults;
+                            // 이 값은 상태가 클립에 없는 본을 기본 포즈로 되돌릴지, 직전 포즈로 둘지 정한다.
+                            // 상체/손 애니메이션처럼 일부 본만 움직이는 클립에서는 Off가 필요하다.
+                            anim.AnimPlayer.SetWriteDefaults(state.WriteDefaults);
+                            writeDefaultsButton->SetText(state.WriteDefaults ? "Write Defaults: On" : "Write Defaults: Off");
+                        });
+                    item->AddChild(writeDefaultsButton);
+
+                    UI::InspectorUtils::AddDragFloat(item, "AnimatorStateSpeed", "State Speed",
+                        [entity]() mutable
+                        {
+                            auto& anim = entity.GetComponent<AnimatorComponent>();
+                            if (anim.States.empty())
+                                return 1.0f;
+                            int index = std::clamp(anim.ActiveStateIndex, 0, static_cast<int>(anim.States.size() - 1));
+                            return anim.States[index].Speed;
+                        },
+                        [entity](float v) mutable
+                        {
+                            auto& anim = entity.GetComponent<AnimatorComponent>();
+                            if (anim.States.empty())
+                                return;
+                            int index = std::clamp(anim.ActiveStateIndex, 0, static_cast<int>(anim.States.size() - 1));
+                            anim.States[index].Speed = std::max(0.0f, v);
+                            anim.Speed = anim.States[index].Speed;
+                        });
+
+                    auto playButton = new UI::Button("AnimatorPreview", animator.IsPlaying ? "Preview Active State: Playing" : "Preview Active State: Stopped");
                     playButton->SetAnchorMin(0.0f, 0.0f); playButton->SetAnchorMax(1.0f, 0.0f);
                     playButton->SetOffsetMin(15.0f, 0.0f); playButton->SetOffsetMax(-10.0f, 28.0f);
                     playButton->SetOnClick([entity, playButton]() mutable
@@ -1038,22 +1321,9 @@ namespace CCEngine {
                             anim.IsPlaying = !anim.IsPlaying;
                             if (!anim.IsPlaying)
                                 anim.AnimPlayer.StopAnimation();
-                            playButton->SetText(anim.IsPlaying ? "Preview: Playing" : "Preview: Stopped");
+                            playButton->SetText(anim.IsPlaying ? "Preview Active State: Playing" : "Preview Active State: Stopped");
                         });
                     item->AddChild(playButton);
-
-                    auto loopButton = new UI::Button("AnimatorLoop", animator.Loop ? "Loop: On" : "Loop: Off");
-                    loopButton->SetAnchorMin(0.0f, 0.0f); loopButton->SetAnchorMax(1.0f, 0.0f);
-                    loopButton->SetOffsetMin(15.0f, 0.0f); loopButton->SetOffsetMax(-10.0f, 28.0f);
-                    loopButton->SetOnClick([entity, loopButton]() mutable
-                        {
-                            if (!entity || !entity.HasComponent<AnimatorComponent>())
-                                return;
-                            auto& anim = entity.GetComponent<AnimatorComponent>();
-                            anim.Loop = !anim.Loop;
-                            loopButton->SetText(anim.Loop ? "Loop: On" : "Loop: Off");
-                        });
-                    item->AddChild(loopButton);
 
                     auto autoPlayButton = new UI::Button("AnimatorAutoPlay", animator.AutoPlay ? "Auto Play: On" : "Auto Play: Off");
                     autoPlayButton->SetAnchorMin(0.0f, 0.0f); autoPlayButton->SetAnchorMax(1.0f, 0.0f);
@@ -1068,24 +1338,12 @@ namespace CCEngine {
                         });
                     item->AddChild(autoPlayButton);
 
-                    UI::InspectorUtils::AddDragFloat(item, "AnimatorSpeed", "Speed",
-                        [entity]() mutable { return entity.GetComponent<AnimatorComponent>().Speed; },
-                        [entity](float v) mutable { entity.GetComponent<AnimatorComponent>().Speed = std::max(0.0f, v); });
-
-                    if (animator.States.empty())
-                    {
-                        AnimatorComponent::State state;
-                        state.Name = "Default";
-                        state.ClipIndex = animator.SelectedClipIndex;
-                        state.Loop = animator.Loop;
-                        state.Speed = animator.Speed;
-                        animator.States.push_back(state);
-                    }
-
-                    auto stateButton = new UI::Button("AnimatorState", "State: " + animator.States[std::clamp(animator.ActiveStateIndex, 0, static_cast<int>(animator.States.size() - 1))].Name);
-                    stateButton->SetAnchorMin(0.0f, 0.0f); stateButton->SetAnchorMax(1.0f, 0.0f);
-                    stateButton->SetOffsetMin(15.0f, 0.0f); stateButton->SetOffsetMax(-10.0f, 28.0f);
-                    stateButton->SetOnClick([entity, stateButton]() mutable
+                    auto deleteStateButton = new UI::Button("AnimatorDeleteState", "Delete Active State");
+                    deleteStateButton->SetAnchorMin(0.0f, 0.0f); deleteStateButton->SetAnchorMax(1.0f, 0.0f);
+                    deleteStateButton->SetOffsetMin(15.0f, 0.0f); deleteStateButton->SetOffsetMax(-10.0f, 28.0f);
+                    deleteStateButton->SetNormalColor({ 0.34f, 0.08f, 0.10f, 1.0f });
+                    deleteStateButton->SetHoverColor({ 0.45f, 0.11f, 0.13f, 1.0f });
+                    deleteStateButton->SetOnClick([entity]() mutable
                         {
                             if (!entity || !entity.HasComponent<AnimatorComponent>())
                                 return;
@@ -1093,18 +1351,24 @@ namespace CCEngine {
                             if (anim.States.empty())
                                 return;
 
-                            anim.ActiveStateIndex = (anim.ActiveStateIndex + 1) % static_cast<int>(anim.States.size());
-                            const auto& state = anim.States[anim.ActiveStateIndex];
-                            // 상태를 고르면 그 상태가 가진 클립/루프/속도 값을 현재 Animator 설정으로 복사한다.
-                            // 상태머신 데이터와 실제 재생 설정을 분리해 두면 나중에 Transition 조건을 붙이기 쉽다.
-                            anim.SelectedClipIndex = state.ClipIndex;
-                            anim.Loop = state.Loop;
-                            anim.Speed = state.Speed;
+                            int index = std::clamp(anim.ActiveStateIndex, 0, static_cast<int>(anim.States.size() - 1));
+                            anim.States.erase(anim.States.begin() + index);
+                            if (anim.States.empty())
+                            {
+                                anim.ActiveStateIndex = -1;
+                                anim.EntryStateIndex = -1;
+                            }
+                            else
+                            {
+                                anim.ActiveStateIndex = std::clamp(index, 0, static_cast<int>(anim.States.size() - 1));
+                                anim.EntryStateIndex = std::clamp(anim.EntryStateIndex, 0, static_cast<int>(anim.States.size() - 1));
+                            }
                             anim.RuntimeClip.reset();
                             anim.RuntimeClipKey.clear();
-                            stateButton->SetText("State: " + state.Name);
+                            anim.AnimPlayer.StopAnimation();
+                            anim.IsPlaying = false;
                         });
-                    item->AddChild(stateButton);
+                    item->AddChild(deleteStateButton);
 
                     AddRemoveComponentButton<AnimatorComponent>(parent, item, entity, "Animator");
                 });

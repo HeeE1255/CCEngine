@@ -5,6 +5,7 @@
 #include "Renderer/MaterialAsset.h"
 #include "Renderer/Texture.h"
 #include "json.hpp"
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -330,6 +331,8 @@ namespace CCEngine
             {
                 const auto& animator = entity.GetComponent<AnimatorComponent>();
                 auto& data = entityData["AnimatorComponent"];
+                data["ControllerGuid"] = animator.ControllerAssetGuid;
+                data["ControllerPath"] = animator.ControllerPath;
                 data["SourceGuid"] = animator.SourceAssetGuid;
                 data["SourcePath"] = animator.SourcePath;
                 data["SelectedClipIndex"] = animator.SelectedClipIndex;
@@ -339,6 +342,61 @@ namespace CCEngine
                 data["Loop"] = animator.Loop;
                 data["Speed"] = animator.Speed;
                 data["ActiveStateIndex"] = animator.ActiveStateIndex;
+                data["EntryStateIndex"] = animator.EntryStateIndex;
+                data["ActiveLayerIndex"] = animator.ActiveLayerIndex;
+                data["Layers"] = nlohmann::json::array();
+                for (const auto& layer : animator.Layers)
+                {
+                    nlohmann::json layerJson = {
+                        { "Name", layer.Name },
+                        { "Weight", layer.Weight },
+                        { "MaskRootBone", layer.MaskRootBone },
+                        { "Blending", static_cast<int>(layer.Blending) },
+                        { "Sync", layer.Sync },
+                        { "IKPass", layer.IKPass },
+                        { "Visible", layer.Visible },
+                        { "ActiveStateIndex", layer.ActiveStateIndex },
+                        { "EntryStateIndex", layer.EntryStateIndex },
+                        { "SelectedTransitionIndex", layer.SelectedTransitionIndex },
+                        { "States", nlohmann::json::array() },
+                        { "Transitions", nlohmann::json::array() }
+                    };
+                    // 프리팹도 씬과 같은 Animator Layer 포맷을 쓴다.
+                    // 그래야 여러 레이어를 가진 캐릭터 프리팹을 다시 불러와도 그래프 구조가 유지된다.
+                    for (const auto& state : layer.States)
+                    {
+                        layerJson["States"].push_back({
+                            { "Name", state.Name },
+                            { "ClipIndex", state.ClipIndex },
+                            { "Loop", state.Loop },
+                            { "Speed", state.Speed },
+                            { "GraphPosition", Float2ToJson(state.GraphPosition) },
+                            { "WriteDefaults", state.WriteDefaults }
+                            });
+                    }
+                    for (const auto& transition : layer.Transitions)
+                    {
+                        nlohmann::json transitionData = {
+                            { "FromStateIndex", transition.FromStateIndex },
+                            { "ToStateIndex", transition.ToStateIndex },
+                            { "HasExitTime", transition.HasExitTime },
+                            { "ExitTime", transition.ExitTime },
+                            { "BlendTime", transition.BlendTime },
+                            { "Conditions", nlohmann::json::array() }
+                        };
+                        for (const auto& condition : transition.Conditions)
+                        {
+                            transitionData["Conditions"].push_back({
+                                { "ParameterName", condition.ParameterName },
+                                { "Mode", static_cast<int>(condition.Mode) },
+                                { "FloatValue", condition.FloatValue },
+                                { "BoolValue", condition.BoolValue }
+                                });
+                        }
+                        layerJson["Transitions"].push_back(transitionData);
+                    }
+                    data["Layers"].push_back(layerJson);
+                }
                 data["States"] = nlohmann::json::array();
                 for (const auto& state : animator.States)
                 {
@@ -346,8 +404,42 @@ namespace CCEngine
                         { "Name", state.Name },
                         { "ClipIndex", state.ClipIndex },
                         { "Loop", state.Loop },
-                        { "Speed", state.Speed }
+                        { "Speed", state.Speed },
+                        { "GraphPosition", Float2ToJson(state.GraphPosition) },
+                        { "WriteDefaults", state.WriteDefaults }
                         });
+                }
+                data["Parameters"] = nlohmann::json::array();
+                for (const auto& parameter : animator.Parameters)
+                {
+                    data["Parameters"].push_back({
+                        { "Name", parameter.Name },
+                        { "Type", static_cast<int>(parameter.ParamType) },
+                        { "FloatValue", parameter.FloatValue },
+                        { "BoolValue", parameter.BoolValue }
+                        });
+                }
+                data["Transitions"] = nlohmann::json::array();
+                for (const auto& transition : animator.Transitions)
+                {
+                    nlohmann::json transitionData = {
+                        { "FromStateIndex", transition.FromStateIndex },
+                        { "ToStateIndex", transition.ToStateIndex },
+                        { "HasExitTime", transition.HasExitTime },
+                        { "ExitTime", transition.ExitTime },
+                        { "BlendTime", transition.BlendTime },
+                        { "Conditions", nlohmann::json::array() }
+                    };
+                    for (const auto& condition : transition.Conditions)
+                    {
+                        transitionData["Conditions"].push_back({
+                            { "ParameterName", condition.ParameterName },
+                            { "Mode", static_cast<int>(condition.Mode) },
+                            { "FloatValue", condition.FloatValue },
+                            { "BoolValue", condition.BoolValue }
+                            });
+                    }
+                    data["Transitions"].push_back(transitionData);
                 }
             }
 
@@ -537,6 +629,8 @@ namespace CCEngine
             {
                 const auto& data = entityData["AnimatorComponent"];
                 auto& animator = entity.HasComponent<AnimatorComponent>() ? entity.GetComponent<AnimatorComponent>() : entity.AddComponent<AnimatorComponent>();
+                animator.ControllerAssetGuid = data.value("ControllerGuid", "");
+                animator.ControllerPath = data.value("ControllerPath", "");
                 animator.SourceAssetGuid = data.value("SourceGuid", "");
                 animator.SourcePath = data.value("SourcePath", "");
                 animator.SelectedClipIndex = data.value("SelectedClipIndex", 0);
@@ -546,9 +640,74 @@ namespace CCEngine
                 animator.Loop = data.value("Loop", true);
                 animator.Speed = data.value("Speed", 1.0f);
                 animator.ActiveStateIndex = data.value("ActiveStateIndex", 0);
+                animator.EntryStateIndex = data.value("EntryStateIndex", animator.ActiveStateIndex);
+                animator.ActiveLayerIndex = data.value("ActiveLayerIndex", 0);
                 animator.IsPlaying = false;
                 animator.RuntimeClip.reset();
                 animator.RuntimeClipKey.clear();
+                animator.Layers.clear();
+                if (data.contains("Layers") && data["Layers"].is_array())
+                {
+                    for (const auto& layerData : data["Layers"])
+                    {
+                        AnimatorComponent::Layer layer;
+                        layer.Name = layerData.value("Name", "Layer");
+                        layer.Weight = layerData.value("Weight", 1.0f);
+                        layer.MaskRootBone = layerData.value("MaskRootBone", "");
+                        layer.Blending = static_cast<AnimatorComponent::Layer::BlendMode>(layerData.value("Blending", 0));
+                        layer.Sync = layerData.value("Sync", false);
+                        layer.IKPass = layerData.value("IKPass", false);
+                        layer.Visible = layerData.value("Visible", true);
+                        layer.ActiveStateIndex = layerData.value("ActiveStateIndex", -1);
+                        layer.EntryStateIndex = layerData.value("EntryStateIndex", layer.ActiveStateIndex);
+                        layer.SelectedTransitionIndex = layerData.value("SelectedTransitionIndex", -1);
+                        if (layerData.contains("States") && layerData["States"].is_array())
+                        {
+                            for (const auto& stateData : layerData["States"])
+                            {
+                                AnimatorComponent::State state;
+                                state.Name = stateData.value("Name", "State");
+                                state.ClipIndex = stateData.value("ClipIndex", 0);
+                                state.Loop = stateData.value("Loop", true);
+                                state.Speed = stateData.value("Speed", 1.0f);
+                                if (stateData.contains("GraphPosition"))
+                                    state.GraphPosition = JsonToFloat2(stateData["GraphPosition"]);
+                                state.WriteDefaults = stateData.value("WriteDefaults", true);
+                                layer.States.push_back(state);
+                            }
+                        }
+                        if (layerData.contains("Transitions") && layerData["Transitions"].is_array())
+                        {
+                            for (const auto& transitionData : layerData["Transitions"])
+                            {
+                                AnimatorComponent::Transition transition;
+                                transition.FromStateIndex = transitionData.value("FromStateIndex", -1);
+                                transition.ToStateIndex = transitionData.value("ToStateIndex", -1);
+                                transition.HasExitTime = transitionData.value("HasExitTime", false);
+                                transition.ExitTime = transitionData.value("ExitTime", 1.0f);
+                                transition.BlendTime = transitionData.value("BlendTime", 0.15f);
+                                if (transitionData.contains("Conditions") && transitionData["Conditions"].is_array())
+                                {
+                                    for (const auto& conditionData : transitionData["Conditions"])
+                                    {
+                                        AnimatorComponent::TransitionCondition condition;
+                                        condition.ParameterName = conditionData.value("ParameterName", "");
+                                        condition.Mode = static_cast<AnimatorComponent::TransitionCondition::CompareMode>(conditionData.value("Mode", 0));
+                                        condition.FloatValue = conditionData.value("FloatValue", 0.0f);
+                                        condition.BoolValue = conditionData.value("BoolValue", true);
+                                        transition.Conditions.push_back(condition);
+                                    }
+                                }
+                                layer.Transitions.push_back(transition);
+                            }
+                        }
+                        animator.Layers.push_back(layer);
+                    }
+                }
+                if (animator.Layers.empty())
+                    animator.Layers.push_back({});
+                animator.ActiveLayerIndex = std::clamp(animator.ActiveLayerIndex, 0, static_cast<int>(animator.Layers.size() - 1));
+
                 animator.States.clear();
                 if (data.contains("States") && data["States"].is_array())
                 {
@@ -559,8 +718,111 @@ namespace CCEngine
                         state.ClipIndex = stateData.value("ClipIndex", 0);
                         state.Loop = stateData.value("Loop", true);
                         state.Speed = stateData.value("Speed", 1.0f);
+                        if (stateData.contains("GraphPosition"))
+                            state.GraphPosition = JsonToFloat2(stateData["GraphPosition"]);
+                        state.WriteDefaults = stateData.value("WriteDefaults", true);
                         animator.States.push_back(state);
                     }
+                }
+                animator.Parameters.clear();
+                if (data.contains("Parameters") && data["Parameters"].is_array())
+                {
+                    for (const auto& parameterData : data["Parameters"])
+                    {
+                        AnimatorComponent::Parameter parameter;
+                        parameter.Name = parameterData.value("Name", "Parameter");
+                        parameter.ParamType = static_cast<AnimatorComponent::Parameter::Type>(parameterData.value("Type", 0));
+                        parameter.FloatValue = parameterData.value("FloatValue", 0.0f);
+                        parameter.BoolValue = parameterData.value("BoolValue", false);
+                        animator.Parameters.push_back(parameter);
+                    }
+                }
+                animator.Transitions.clear();
+                if (data.contains("Transitions") && data["Transitions"].is_array())
+                {
+                    for (const auto& transitionData : data["Transitions"])
+                    {
+                        AnimatorComponent::Transition transition;
+                        transition.FromStateIndex = transitionData.value("FromStateIndex", -1);
+                        transition.ToStateIndex = transitionData.value("ToStateIndex", -1);
+                        transition.HasExitTime = transitionData.value("HasExitTime", false);
+                        transition.ExitTime = transitionData.value("ExitTime", 1.0f);
+                        transition.BlendTime = transitionData.value("BlendTime", 0.15f);
+                        if (transitionData.contains("Conditions") && transitionData["Conditions"].is_array())
+                        {
+                            for (const auto& conditionData : transitionData["Conditions"])
+                            {
+                                AnimatorComponent::TransitionCondition condition;
+                                condition.ParameterName = conditionData.value("ParameterName", "");
+                                condition.Mode = static_cast<AnimatorComponent::TransitionCondition::CompareMode>(conditionData.value("Mode", 0));
+                                condition.FloatValue = conditionData.value("FloatValue", 0.0f);
+                                condition.BoolValue = conditionData.value("BoolValue", true);
+                                transition.Conditions.push_back(condition);
+                            }
+                        }
+                        animator.Transitions.push_back(transition);
+                    }
+                }
+                if (animator.States.empty())
+                {
+                    animator.ActiveStateIndex = -1;
+                    animator.EntryStateIndex = -1;
+                    animator.Transitions.clear();
+                    animator.SelectedTransitionIndex = -1;
+                }
+                else
+                {
+                    animator.ActiveStateIndex = std::clamp(animator.ActiveStateIndex, 0, static_cast<int>(animator.States.size() - 1));
+                    animator.EntryStateIndex = std::clamp(animator.EntryStateIndex, 0, static_cast<int>(animator.States.size() - 1));
+                    animator.Transitions.erase(
+                        std::remove_if(animator.Transitions.begin(), animator.Transitions.end(), [&animator](const AnimatorComponent::Transition& transition)
+                        {
+                            return transition.FromStateIndex < 0 || transition.ToStateIndex < 0 ||
+                                transition.FromStateIndex >= static_cast<int>(animator.States.size()) ||
+                                transition.ToStateIndex >= static_cast<int>(animator.States.size());
+                        }),
+                        animator.Transitions.end());
+                    animator.SelectedTransitionIndex = std::clamp(animator.SelectedTransitionIndex, -1, static_cast<int>(animator.Transitions.size() - 1));
+                }
+                if (!animator.Layers.empty() && animator.Layers[0].States.empty() && !animator.States.empty())
+                {
+                    // 구버전 프리팹은 그래프가 전역 필드에만 있다.
+                    // Base Layer로 옮겨 새 레이어 구조에서도 기존 프리팹이 그대로 열린다.
+                    animator.Layers[0].States = animator.States;
+                    animator.Layers[0].Transitions = animator.Transitions;
+                    animator.Layers[0].ActiveStateIndex = animator.ActiveStateIndex;
+                    animator.Layers[0].EntryStateIndex = animator.EntryStateIndex;
+                    animator.Layers[0].SelectedTransitionIndex = animator.SelectedTransitionIndex;
+                }
+                for (auto& layer : animator.Layers)
+                {
+                    if (layer.States.empty())
+                    {
+                        layer.ActiveStateIndex = -1;
+                        layer.EntryStateIndex = -1;
+                        layer.SelectedTransitionIndex = -1;
+                        layer.Transitions.clear();
+                        continue;
+                    }
+                    layer.ActiveStateIndex = std::clamp(layer.ActiveStateIndex, 0, static_cast<int>(layer.States.size() - 1));
+                    layer.EntryStateIndex = std::clamp(layer.EntryStateIndex, 0, static_cast<int>(layer.States.size() - 1));
+                    layer.Transitions.erase(
+                        std::remove_if(layer.Transitions.begin(), layer.Transitions.end(), [&layer](const AnimatorComponent::Transition& transition)
+                        {
+                            return transition.FromStateIndex < 0 || transition.ToStateIndex < 0 ||
+                                transition.FromStateIndex >= static_cast<int>(layer.States.size()) ||
+                                transition.ToStateIndex >= static_cast<int>(layer.States.size());
+                        }),
+                        layer.Transitions.end());
+                    layer.SelectedTransitionIndex = std::clamp(layer.SelectedTransitionIndex, -1, static_cast<int>(layer.Transitions.size() - 1));
+                }
+                if (!animator.Layers.empty())
+                {
+                    animator.States = animator.Layers[0].States;
+                    animator.Transitions = animator.Layers[0].Transitions;
+                    animator.ActiveStateIndex = animator.Layers[0].ActiveStateIndex;
+                    animator.EntryStateIndex = animator.Layers[0].EntryStateIndex;
+                    animator.SelectedTransitionIndex = animator.Layers[0].SelectedTransitionIndex;
                 }
             }
 

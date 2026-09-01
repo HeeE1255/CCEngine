@@ -7,6 +7,7 @@
 #include "Core/AssetDatabase.h"
 #include <box2d/box2d.h>
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <functional>
 #include <string>
@@ -64,26 +65,52 @@ namespace CCEngine
             if (sourcePath.empty() || !std::filesystem::exists(sourcePath))
                 return;
 
+            if (!animator.States.empty())
+            {
+                animator.ActiveStateIndex = std::clamp(animator.ActiveStateIndex, 0, static_cast<int>(animator.States.size() - 1));
+                auto& state = animator.States[animator.ActiveStateIndex];
+                const bool changedStateSetting =
+                    animator.SelectedClipIndex != state.ClipIndex ||
+                    animator.Loop != state.Loop ||
+                    std::abs(animator.Speed - state.Speed) > 0.0001f;
+
+                animator.SelectedClipIndex = state.ClipIndex;
+                animator.Loop = state.Loop;
+                animator.Speed = state.Speed;
+
+                if (changedStateSetting)
+                {
+                    animator.RuntimeClip.reset();
+                    animator.RuntimeClipKey.clear();
+                    animator.AnimPlayer.StopAnimation();
+                }
+            }
+
             std::string key = sourcePath + "#" + std::to_string(animator.SelectedClipIndex);
             if (animator.RuntimeClip && animator.RuntimeClipKey == key)
             {
                 return;
             }
 
-            // 클립 목록 검사는 Assimp가 FBX를 다시 여는 작업이라 매 프레임 돌리면 UI가 끊긴다.
-            // 런타임에서는 선택 클립이 바뀌었을 때만 검사하고, 평소에는 이미 로드된 RuntimeClip을 재사용한다.
-            auto clips = AnimationClip::InspectClips(sourcePath);
-            if (clips.empty())
-                return;
-
-            animator.SelectedClipIndex = std::clamp(animator.SelectedClipIndex, 0, static_cast<int>(clips.size() - 1));
-            animator.SelectedClipName = clips[animator.SelectedClipIndex].Name;
-
-            key = sourcePath + "#" + std::to_string(animator.SelectedClipIndex);
-            if (animator.RuntimeClipKey != key || !animator.RuntimeClip)
+            // 런타임 재생 준비에서는 "목록 확인"과 "클립 로드"를 나누지 않는다.
+            // 둘 다 FBX를 다시 여는 작업이라 시작 시 큰 메모리 산이 두 번 생길 수 있다.
+            // Inspector/Graph처럼 목록이 필요한 UI에서만 InspectClips를 쓰고, 실제 재생은 필요한 클립 하나만 읽는다.
+            animator.RuntimeClip = AnimationClip::LoadShared(sourcePath, static_cast<uint32_t>((std::max)(0, animator.SelectedClipIndex)));
+            if (!animator.RuntimeClip || animator.RuntimeClip->GetName().empty())
             {
-                animator.RuntimeClip = AnimationClip::LoadShared(sourcePath, static_cast<uint32_t>(animator.SelectedClipIndex));
-                animator.RuntimeClipKey = key;
+                animator.RuntimeClip.reset();
+                animator.RuntimeClipKey.clear();
+                return;
+            }
+
+            animator.SelectedClipIndex = static_cast<int>(animator.RuntimeClip->GetClipIndex());
+            animator.SelectedClipName = animator.RuntimeClip->GetName();
+            animator.RuntimeClipKey = sourcePath + "#" + std::to_string(animator.SelectedClipIndex);
+
+            if (!animator.States.empty())
+            {
+                auto& state = animator.States[animator.ActiveStateIndex];
+                state.ClipIndex = animator.SelectedClipIndex;
             }
         }
 
@@ -1057,6 +1084,23 @@ namespace CCEngine
             }
         }
 
+        auto animatorView = m_Registry.view<AnimatorComponent>();
+        for (auto e : animatorView)
+        {
+            auto& animator = animatorView.get<AnimatorComponent>(e);
+            if (animator.States.empty())
+                continue;
+
+            // Play 모드에 들어갈 때는 에디터에서 마지막으로 눌러 둔 상태가 아니라 Entry State에서 시작한다.
+            // 이렇게 해야 Unity Animator처럼 런타임 시작점이 명확하고, 에디터 프리뷰 선택이 게임 실행에 섞이지 않는다.
+            animator.EntryStateIndex = std::clamp(animator.EntryStateIndex, 0, static_cast<int>(animator.States.size() - 1));
+            animator.ActiveStateIndex = animator.EntryStateIndex;
+            animator.RuntimeClip.reset();
+            animator.RuntimeClipKey.clear();
+            animator.AnimPlayer.StopAnimation();
+            animator.IsPlaying = animator.AutoPlay;
+        }
+
         StartScriptRuntime();
     }
 
@@ -1180,7 +1224,6 @@ namespace CCEngine
                     if (!model)
                         return;
 
-                    PrepareAnimatorClip(animComp, modelComponent);
                     bool shouldPlay = false;
                     if (m_State == SceneState::Play)
                     {
@@ -1193,8 +1236,24 @@ namespace CCEngine
                         shouldPlay = animComp.PreviewInEdit && animComp.IsPlaying;
                     }
 
+                    if (shouldPlay)
+                    {
+                        // 정지 상태의 에디터는 포즈 계산만 필요하고, 재생용 클립 데이터까지 미리 읽을 필요는 없다.
+                        // FBX 클립 로드는 큰 메모리 작업이므로 Play/Preview가 실제로 시작될 때만 준비한다.
+                        PrepareAnimatorClip(animComp, modelComponent);
+                    }
+
                     animComp.AnimPlayer.SetLoop(animComp.Loop);
                     animComp.AnimPlayer.SetSpeed(animComp.Speed);
+                    if (!animComp.States.empty())
+                    {
+                        int stateIndex = std::clamp(animComp.ActiveStateIndex, 0, static_cast<int>(animComp.States.size() - 1));
+                        animComp.AnimPlayer.SetWriteDefaults(animComp.States[stateIndex].WriteDefaults);
+                    }
+                    else
+                    {
+                        animComp.AnimPlayer.SetWriteDefaults(true);
+                    }
                     if (shouldPlay && animComp.RuntimeClip)
                     {
                         bool sameClip = animComp.AnimPlayer.GetCurrentClip() == animComp.RuntimeClip.get();
@@ -1382,7 +1441,8 @@ namespace CCEngine
                 }
                 const bool forceErrorShader = mesh.MaterialMissing;
 
-                if (animatorComp)
+                const bool canUseSkinning = animatorComp && mesh.MeshData && mesh.MeshData->HasSkinWeights();
+                if (canUseSkinning)
                 {
                     DirectX::XMMATRIX rootWorldTransform = getTransform(rootEntity);
                     auto& animator = animatorComp->AnimPlayer;
@@ -1400,6 +1460,8 @@ namespace CCEngine
                 }
                 else
                 {
+                    // Animator 컴포넌트가 붙어 있어도 큐브/스피어 같은 일반 메시에는 본 가중치가 없다.
+                    // 이런 메시를 스킨드 셰이더로 보내면 빈 본 행렬을 기준으로 변형되어 사라져 보일 수 있다.
                     DirectX::XMMATRIX worldTransform = getTransform(entity);
                     Renderer3D::DrawMesh(worldTransform, mesh.MeshData, renderTexture, renderColor, mesh.Material.get(), (int)entityID, forceErrorShader);
                 }

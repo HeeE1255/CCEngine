@@ -145,23 +145,39 @@ namespace CCEngine {
                 s_KeyboardFocusOwner = nullptr;
             }
 
+            if (isMouseEvent && s_MouseInteractionOwner &&
+                e.GetEventType() == EventType::MouseButtonPressed)
+            {
+                // 마우스 버튼을 새로 누르는 순간 이전 조작 캡처가 남아 있다면 이미 유실된 상태다.
+                // 남은 캡처를 그대로 두면 새 버튼 클릭이 전부 이전 위젯에게 막힌다.
+                s_MouseInteractionOwner = nullptr;
+            }
+
+            if (isMouseEvent && s_MouseInteractionOwner &&
+                (!s_MouseInteractionOwner->IsVisible() || !s_MouseInteractionOwner->WantsMouseCapture()))
+            {
+                // 캡처를 시작한 위젯이 사라졌거나 이미 조작을 끝냈다면 전역 캡처를 비운다.
+                // 이 방어가 없으면 이전 드래그 상태가 남아서 모든 버튼 입력을 막을 수 있다.
+                s_MouseInteractionOwner = nullptr;
+            }
+
             if (isMouseEvent && s_MouseInteractionOwner && IsMouseInteractionBlockedFor(this))
             {
                 e.Handled = true;
                 return true;
             }
 
-            auto hasMouseCapture = [](Widget* widget, const auto& self) -> bool
+            auto containsWidget = [](Widget* widget, const Widget* target, const auto& self) -> bool
                 {
-                    if (!widget || !widget->IsVisible())
+                    if (!widget || !target || !widget->IsVisible())
                         return false;
 
-                    if (widget->WantsMouseCapture())
+                    if (widget == target)
                         return true;
 
                     for (Widget* child : widget->GetChildren())
                     {
-                        if (self(child, self))
+                        if (self(child, target, self))
                             return true;
                     }
                     return false;
@@ -179,11 +195,12 @@ namespace CCEngine {
                     if (!child || !child->IsVisible())
                         continue;
 
-                    if (!hasMouseCapture(child, hasMouseCapture))
+                    if (!s_MouseInteractionOwner || !containsWidget(child, s_MouseInteractionOwner, containsWidget))
                         continue;
 
-                    // 드래그/리사이즈 중인 위젯은 마우스를 캡처한 상태다.
-                    // 이때는 뒤쪽 패널에 hover/click 이벤트가 새지 않도록 캡처 위젯에만 전달한다.
+                    // 드래그/리사이즈 중인 위젯만 마우스를 독점한다.
+                    // 단순히 WantsMouseCapture가 true인 다른 위젯을 찾으면 버튼 입력이 전부 막힐 수 있으므로,
+                    // 실제 BeginMouseInteraction으로 등록된 owner 경로에만 이벤트를 보낸다.
                     bool handled = child->OnEvent(e);
                     e.Handled = true;
                     return handled || true;

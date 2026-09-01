@@ -81,6 +81,7 @@ namespace CCEngine
                 SphereCollider3D,
                 CylinderCollider3D,
                 MeshCollider3D,
+                Animator,
                 Script
             };
             void RebuildInspector();

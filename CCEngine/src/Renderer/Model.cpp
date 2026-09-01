@@ -1,4 +1,5 @@
 #include "Model.h"
+#include "Animation/Animator.h"
 #include <iostream>
 
 namespace CCEngine
@@ -25,6 +26,10 @@ namespace CCEngine
             std::cout << "ERROR::ASSIMP:: " << importer.GetErrorString() << std::endl;
             return;
         }
+
+        // 모델 FBX를 읽는 순간 애니메이션 데이터도 이미 aiScene 안에 있다.
+        // 이때 클립 캐시에 복사해 두면 Animator 시작 시 같은 FBX를 다시 열지 않아도 된다.
+        AnimationClip::PrimeCacheFromScene(path, scene);
 
         m_Directory = path.substr(0, path.find_last_of('/'));
         if (m_Directory == path)

@@ -6,6 +6,23 @@ namespace CCEngine
     Mesh::Mesh(const std::vector<Vertex3D>& vertices, const std::vector<uint32_t>& indices)
         : m_Vertices(vertices), m_Indices(indices)
     {
+        // Animator가 붙어 있어도 모든 메시가 스킨드 메시는 아니다.
+        // 생성 시 한 번만 본 가중치를 확인해 두면 렌더 루프에서 정점 배열을 매번 훑지 않아도 된다.
+        for (const Vertex3D& vertex : vertices)
+        {
+            for (int i = 0; i < 4; ++i)
+            {
+                if (vertex.BoneIDs[i] >= 0 && vertex.Weights[i] > 0.0f)
+                {
+                    m_HasSkinWeights = true;
+                    break;
+                }
+            }
+
+            if (m_HasSkinWeights)
+                break;
+        }
+
         // 디버그 와이어, bounds 계산, 에디터 피킹처럼 CPU에서 다시 읽어야 하는 기능이 있다.
         // GPU 버퍼를 만든 뒤 원본을 버리면 이런 에디터 기능이 매번 임포터를 다시 열어야 해서 느려진다.
         // 1. Vertex Buffer 생성 및 데이터 전송

@@ -78,6 +78,7 @@ namespace CCEngine
                 Material,
                 Shader,
                 VisualShader,
+                AnimatorController,
                 Model,
                 FbxMesh,
                 Texture,
@@ -147,6 +148,7 @@ namespace CCEngine
             bool CreateMaterialInCurrentDirectory();
             bool CreateShaderInCurrentDirectory();
             bool CreateVisualShaderInCurrentDirectory();
+            bool CreateAnimatorControllerInCurrentDirectory();
             bool RenameSelectedAsset(const std::string& newName);
             void BeginCreateFolder();
             void BeginRenameSelected();

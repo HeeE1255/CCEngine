@@ -228,6 +228,7 @@
     <ClInclude Include="src\Scripting\ScriptMetadata.h" />
     <ClInclude Include="src\UI\AssetBrowserPanel.h" />
     <ClInclude Include="src\UI\AssetReferenceValidatorPanel.h" />
+    <ClInclude Include="src\UI\AnimatorGraphPanel.h" />
     <ClInclude Include="src\UI\Button.h" />
     <ClInclude Include="src\UI\ConsolePanel.h" />
     <ClInclude Include="src\UI\DockManager.h" />
@@ -314,6 +315,7 @@
     <ClCompile Include="src\Scripting\ScriptMetadata.cpp" />
     <ClCompile Include="src\UI\AssetBrowserPanel.cpp" />
     <ClCompile Include="src\UI\AssetReferenceValidatorPanel.cpp" />
+    <ClCompile Include="src\UI\AnimatorGraphPanel.cpp" />
     <ClCompile Include="src\UI\Button.cpp" />
     <ClCompile Include="src\UI\ConsolePanel.cpp" />
     <ClCompile Include="src\UI\DockManager.cpp" />

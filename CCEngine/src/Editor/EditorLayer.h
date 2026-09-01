@@ -34,6 +34,7 @@
 #include "UI/InspectorPanel.h"
 #include "UI/KeyBindingInput.h"
 #include "UI/MaterialGraphPanel.h"
+#include "UI/AnimatorGraphPanel.h"
 #include "GizmoSystem.h"
 
 #include <chrono>
@@ -110,14 +111,17 @@ namespace CCEngine {
         void OpenProjectSettingsWindow();
         void OpenAssetReferenceValidatorWindow();
         void OpenMaterialGraphEditorWindow(const std::filesystem::path& graphPath);
+        void OpenAnimatorGraphEditorWindow(Entity entity);
         void OpenCodeAssetInExternalEditor(const std::filesystem::path& assetPath);
         void OpenKeyBindingPickerWindow(UI::KeyBindingInput* targetInput);
+        void ProcessAnimatorGraphOpenRequests();
         void BringEditorOverlaysToFront();
         void RenderPhysicsDebugView(const PerspectiveCamera& camera, const std::vector<Entity>& selectedEntities);
         void CyclePhysicsDebugViewMode();
         void UpdatePhysicsDebugButton();
         void UpdateColliderOutlineButton();
         void HideColliderDebugDropdown();
+        bool CreateAnimatorStateMachineTestScene();
         bool RunEditorQualityAssurance(bool closeWhenFinished);
 
     private:
@@ -197,6 +201,7 @@ namespace CCEngine {
         UI::ProjectSettingsPanel* m_ProjectSettingsPanel = nullptr;
         UI::AssetReferenceValidatorPanel* m_AssetReferenceValidatorPanel = nullptr;
         UI::MaterialGraphPanel* m_MaterialGraphPanel = nullptr;
+        UI::AnimatorGraphPanel* m_AnimatorGraphPanel = nullptr;
         UI::Panel* m_HistoryContentPanel = nullptr;
         UI::VBoxContainer* m_HierarchyContainer = nullptr;
 

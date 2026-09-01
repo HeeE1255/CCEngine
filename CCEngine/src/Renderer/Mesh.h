@@ -38,11 +38,13 @@ namespace CCEngine
         std::shared_ptr<IndexBuffer> GetIndexBuffer() const { return m_IndexBuffer; }
         const std::vector<Vertex3D>& GetVertices() const { return m_Vertices; }
         const std::vector<uint32_t>& GetIndices() const { return m_Indices; }
+        bool HasSkinWeights() const { return m_HasSkinWeights; }
 
     private:
         std::shared_ptr<VertexBuffer> m_VertexBuffer;
         std::shared_ptr<IndexBuffer> m_IndexBuffer;
         std::vector<Vertex3D> m_Vertices;
         std::vector<uint32_t> m_Indices;
+        bool m_HasSkinWeights = false;
     };
 }

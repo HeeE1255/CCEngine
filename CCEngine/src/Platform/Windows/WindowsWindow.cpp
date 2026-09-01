@@ -216,6 +216,38 @@ namespace CCEngine
 		}
 		break;
 
+		case WM_MBUTTONUP:
+		{
+			ReleaseCapture();
+			if (!IsWindowInputEnabled(window))
+				return 0;
+
+			if (window)
+			{
+				float mouseX = static_cast<float>((short)LOWORD(lParam));
+				float mouseY = static_cast<float>((short)HIWORD(lParam));
+
+				// 중클릭은 그래프 패닝처럼 버튼 종류가 의미를 갖는 도구에서 사용한다.
+				// 좌/우클릭과 같은 이벤트 경로로 보내야 패널별 캡처와 차단 규칙도 같이 적용된다.
+				CCEngine::MouseButtonReleasedEvent e(2, mouseX, mouseY);
+
+				bool isMainWindow = (CCEngine::Application::Get() &&
+					window == &(CCEngine::Application::Get()->GetWindow()));
+
+				if (isMainWindow)
+				{
+					CCEngine::Application::Get()->OnEvent(e);
+				}
+
+				if (!e.Handled && window->GetRootUI())
+				{
+					window->GetRootUI()->OnEvent(e);
+				}
+			}
+			return 0;
+		}
+		break;
+
 		//
 		case WM_LBUTTONDOWN:
 		{
@@ -261,6 +293,39 @@ namespace CCEngine
 				float mouseY = static_cast<float>((short)HIWORD(lParam));
 
 				CCEngine::MouseButtonPressedEvent e(1, mouseX, mouseY);
+
+				bool isMainWindow = (CCEngine::Application::Get() &&
+					window == &(CCEngine::Application::Get()->GetWindow()));
+
+				if (isMainWindow)
+				{
+					CCEngine::Application::Get()->OnEvent(e);
+				}
+
+				if (!e.Handled && window->GetRootUI())
+				{
+					window->GetRootUI()->OnEvent(e);
+				}
+			}
+			return 0;
+		}
+		break;
+
+		case WM_MBUTTONDOWN:
+		{
+			ActivateWindowInput(window);
+			if (!IsWindowInputEnabled(window) && !IsFramePoint(hWnd, lParam))
+				return 0;
+
+			SetCapture(hWnd);
+			if (window)
+			{
+				float mouseX = static_cast<float>((short)LOWORD(lParam));
+				float mouseY = static_cast<float>((short)HIWORD(lParam));
+
+				// Windows 메시지의 중클릭을 엔진의 button 2 규칙으로 맞춘다.
+				// 이 변환이 없으면 Animator Graph의 휠 클릭 패닝은 시작 이벤트를 받을 수 없다.
+				CCEngine::MouseButtonPressedEvent e(2, mouseX, mouseY);
 
 				bool isMainWindow = (CCEngine::Application::Get() &&
 					window == &(CCEngine::Application::Get()->GetWindow()));

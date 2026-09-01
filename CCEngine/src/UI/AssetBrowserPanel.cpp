@@ -2226,6 +2226,7 @@ namespace CCEngine
             if (extension == ".ccmat") return AssetType::Material;
             if (extension == ".hlsl" || extension == ".ccshader") return AssetType::Shader;
             if (extension == ".ccvshader") return AssetType::VisualShader;
+            if (extension == ".ccanimcontroller") return AssetType::AnimatorController;
             if (extension == ".fbx" || extension == ".obj" || extension == ".gltf" || extension == ".glb") return AssetType::Model;
             if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".tga") return AssetType::Texture;
             if (extension == ".cs") return AssetType::Script;
@@ -2242,6 +2243,7 @@ namespace CCEngine
                 case AssetType::Material: return "MAT";
                 case AssetType::Shader: return "SHD";
                 case AssetType::VisualShader: return "VSH";
+                case AssetType::AnimatorController: return "ACT";
                 case AssetType::Model: return "MDL";
                 case AssetType::FbxMesh: return "MSH";
                 case AssetType::Texture: return "TEX";
@@ -2259,6 +2261,7 @@ namespace CCEngine
                 case AssetType::Material: return "material";
                 case AssetType::Shader: return "shader";
                 case AssetType::VisualShader: return "visualshader";
+                case AssetType::AnimatorController: return "animatorcontroller";
                 case AssetType::Model: return "model";
                 case AssetType::FbxMesh: return "mesh";
                 case AssetType::Texture: return "texture";
@@ -2569,6 +2572,43 @@ namespace CCEngine
             // 원본은 노드 편집용이고, 생성 HLSL은 기존 ShaderCompiler/Material 경로가 그대로 컴파일한다.
             AssetDatabase::EnsureMetaFile(graphPath);
             AssetDatabase::EnsureMetaFile(generatedHlslPath);
+            AssetDatabase::MarkDirty(m_RootDirectory);
+
+            m_TreeChildCache.clear();
+            Refresh(true);
+            return true;
+        }
+
+        bool AssetBrowserPanel::CreateAnimatorControllerInCurrentDirectory()
+        {
+            if (!IsPathInsideRoot(m_CurrentDirectory, true))
+                return false;
+
+            std::filesystem::path controllerPath = MakeUniquePath(m_CurrentDirectory, "New Animator Controller", ".ccanimcontroller");
+            nlohmann::json data;
+            data["Version"] = 1;
+            data["Name"] = controllerPath.stem().string();
+            data["SourceGuid"] = "";
+            data["SourcePath"] = "";
+            data["SelectedClipIndex"] = 0;
+            data["SelectedClipName"] = "";
+            data["AutoPlay"] = true;
+            data["Loop"] = true;
+            data["Speed"] = 1.0f;
+            data["ActiveStateIndex"] = -1;
+            data["EntryStateIndex"] = -1;
+            data["States"] = nlohmann::json::array();
+            data["Parameters"] = nlohmann::json::array();
+            data["Transitions"] = nlohmann::json::array();
+
+            std::ofstream file(controllerPath);
+            if (!file.is_open())
+                return false;
+            file << data.dump(4);
+
+            // Animator Controller는 상태머신 원본 에셋이다.
+            // 씬에는 컨트롤러 GUID만 저장하고, 노드/전이 데이터는 이 파일에서 읽도록 확장할 수 있다.
+            AssetDatabase::EnsureMetaFile(controllerPath);
             AssetDatabase::MarkDirty(m_RootDirectory);
 
             m_TreeChildCache.clear();
@@ -3212,8 +3252,10 @@ namespace CCEngine
                         case TypeFilter::Texture: return entry.Type == AssetType::Texture;
                         case TypeFilter::Model: return entry.Type == AssetType::Model || entry.Type == AssetType::FbxMesh;
                         case TypeFilter::Material: return entry.Type == AssetType::Material;
-                        case TypeFilter::Shader: return entry.Type == AssetType::Shader || entry.Type == AssetType::VisualShader;
-                        case TypeFilter::Prefab: return entry.Type == AssetType::Prefab;
+                case TypeFilter::Shader: return entry.Type == AssetType::Shader || entry.Type == AssetType::VisualShader;
+                        // Animator Controller는 그래프/상태머신을 담는 에셋이라 Shader/Script와 다르게 독립 타입으로 다룬다.
+                        // 아직 전용 필터는 없으므로 텍스트 검색과 All Types에서 찾는다.
+                case TypeFilter::Prefab: return entry.Type == AssetType::Prefab;
                         case TypeFilter::Scene: return entry.Type == AssetType::Scene;
                         case TypeFilter::Script: return entry.Type == AssetType::Script;
                         default: return true;
@@ -6070,6 +6112,8 @@ namespace CCEngine
                             CreateShaderInCurrentDirectory();
                         else if (command == "Create Visual Shader")
                             CreateVisualShaderInCurrentDirectory();
+                        else if (command == "Create Animator Controller")
+                            CreateAnimatorControllerInCurrentDirectory();
                         else if (command == "Refresh")
                             RefreshCurrentFolder(false);
                         else if (command == "Refresh All")
@@ -6268,6 +6312,7 @@ namespace CCEngine
                         m_ContextMenuItems.push_back("Create Material");
                         m_ContextMenuItems.push_back("Create Shader");
                         m_ContextMenuItems.push_back("Create Visual Shader");
+                        m_ContextMenuItems.push_back("Create Animator Controller");
                         m_ContextMenuItems.push_back("Refresh");
                         m_ContextMenuItems.push_back("Refresh All");
                     }

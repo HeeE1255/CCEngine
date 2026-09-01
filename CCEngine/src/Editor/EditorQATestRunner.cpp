@@ -1,5 +1,6 @@
 #include "EditorQATestRunner.h"
 #include "Core/ConsoleLog.h"
+#include "UI/Button.h"
 #include "UI/Widget.h"
 #include "UI/WindowPanel.h"
 
@@ -207,6 +208,21 @@ namespace CCEngine
         input.Press(0, 190.0f, 160.0f);
         Expect(frontPanel->PressCount == 1, "Top overlapping panel did not receive click input.", failures);
         Expect(backPanel->PressCount == 0, "Back panel received click through top panel.", failures);
+
+        auto* button = new UI::Button("QA_Button", "Click");
+        bool buttonClicked = false;
+        button->SetPosition(20.0f, 20.0f);
+        button->SetSize(90.0f, 26.0f);
+        button->SetOnClick([&buttonClicked]() { buttonClicked = true; });
+        root.AddChild(button);
+        button->BringToFront();
+        root.UpdateLayout({ 0.0f, 0.0f }, { 800.0f, 600.0f });
+
+        // 버튼은 누름 상태를 렌더 단계에서 임의로 끊으면 Release 때 콜백을 잃는다.
+        // Press와 Release 사이의 상태는 버튼 이벤트가 직접 관리해야 메뉴와 일반 버튼이 같이 안정된다.
+        input.Press(0, 40.0f, 32.0f);
+        input.Release(0, 40.0f, 32.0f);
+        Expect(buttonClicked, "Button press/release did not invoke the click callback.", failures);
 
         auto* capturePanel = new UIInputProbeWidget("QA_CapturePanel");
         capturePanel->SetPosition(420.0f, 100.0f);

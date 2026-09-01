@@ -637,6 +637,15 @@ namespace CCEngine {
         Application* app = Application::Get();
         if (app)
         {
+            if (app->HasCommandLineFlag("--create-animator-state-machine-test-scene"))
+            {
+                bool created = CreateAnimatorStateMachineTestScene();
+                app->SetExitCode(created ? 0 : 1);
+                if (app->HasCommandLineFlag("--exit"))
+                    app->GetWindow().SetShouldClose(true);
+                return;
+            }
+
             m_RunEditorQAOnStartup = app->HasCommandLineFlag("--run-editor-qa");
             m_CloseAfterEditorQA = app->HasCommandLineFlag("--exit");
         }
@@ -803,6 +812,7 @@ namespace CCEngine {
         editorStageStartedAt = std::chrono::steady_clock::now();
         m_Camera.OnUpdate(deltaTime, m_ProjectSettings.Data(), allowSceneCameraNavigation);
         HandleShortcuts();
+        ProcessAnimatorGraphOpenRequests();
         AddEditorHitchStage(editorHitchStages, "CameraShortcuts", editorStageStartedAt);
 
         editorStageStartedAt = std::chrono::steady_clock::now();
@@ -3295,6 +3305,103 @@ namespace CCEngine {
         }
     }
 
+    bool EditorLayer::CreateAnimatorStateMachineTestScene()
+    {
+        const std::string modelAssetPath = "assets/models/MixamoTest/Mixamo_Standard_Walk.fbx";
+        const std::filesystem::path modelPath = std::filesystem::current_path() / modelAssetPath;
+        const std::filesystem::path scenePath = std::filesystem::current_path() / "assets" / "scenes" / "AnimatorStateMachineTest.ccscene";
+
+        if (!std::filesystem::exists(modelPath))
+        {
+            ConsoleLog::Error("Animator state machine test model is missing: " + modelPath.string());
+            return false;
+        }
+
+        delete m_ActiveScene;
+        m_ActiveScene = new Scene();
+        RebindScenePanels();
+
+        Entity cameraEntity = m_ActiveScene->CreateEntity("Main Camera");
+        auto& cameraComp = cameraEntity.AddComponent<CameraComponent>();
+        cameraComp.Primary = true;
+        auto& cameraTransform = cameraEntity.GetComponent<TransformComponent>();
+        cameraTransform.Translation = { 0.0f, 2.2f, -5.5f };
+        cameraTransform.Rotation = { DirectX::XMConvertToRadians(14.0f), 0.0f, 0.0f };
+        DirectX::XMStoreFloat4(
+            &cameraTransform.QuaternionRotation,
+            DirectX::XMQuaternionRotationRollPitchYaw(cameraTransform.Rotation.x, cameraTransform.Rotation.y, cameraTransform.Rotation.z));
+
+        Entity keyLight = m_ActiveScene->CreateEntity("Main Light (Warm)");
+        auto& keyLightTransform = keyLight.GetComponent<TransformComponent>();
+        keyLightTransform.Rotation = { DirectX::XMConvertToRadians(45.0f), DirectX::XMConvertToRadians(-35.0f), 0.0f };
+        DirectX::XMStoreFloat4(
+            &keyLightTransform.QuaternionRotation,
+            DirectX::XMQuaternionRotationRollPitchYaw(keyLightTransform.Rotation.x, keyLightTransform.Rotation.y, keyLightTransform.Rotation.z));
+        auto& keyLightComp = keyLight.AddComponent<LightComponent>();
+        keyLightComp.LightColor = { 1.0f, 0.93f, 0.82f };
+        keyLightComp.Intensity = 1.1f;
+
+        Entity fillLight = m_ActiveScene->CreateEntity("Fill Light (Cool)");
+        auto& fillLightTransform = fillLight.GetComponent<TransformComponent>();
+        fillLightTransform.Rotation = { DirectX::XMConvertToRadians(25.0f), DirectX::XMConvertToRadians(140.0f), 0.0f };
+        DirectX::XMStoreFloat4(
+            &fillLightTransform.QuaternionRotation,
+            DirectX::XMQuaternionRotationRollPitchYaw(fillLightTransform.Rotation.x, fillLightTransform.Rotation.y, fillLightTransform.Rotation.z));
+        auto& fillLightComp = fillLight.AddComponent<LightComponent>();
+        fillLightComp.LightColor = { 0.45f, 0.60f, 1.0f };
+        fillLightComp.Intensity = 0.45f;
+
+        Entity modelEntity = ModelImporter::ImportModel(m_ActiveScene, modelAssetPath);
+        if (!modelEntity)
+        {
+            ConsoleLog::Error("Failed to import Mixamo animator test model.");
+            return false;
+        }
+
+        modelEntity.GetComponent<TagComponent>().Tag = "Mixamo_Animator_StateMachine_Target";
+        auto& modelTransform = modelEntity.GetComponent<TransformComponent>();
+        modelTransform.Translation = { 0.0f, 0.0f, 0.0f };
+        modelTransform.Scale = { 0.02f, 0.02f, 0.02f };
+
+        auto& animator = modelEntity.HasComponent<AnimatorComponent>()
+            ? modelEntity.GetComponent<AnimatorComponent>()
+            : modelEntity.AddComponent<AnimatorComponent>();
+
+        animator.SourcePath = modelAssetPath;
+        animator.SourceAssetGuid = AssetDatabase::GetGuidFromPath(modelAssetPath);
+        animator.SelectedClipIndex = 0;
+        animator.SelectedClipName = "Mixamo Walk";
+        animator.AutoPlay = true;
+        animator.PreviewInEdit = false;
+        animator.Loop = true;
+        animator.Speed = 1.0f;
+        animator.ActiveStateIndex = 0;
+        animator.EntryStateIndex = 0;
+        animator.States.clear();
+
+        AnimatorComponent::State walkState;
+        walkState.Name = "Walk";
+        walkState.ClipIndex = 0;
+        walkState.Loop = true;
+        walkState.Speed = 1.0f;
+        walkState.WriteDefaults = true;
+        animator.States.push_back(walkState);
+
+        // Write Defaults는 상태를 둘로 쪼개는 값이 아니라 State 안에서 바꾸는 재생 옵션이다.
+        // 테스트 씬도 Unity처럼 하나의 Walk 상태를 만들고, 그래프의 선택 패널에서 체크박스로 전환한다.
+        m_CurrentScenePath = scenePath.string();
+        SceneSerializer serializer(m_ActiveScene);
+        if (!serializer.Serialize(m_CurrentScenePath))
+        {
+            ConsoleLog::Error("Failed to save animator state machine test scene: " + m_CurrentScenePath);
+            return false;
+        }
+
+        RefreshEditorSelection(modelEntity);
+        ConsoleLog::Info("Animator state machine test scene created: " + m_CurrentScenePath);
+        return true;
+    }
+
     bool EditorLayer::ApplyTextureAssetToEntity(Entity entity, const std::string& filepath)
     {
         if (!entity || !entity.HasComponent<MeshComponent>())
@@ -3363,6 +3470,27 @@ namespace CCEngine {
 
     void EditorLayer::SelectAssetForInspection(const std::filesystem::path& assetPath, const std::string& assetType)
     {
+        if (assetType == "animatorcontroller" && m_HierarchyPanel)
+        {
+            Entity selected = m_HierarchyPanel->GetSelectedEntity();
+            if (selected && selected.HasComponent<AnimatorComponent>())
+            {
+                auto& animator = selected.GetComponent<AnimatorComponent>();
+                animator.ControllerPath = assetPath.string();
+                animator.ControllerAssetGuid = AssetDatabase::GetGuidFromPath(assetPath);
+
+                // Animator Controller는 컴포넌트의 Object Slot에 들어가는 에셋이다.
+                // 선택된 Animator가 있으면 Asset Inspector로 바꾸지 않고 슬롯 참조만 갱신한다.
+                for (UI::InspectorPanel* inspector : m_InspectorPanels)
+                {
+                    if (inspector && inspector->IsVisible())
+                        inspector->SetSelectedEntity(selected);
+                }
+                ConsoleLog::Info("Animator controller assigned: " + assetPath.filename().string());
+                return;
+            }
+        }
+
         if (m_HierarchyPanel)
             m_LastInspectorSelectionRevision = m_HierarchyPanel->GetSelectionRevision();
 
@@ -3540,6 +3668,31 @@ namespace CCEngine {
             {
                 if (!ApplyMaterialAssetToEntity(target, filepath))
                     ConsoleLog::Warning("Material drop ignored: target has no Mesh Renderer.");
+                return;
+            }
+
+            return;
+        }
+
+        if (assetType == "animatorcontroller")
+        {
+            for (UI::InspectorPanel* inspector : m_InspectorPanels)
+            {
+                if (!inspector || !inspector->IsVisible() || !inspector->IsPointInside(mouseX, mouseY))
+                    continue;
+
+                Entity selected = inspector->GetSelectedEntity();
+                if (!selected || !selected.HasComponent<AnimatorComponent>())
+                {
+                    ConsoleLog::Warning("Animator controller drop ignored: selected object has no Animator.");
+                    return;
+                }
+
+                auto& animator = selected.GetComponent<AnimatorComponent>();
+                animator.ControllerPath = filepath;
+                animator.ControllerAssetGuid = AssetDatabase::GetGuidFromPath(filepath);
+                inspector->SetSelectedEntity(selected);
+                ConsoleLog::Info("Animator controller assigned: " + std::filesystem::path(filepath).filename().string());
                 return;
             }
 
@@ -4266,6 +4419,78 @@ namespace CCEngine {
         }
 
         ConsoleLog::Error("Failed to open code asset: " + assetPath.string());
+    }
+
+    void EditorLayer::OpenAnimatorGraphEditorWindow(Entity entity)
+    {
+        if (!m_RootUI || !entity || !entity.HasComponent<AnimatorComponent>())
+            return;
+
+        const bool ownerWindowClosed = m_AnimatorGraphPanel &&
+            m_AnimatorGraphPanel->GetOwnerWindow() &&
+            m_AnimatorGraphPanel->GetOwnerWindow()->ShouldClose();
+        const bool orphanedPanel = m_AnimatorGraphPanel &&
+            !m_AnimatorGraphPanel->GetParent() &&
+            !m_AnimatorGraphPanel->GetOwnerWindow();
+
+        if (orphanedPanel)
+        {
+            delete m_AnimatorGraphPanel;
+            m_AnimatorGraphPanel = nullptr;
+        }
+
+        if (!m_AnimatorGraphPanel || ownerWindowClosed)
+        {
+            // 닫힌 보조 윈도우에 붙어 있던 패널 포인터는 다시 쓸 수 없다.
+            // 재오픈 요청 때 새 패널을 만들면 "한 번 닫으면 다시 안 열림" 상태가 남지 않는다.
+            m_AnimatorGraphPanel = new UI::AnimatorGraphPanel("AnimatorGraphEditorPanel");
+            m_AnimatorGraphPanel->SetOnClosed([this]()
+                {
+                    m_AnimatorGraphPanel = nullptr;
+                });
+        }
+
+        if (m_AnimatorGraphPanel->GetOwnerWindow() && !m_AnimatorGraphPanel->GetOwnerWindow()->ShouldClose())
+        {
+            // 멀티 윈도우에 이미 떠 있는 그래프는 정상 상태다.
+            // parent가 null이라는 이유만으로 새 패널을 만들면 같은 그래프 창이 여러 개 생긴다.
+            m_AnimatorGraphPanel->SetTarget(entity);
+            m_AnimatorGraphPanel->SetVisible(true);
+            UI::Widget::SetKeyboardFocus(m_AnimatorGraphPanel);
+            return;
+        }
+
+        if (m_AnimatorGraphPanel->GetParent() != m_RootUI)
+            m_RootUI->AddChild(m_AnimatorGraphPanel);
+
+        m_AnimatorGraphPanel->SetOwnerWindow(nullptr);
+        m_AnimatorGraphPanel->SetAnchorMin(0.0f, 0.0f);
+        m_AnimatorGraphPanel->SetAnchorMax(0.0f, 0.0f);
+        m_AnimatorGraphPanel->SetOffsetMin(300.0f, 120.0f);
+        m_AnimatorGraphPanel->SetOffsetMax(1120.0f, 700.0f);
+        m_AnimatorGraphPanel->SetDockingEnabled(true);
+        m_AnimatorGraphPanel->SetTarget(entity);
+        BringEditorOverlaysToFront();
+    }
+
+    void EditorLayer::ProcessAnimatorGraphOpenRequests()
+    {
+        if (!m_ActiveScene)
+            return;
+
+        auto view = m_ActiveScene->GetRegistry().view<AnimatorComponent>();
+        for (auto handle : view)
+        {
+            auto& animator = view.get<AnimatorComponent>(handle);
+            if (!animator.EditorOpenGraphRequested)
+                continue;
+
+            // Inspector는 어떤 창을 띄울지 알 필요 없이 요청만 남긴다.
+            // 실제 패널 생성은 EditorLayer가 처리해 UI 계층 의존성을 한 방향으로 유지한다.
+            animator.EditorOpenGraphRequested = false;
+            OpenAnimatorGraphEditorWindow({ handle, m_ActiveScene });
+            break;
+        }
     }
 
     void EditorLayer::OpenKeyBindingPickerWindow(UI::KeyBindingInput* targetInput)

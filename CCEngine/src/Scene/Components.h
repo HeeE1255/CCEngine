@@ -290,13 +290,70 @@ namespace CCEngine
     {
         struct State
         {
-            std::string Name = "Default";
+            std::string Name = "State";
             int ClipIndex = 0;
             bool Loop = true;
             float Speed = 1.0f;
+            // 그래프 에디터에서 보이는 노드 위치다. 애니메이션 재생값과 분리해 UI 배치만 저장한다.
+            DirectX::XMFLOAT2 GraphPosition = { 260.0f, 180.0f };
+            // true면 클립에 없는 본/값을 원본 기본 포즈로 되돌린다.
+            // false면 클립이 건드리는 값만 쓰고 나머지는 직전 포즈를 유지한다.
+            bool WriteDefaults = true;
+        };
+
+        struct Parameter
+        {
+            enum class Type { Float = 0, Bool, Trigger };
+            std::string Name = "Parameter";
+            Type ParamType = Type::Float;
+            float FloatValue = 0.0f;
+            bool BoolValue = false;
+        };
+
+        struct TransitionCondition
+        {
+            enum class CompareMode { If = 0, IfNot, Greater, Less, Equals, NotEquals };
+            std::string ParameterName;
+            CompareMode Mode = CompareMode::If;
+            float FloatValue = 0.0f;
+            bool BoolValue = true;
+        };
+
+        struct Transition
+        {
+            int FromStateIndex = -1;
+            int ToStateIndex = -1;
+            bool HasExitTime = false;
+            float ExitTime = 1.0f;
+            float BlendTime = 0.15f;
+            // 전이는 상태 인덱스와 파라미터 이름을 같이 저장한다.
+            // 상태 이름은 바뀔 수 있고, 파라미터 이름은 Rename 시 조건도 같이 갱신해야 한다.
+            std::vector<TransitionCondition> Conditions;
+        };
+
+        struct Layer
+        {
+            enum class BlendMode { Override = 0, Additive };
+
+            std::string Name = "Base Layer";
+            float Weight = 1.0f;
+            std::string MaskRootBone;
+            BlendMode Blending = BlendMode::Override;
+            bool Sync = false;
+            bool IKPass = false;
+            bool Visible = true;
+            int ActiveStateIndex = -1;
+            int EntryStateIndex = -1;
+            int SelectedTransitionIndex = -1;
+            // 레이어마다 별도 상태 그래프를 가진다.
+            // 이렇게 해야 새 레이어를 눌렀을 때 기존 레이어의 노드를 공유하지 않고 독립적으로 편집할 수 있다.
+            std::vector<State> States;
+            std::vector<Transition> Transitions;
         };
 
         Animator AnimPlayer;
+        std::string ControllerAssetGuid;
+        std::string ControllerPath;
         std::string SourceAssetGuid;
         std::string SourcePath;
         int SelectedClipIndex = 0;
@@ -306,8 +363,19 @@ namespace CCEngine
         bool Loop = true;
         float Speed = 1.0f;
         bool IsPlaying = false;
-        int ActiveStateIndex = 0;
+        int ActiveStateIndex = -1;
+        int EntryStateIndex = -1;
+        int ActiveLayerIndex = 0;
         std::vector<State> States;
+        // 레이어는 같은 Animator 안에서 여러 애니메이션 흐름을 겹치기 위한 단위다.
+        // 현재 단계에서는 편집/저장 기반을 먼저 만들고, 실제 포즈 블렌딩은 이 값을 기준으로 확장한다.
+        std::vector<Layer> Layers = { Layer{} };
+        std::vector<Parameter> Parameters;
+        std::vector<Transition> Transitions;
+        int SelectedTransitionIndex = -1;
+
+        // 에디터 전용 신호다. Inspector는 요청만 남기고, 실제 창 생성은 EditorLayer가 처리한다.
+        bool EditorOpenGraphRequested = false;
 
         // RuntimeClip은 실행 중에만 쓰는 캐시다.
         // 씬 파일에는 경로/GUID와 ClipIndex만 저장하고, 실제 클립 데이터는 필요할 때 다시 읽는다.
@@ -316,7 +384,9 @@ namespace CCEngine
 
         AnimatorComponent() = default;
         AnimatorComponent(const AnimatorComponent& other)
-            : SourceAssetGuid(other.SourceAssetGuid),
+            : ControllerAssetGuid(other.ControllerAssetGuid),
+            ControllerPath(other.ControllerPath),
+            SourceAssetGuid(other.SourceAssetGuid),
             SourcePath(other.SourcePath),
             SelectedClipIndex(other.SelectedClipIndex),
             SelectedClipName(other.SelectedClipName),
@@ -326,7 +396,13 @@ namespace CCEngine
             Speed(other.Speed),
             IsPlaying(false),
             ActiveStateIndex(other.ActiveStateIndex),
-            States(other.States)
+            EntryStateIndex(other.EntryStateIndex),
+            ActiveLayerIndex(other.ActiveLayerIndex),
+            States(other.States),
+            Layers(other.Layers),
+            Parameters(other.Parameters),
+            Transitions(other.Transitions),
+            SelectedTransitionIndex(other.SelectedTransitionIndex)
         {
             // Animator와 RuntimeClip은 현재 재생 위치를 들고 있는 실행 상태다.
             // 복제/Play Scene 생성 시에는 설정만 복사하고, 실제 클립은 새 씬에서 다시 로드한다.

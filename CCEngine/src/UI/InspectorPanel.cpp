@@ -1365,6 +1365,7 @@ namespace CCEngine
         {
             m_AddComponentMenu = new UI::Panel("AddComponentMenu", { 0.14f, 0.14f, 0.15f, 1.0f });
             m_AddComponentMenu->SetVisible(false);
+            m_AddComponentMenu->SetBlockMouseEvents(true);
             m_AddComponentMenu->SetAnchorMin(0.0f, 0.0f);
             m_AddComponentMenu->SetAnchorMax(0.0f, 0.0f);
             AddChild(m_AddComponentMenu);
@@ -1400,6 +1401,7 @@ namespace CCEngine
             addCandidate("Sphere Collider 3D", AddComponentType::SphereCollider3D, m_SelectedEntity.HasComponent<SphereCollider3DComponent>());
             addCandidate("Cylinder Collider 3D", AddComponentType::CylinderCollider3D, m_SelectedEntity.HasComponent<CylinderCollider3DComponent>());
             addCandidate("Mesh Collider 3D", AddComponentType::MeshCollider3D, m_SelectedEntity.HasComponent<MeshCollider3DComponent>());
+            addCandidate("Animator", AddComponentType::Animator, m_SelectedEntity.HasComponent<AnimatorComponent>());
             addCandidate("New C# Script...", AddComponentType::Script, m_SelectedEntity.HasComponent<ScriptComponent>());
 
             if (!m_SelectedEntity.HasComponent<ScriptComponent>())
@@ -1444,6 +1446,7 @@ namespace CCEngine
                     case AddComponentType::SphereCollider3D: return "Sphere Collider 3D";
                     case AddComponentType::CylinderCollider3D: return "Cylinder Collider 3D";
                     case AddComponentType::MeshCollider3D: return "Mesh Collider 3D";
+                    case AddComponentType::Animator: return "Animator";
                     case AddComponentType::Script: return "C# Script";
                     default: return "Component";
                 }
@@ -1494,6 +1497,14 @@ namespace CCEngine
                 case AddComponentType::SphereCollider3D: m_SelectedEntity.AddComponent<SphereCollider3DComponent>(); break;
                 case AddComponentType::CylinderCollider3D: m_SelectedEntity.AddComponent<CylinderCollider3DComponent>(); break;
                 case AddComponentType::MeshCollider3D: m_SelectedEntity.AddComponent<MeshCollider3DComponent>(); break;
+                case AddComponentType::Animator:
+                {
+                    // Animator는 모델이 없는 빈 오브젝트에도 붙일 수 있다.
+                    // 컨트롤러/클립 참조는 나중에 슬롯으로 연결하므로, 추가 단계에서 모델 보유 여부로 막지 않는다.
+                    auto& animator = m_SelectedEntity.AddComponent<AnimatorComponent>();
+                    animator.EditorOpenGraphRequested = false;
+                    break;
+                }
                 case AddComponentType::Script: break;
             }
 
@@ -1781,6 +1792,35 @@ namespace CCEngine
         {
             if (!m_IsVisible)
                 return false;
+
+            if (m_AddComponentMenu && m_AddComponentMenu->IsVisible())
+            {
+                if (e.GetEventType() == EventType::KeyPressed)
+                {
+                    auto& ke = static_cast<KeyPressedEvent&>(e);
+                    if (ke.GetKeyCode() == VK_ESCAPE)
+                    {
+                        m_AddComponentMenu->SetVisible(false);
+                        e.Handled = true;
+                        return true;
+                    }
+                }
+
+                if (e.GetEventType() == EventType::MouseButtonPressed)
+                {
+                    auto& me = static_cast<MouseButtonPressedEvent&>(e);
+                    const bool insideMenu = m_AddComponentMenu->IsPointInside(me.GetX(), me.GetY());
+                    const bool onAddButton = m_AddComponentButton && m_AddComponentButton->IsPointInside(me.GetX(), me.GetY());
+                    if (!insideMenu && !onAddButton)
+                    {
+                        // Add Component 목록은 작은 팝업으로 동작한다.
+                        // 바깥을 누르면 닫고 그 클릭은 소비해서 뒤쪽 창이나 씬 선택으로 새지 않게 한다.
+                        m_AddComponentMenu->SetVisible(false);
+                        e.Handled = true;
+                        return true;
+                    }
+                }
+            }
 
             if (e.GetEventType() == EventType::KeyPressed && m_SelectedAssetType == "material" && Widget::IsKeyboardFocusOwner(this))
             {

@@ -10,6 +10,9 @@
 #include <unordered_map>
 #include <string>
 
+struct aiScene;
+struct aiAnimation;
+
 namespace CCEngine
 {
     class Scene;
@@ -43,6 +46,7 @@ namespace CCEngine
 
         static std::vector<AnimationClipInfo> InspectClips(const std::string& path);
         static std::shared_ptr<AnimationClip> LoadShared(const std::string& path, uint32_t clipIndex);
+        static void PrimeCacheFromScene(const std::string& path, const aiScene* scene);
 
         const std::string& GetName() const { return m_Name; }
         const std::string& GetSourcePath() const { return m_SourcePath; }
@@ -53,12 +57,16 @@ namespace CCEngine
         BoneAnimChannel* GetBoneChannel(const std::string& nodeName);
 
     private:
+        AnimationClip() = default;
+
         std::string m_SourcePath;
         std::string m_Name;
         uint32_t m_ClipIndex = 0;
         float m_Duration = 0.0f;
         float m_TicksPerSecond = 0.0f;
         std::map<std::string, BoneAnimChannel> m_Channels;
+
+        void LoadFromAssimpAnimation(const aiAnimation* anim, uint32_t safeIndex);
     };
 
     // 3. 애니메이션 재생기 (매 프레임 GPU로 보낼 행렬 계산)
@@ -71,6 +79,7 @@ namespace CCEngine
         void StopAnimation();
         void SetLoop(bool loop) { m_Loop = loop; }
         void SetSpeed(float speed) { m_Speed = speed; }
+        void SetWriteDefaults(bool writeDefaults);
         bool IsPlaying() const { return m_Playing; }
         AnimationClip* GetCurrentClip() const { return m_CurrentClip.get(); }
         void Update(float deltaTime, Model* model, Scene* scene);
@@ -96,6 +105,7 @@ namespace CCEngine
         bool SameSnapshot(const TransformSnapshot& left, const TransformSnapshot& right) const;
 
         std::unordered_map<std::string, DirectX::XMMATRIX> m_GlobalBoneMatrices;
+        std::unordered_map<std::string, DirectX::XMMATRIX> m_LastLocalNodeTransforms;
         std::unordered_map<entt::entity, TransformSnapshot> m_LastStaticPose;
         std::vector<DirectX::XMMATRIX> m_FinalBoneMatrices;
         std::shared_ptr<AnimationClip> m_CurrentClip;
@@ -103,6 +113,7 @@ namespace CCEngine
         float m_CurrentTime = 0.0f;
         float m_Speed = 1.0f;
         bool m_Loop = true;
+        bool m_WriteDefaults = true;
         bool m_Playing = false;
         bool m_StaticPoseInitialized = false;
     };
