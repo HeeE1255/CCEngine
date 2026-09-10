@@ -57,6 +57,12 @@
     <ClInclude Include="src\Animation\Animator.h">
       <Filter>src\Animation</Filter>
     </ClInclude>
+    <ClInclude Include="src\Animation\AnimatorControllerAsset.h">
+      <Filter>src\Animation</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Animation\AvatarAsset.h">
+      <Filter>src\Animation</Filter>
+    </ClInclude>
     <ClInclude Include="src\Application.h">
       <Filter>src</Filter>
     </ClInclude>
@@ -345,6 +351,12 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\Animation\Animator.cpp">
+      <Filter>src\Animation</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Animation\AnimatorControllerAsset.cpp">
+      <Filter>src\Animation</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Animation\AvatarAsset.cpp">
       <Filter>src\Animation</Filter>
     </ClCompile>
     <ClCompile Include="src\Application.cpp">

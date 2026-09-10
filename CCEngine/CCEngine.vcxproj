@@ -162,6 +162,8 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="src\Animation\Animator.h" />
+    <ClInclude Include="src\Animation\AnimatorControllerAsset.h" />
+    <ClInclude Include="src\Animation\AvatarAsset.h" />
     <ClInclude Include="src\Application.h" />
     <ClInclude Include="src\Core.h" />
     <ClInclude Include="src\Core\AssetDatabase.h" />
@@ -260,6 +262,8 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\Animation\Animator.cpp" />
+    <ClCompile Include="src\Animation\AnimatorControllerAsset.cpp" />
+    <ClCompile Include="src\Animation\AvatarAsset.cpp" />
     <ClCompile Include="src\Application.cpp" />
     <ClCompile Include="src\Core\AssetDatabase.cpp" />
     <ClCompile Include="src\Core\ConsoleLog.cpp" />

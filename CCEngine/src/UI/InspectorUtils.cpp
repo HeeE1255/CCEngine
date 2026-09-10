@@ -1,6 +1,8 @@
 #include "InspectorUtils.h"
 #include "UI/InspectorRegistry.h"
 #include "Scene/Components.h"
+#include "Animation/AnimatorControllerAsset.h"
+#include "Animation/AvatarAsset.h"
 #include "Core/AssetDatabase.h"
 #include "Scripting/ScriptMetadata.h"
 #include "Utils/PlatformUtils.h"
@@ -11,11 +13,13 @@
 #include "Renderer/ShaderProperty.h"
 #include <algorithm>
 #include <iostream>
+#include <cctype>
 #include <cmath>
 #include <filesystem>
 #include <sstream>
 #include <type_traits>
 #include <chrono>
+#include <unordered_set>
 
 namespace CCEngine {
     namespace UI {
@@ -48,6 +52,122 @@ namespace CCEngine {
                 return {};
             }
 
+            std::string NormalizeRootBoneKey(std::string value)
+            {
+                std::replace(value.begin(), value.end(), '\\', '/');
+                const size_t slash = value.find_last_of('/');
+                if (slash != std::string::npos)
+                    value = value.substr(slash + 1);
+                const size_t colon = value.find_last_of(':');
+                if (colon != std::string::npos)
+                    value = value.substr(colon + 1);
+
+                std::string normalized;
+                normalized.reserve(value.size());
+                for (char c : value)
+                {
+                    if (c == '_' || c == '-' || std::isspace(static_cast<unsigned char>(c)))
+                        continue;
+                    normalized.push_back((char)std::tolower(static_cast<unsigned char>(c)));
+                }
+                return normalized;
+            }
+
+            int ScoreRootBoneCandidate(const std::string& name)
+            {
+                const std::string key = NormalizeRootBoneKey(name);
+                if (key == "hips" || key == "pelvis")
+                    return 100;
+                if (key.find("hips") != std::string::npos || key.find("pelvis") != std::string::npos)
+                    return 90;
+                if (key == "root")
+                    return 70;
+                if (key.find("root") != std::string::npos)
+                    return 55;
+                if (key.find("armature") != std::string::npos)
+                    return 35;
+                return 0;
+            }
+
+            std::vector<std::string> CollectRootBoneCandidates(Entity entity)
+            {
+                std::vector<std::string> candidates;
+                std::unordered_set<std::string> seen;
+                Entity modelRoot = FindModelRoot(entity);
+                if (!modelRoot || !modelRoot.HasComponent<ModelComponent>())
+                    return candidates;
+
+                auto pushCandidate = [&](const std::string& value)
+                {
+                    if (!value.empty() && seen.insert(value).second)
+                        candidates.push_back(value);
+                };
+
+                const auto& model = modelRoot.GetComponent<ModelComponent>();
+                for (const auto& [path, handle] : model.NodePathEntityMap)
+                    pushCandidate(path);
+                for (const auto& [name, handle] : model.NodeEntityMap)
+                    pushCandidate(name);
+
+                std::stable_sort(candidates.begin(), candidates.end(), [](const std::string& a, const std::string& b)
+                {
+                    const int scoreA = ScoreRootBoneCandidate(a);
+                    const int scoreB = ScoreRootBoneCandidate(b);
+                    if (scoreA != scoreB)
+                        return scoreA > scoreB;
+                    return a.size() < b.size();
+                });
+                return candidates;
+            }
+
+            std::string FindBestRootBoneCandidate(Entity entity)
+            {
+                const auto candidates = CollectRootBoneCandidates(entity);
+                for (const std::string& candidate : candidates)
+                {
+                    if (ScoreRootBoneCandidate(candidate) > 0)
+                        return candidate;
+                }
+                return candidates.empty() ? std::string("Hips") : candidates.front();
+            }
+
+            AnimatorComponent::State* FindInspectorActiveState(AnimatorComponent& animator)
+            {
+                if (!animator.Layers.empty())
+                {
+                    animator.ActiveLayerIndex = std::clamp(animator.ActiveLayerIndex, 0, static_cast<int>(animator.Layers.size()) - 1);
+                    auto& layer = animator.Layers[animator.ActiveLayerIndex];
+                    if (!layer.States.empty())
+                    {
+                        layer.ActiveStateIndex = std::clamp(layer.ActiveStateIndex, 0, static_cast<int>(layer.States.size()) - 1);
+                        return &layer.States[layer.ActiveStateIndex];
+                    }
+                }
+
+                if (!animator.States.empty())
+                {
+                    animator.ActiveStateIndex = std::clamp(animator.ActiveStateIndex, 0, static_cast<int>(animator.States.size()) - 1);
+                    return &animator.States[animator.ActiveStateIndex];
+                }
+                return nullptr;
+            }
+
+            void SaveAnimatorControllerIfAssigned(AnimatorComponent& animator)
+            {
+                std::filesystem::path controllerPath = animator.ControllerPath;
+                if (!animator.ControllerAssetGuid.empty())
+                {
+                    std::filesystem::path guidPath = AssetDatabase::GetPathFromGuid(animator.ControllerAssetGuid);
+                    if (!guidPath.empty())
+                        controllerPath = guidPath;
+                }
+                if (controllerPath.empty())
+                    return;
+
+                AnimatorControllerAsset::Normalize(animator);
+                AnimatorControllerAsset::SaveToFile(controllerPath, animator);
+            }
+
             std::string ResolveAnimationSourcePath(AnimatorComponent& animator, const ModelComponent& model)
             {
                 if (animator.SourceAssetGuid.empty())
@@ -74,6 +194,26 @@ namespace CCEngine {
                 }
 
                 return animator.SourcePath;
+            }
+
+            const char* AnimatorUpdateModeName(AnimatorComponent::UpdateMode mode)
+            {
+                switch (mode)
+                {
+                    case AnimatorComponent::UpdateMode::AnimatePhysics: return "Animate Physics";
+                    case AnimatorComponent::UpdateMode::UnscaledTime: return "Unscaled Time";
+                    default: return "Normal";
+                }
+            }
+
+            const char* AnimatorCullingModeName(AnimatorComponent::CullingMode mode)
+            {
+                switch (mode)
+                {
+                    case AnimatorComponent::CullingMode::AlwaysAnimate: return "Always Animate";
+                    case AnimatorComponent::CullingMode::CullCompletely: return "Cull Completely";
+                    default: return "Cull Update Transforms";
+                }
             }
 
             bool IsSkeletonNode(Entity entity, Entity modelRoot)
@@ -969,6 +1109,86 @@ namespace CCEngine {
                     AddRemoveComponentButton<SpriteRendererComponent>(parent, item, entity, "SpriteRenderer");
                 });
 
+            UI::InspectorRegistry::RegisterComponent<AudioComponent>(
+                [](UI::Widget* parent, CCEngine::Entity entity, AudioComponent& audio)
+                {
+                    auto item = new UI::InspectorItem("AudioItem", "Audio");
+                    item->SetAnchorMin(0.0f, 0.0f); item->SetAnchorMax(1.0f, 0.0f);
+                    parent->AddChild(item);
+
+                    std::filesystem::path audioPath(audio.AudioPath);
+                    auto clipButton = new UI::Button("BtnAudioClip", audioPath.empty() ? "Clip: None" : "Clip: " + audioPath.filename().string());
+                    clipButton->SetAnchorMin(0.0f, 0.0f); clipButton->SetAnchorMax(1.0f, 0.0f);
+                    clipButton->SetOffsetMin(15.0f, 0.0f); clipButton->SetOffsetMax(-10.0f, 28.0f);
+                    clipButton->SetOnClick([entity, clipButton]() mutable
+                        {
+                            if (!entity || !entity.HasComponent<AudioComponent>())
+                                return;
+
+                            std::string filepath = PlatformUtils::OpenFile("Audio (*.wav;*.mp3;*.ogg)\0*.wav;*.mp3;*.ogg\0");
+                            if (filepath.empty())
+                                return;
+
+                            auto& audio = entity.GetComponent<AudioComponent>();
+                            audio.AudioPath = filepath;
+                            audio.AudioAssetGuid = AssetDatabase::GetGuidFromPath(filepath);
+                            clipButton->SetText("Clip: " + std::filesystem::path(filepath).filename().string());
+                        });
+                    item->AddChild(clipButton);
+
+                    UI::InspectorUtils::AddDragFloat(item, "AudioVolume", "Volume",
+                        [entity]() mutable { return entity.GetComponent<AudioComponent>().Volume; },
+                        [entity](float v) mutable { entity.GetComponent<AudioComponent>().Volume = std::clamp(v, 0.0f, 1.0f); });
+                    UI::InspectorUtils::AddDragFloat(item, "AudioPitch", "Pitch",
+                        [entity]() mutable { return entity.GetComponent<AudioComponent>().Pitch; },
+                        [entity](float v) mutable { entity.GetComponent<AudioComponent>().Pitch = (std::max)(0.01f, v); });
+
+                    auto makeToggle = [item, entity](const std::string& name, const std::string& label, bool AudioComponent::* field)
+                    {
+                        auto button = new UI::Button(name, "");
+                        button->SetAnchorMin(0.0f, 0.0f); button->SetAnchorMax(1.0f, 0.0f);
+                        button->SetOffsetMin(15.0f, 0.0f); button->SetOffsetMax(-10.0f, 26.0f);
+                        auto refresh = [entity, button, label, field]() mutable
+                        {
+                            if (!entity || !entity.HasComponent<AudioComponent>())
+                                return;
+                            const bool enabled = entity.GetComponent<AudioComponent>().*field;
+                            button->SetActive(enabled);
+                            button->SetText(label + (enabled ? ": On" : ": Off"));
+                        };
+                        button->SetOnClick([entity, button, label, field]() mutable
+                            {
+                                if (!entity || !entity.HasComponent<AudioComponent>())
+                                    return;
+                                auto& audio = entity.GetComponent<AudioComponent>();
+                                audio.*field = !(audio.*field);
+                                const bool enabled = audio.*field;
+                                button->SetActive(enabled);
+                                button->SetText(label + (enabled ? ": On" : ": Off"));
+                            });
+                        refresh();
+                        item->AddChild(button);
+                    };
+                    makeToggle("BtnAudioEnabled", "Enabled", &AudioComponent::Enabled);
+                    makeToggle("BtnAudioLoop", "Loop", &AudioComponent::Loop);
+                    makeToggle("BtnAudioPlayOnStart", "Play On Start", &AudioComponent::PlayOnStart);
+
+                    auto triggerButton = new UI::Button("BtnAudioPlayTrigger", "Play Trigger");
+                    triggerButton->SetAnchorMin(0.0f, 0.0f); triggerButton->SetAnchorMax(1.0f, 0.0f);
+                    triggerButton->SetOffsetMin(15.0f, 0.0f); triggerButton->SetOffsetMax(-10.0f, 26.0f);
+                    triggerButton->SetOnClick([entity]() mutable
+                        {
+                            if (!entity || !entity.HasComponent<AudioComponent>())
+                                return;
+                            // 버튼은 실제 사운드를 직접 재생하지 않고 런타임 요청만 남긴다.
+                            // 후속 Audio Backend는 이 플래그를 한 번 소비한 뒤 false로 되돌리면 된다.
+                            entity.GetComponent<AudioComponent>().RuntimePlayRequested = true;
+                        });
+                    item->AddChild(triggerButton);
+
+                    AddRemoveComponentButton<AudioComponent>(parent, item, entity, "Audio");
+                });
+
             UI::InspectorRegistry::RegisterComponent<AnimatorComponent>(
                 [](UI::Widget* parent, CCEngine::Entity entity, AnimatorComponent& animator)
                 {
@@ -1008,6 +1228,132 @@ namespace CCEngine {
                         });
                     item->AddChild(controllerButton);
 
+                    {
+                    std::filesystem::path avatarPath = animator.AvatarPath;
+                    if (!animator.AvatarGuid.empty())
+                    {
+                        std::filesystem::path guidPath = AssetDatabase::GetPathFromGuid(animator.AvatarGuid);
+                        if (!guidPath.empty())
+                            avatarPath = guidPath;
+                    }
+
+                    auto assignControllerButton = new UI::Button("AnimatorAssignController", "Assign Controller...");
+                    assignControllerButton->SetAnchorMin(0.0f, 0.0f); assignControllerButton->SetAnchorMax(1.0f, 0.0f);
+                    assignControllerButton->SetOffsetMin(15.0f, 0.0f); assignControllerButton->SetOffsetMax(-10.0f, 28.0f);
+                    assignControllerButton->SetOnClick([entity]() mutable
+                        {
+                            if (!entity || !entity.HasComponent<AnimatorComponent>())
+                                return;
+
+                            std::string filepath = PlatformUtils::OpenFile("CC Animator Controller (*.ccanimcontroller)\0*.ccanimcontroller\0");
+                            if (filepath.empty() || AssetDatabase::GetAssetKind(filepath) != AssetKind::AnimatorController)
+                                return;
+
+                            auto& anim = entity.GetComponent<AnimatorComponent>();
+                            anim.ControllerPath = filepath;
+                            anim.ControllerAssetGuid = AssetDatabase::GetGuidFromPath(filepath);
+                            AnimatorControllerAsset::LoadFromFile(filepath, anim);
+                        });
+                    item->AddChild(assignControllerButton);
+
+                    auto avatarButton = new UI::Button("AnimatorAvatarAsset",
+                        avatarPath.empty()
+                            ? "Avatar: None"
+                            : "Avatar: " + avatarPath.filename().string());
+                    avatarButton->SetAnchorMin(0.0f, 0.0f); avatarButton->SetAnchorMax(1.0f, 0.0f);
+                    avatarButton->SetOffsetMin(15.0f, 0.0f); avatarButton->SetOffsetMax(-10.0f, 28.0f);
+                    avatarButton->SetOnClick([entity, avatarButton]() mutable
+                        {
+                            if (!entity || !entity.HasComponent<AnimatorComponent>())
+                                return;
+
+                            std::string filepath = PlatformUtils::OpenFile("CC Avatar (*.ccavatar)\0*.ccavatar\0");
+                            if (filepath.empty() || AssetDatabase::GetAssetKind(filepath) != AssetKind::Avatar)
+                                return;
+
+                            auto& anim = entity.GetComponent<AnimatorComponent>();
+                            anim.AvatarPath = filepath;
+                            anim.AvatarGuid = AssetDatabase::GetGuidFromPath(filepath);
+                            avatarButton->SetText("Avatar: " + std::filesystem::path(filepath).filename().string());
+                        });
+                    item->AddChild(avatarButton);
+
+                    auto applyRootButton = new UI::Button("AnimatorApplyRootMotion", animator.ApplyRootMotion ? "Apply Root Motion: On" : "Apply Root Motion: Off");
+                    applyRootButton->SetAnchorMin(0.0f, 0.0f); applyRootButton->SetAnchorMax(1.0f, 0.0f);
+                    applyRootButton->SetOffsetMin(15.0f, 0.0f); applyRootButton->SetOffsetMax(-10.0f, 28.0f);
+                    applyRootButton->SetActive(animator.ApplyRootMotion);
+                    applyRootButton->SetOnClick([entity, applyRootButton]() mutable
+                        {
+                            if (!entity || !entity.HasComponent<AnimatorComponent>())
+                                return;
+
+                            auto& anim = entity.GetComponent<AnimatorComponent>();
+                            anim.ApplyRootMotion = !anim.ApplyRootMotion;
+                            if (auto* state = FindInspectorActiveState(anim))
+                                state->ApplyRootMotion = anim.ApplyRootMotion;
+                            SaveAnimatorControllerIfAssigned(anim);
+                            applyRootButton->SetActive(anim.ApplyRootMotion);
+                            applyRootButton->SetText(anim.ApplyRootMotion ? "Apply Root Motion: On" : "Apply Root Motion: Off");
+                        });
+                    item->AddChild(applyRootButton);
+
+                    auto updateModeButton = new UI::Button("AnimatorUpdateMode", std::string("Update Mode: ") + AnimatorUpdateModeName(animator.UpdateModeValue));
+                    updateModeButton->SetAnchorMin(0.0f, 0.0f); updateModeButton->SetAnchorMax(1.0f, 0.0f);
+                    updateModeButton->SetOffsetMin(15.0f, 0.0f); updateModeButton->SetOffsetMax(-10.0f, 28.0f);
+                    updateModeButton->SetOnClick([entity, updateModeButton]() mutable
+                        {
+                            if (!entity || !entity.HasComponent<AnimatorComponent>())
+                                return;
+
+                            auto& anim = entity.GetComponent<AnimatorComponent>();
+                            int next = (static_cast<int>(anim.UpdateModeValue) + 1) % 3;
+                            anim.UpdateModeValue = static_cast<AnimatorComponent::UpdateMode>(next);
+                            updateModeButton->SetText(std::string("Update Mode: ") + AnimatorUpdateModeName(anim.UpdateModeValue));
+                        });
+                    item->AddChild(updateModeButton);
+
+                    auto cullingModeButton = new UI::Button("AnimatorCullingMode", std::string("Culling Mode: ") + AnimatorCullingModeName(animator.CullingModeValue));
+                    cullingModeButton->SetAnchorMin(0.0f, 0.0f); cullingModeButton->SetAnchorMax(1.0f, 0.0f);
+                    cullingModeButton->SetOffsetMin(15.0f, 0.0f); cullingModeButton->SetOffsetMax(-10.0f, 28.0f);
+                    cullingModeButton->SetOnClick([entity, cullingModeButton]() mutable
+                        {
+                            if (!entity || !entity.HasComponent<AnimatorComponent>())
+                                return;
+
+                            auto& anim = entity.GetComponent<AnimatorComponent>();
+                            int next = (static_cast<int>(anim.CullingModeValue) + 1) % 3;
+                            anim.CullingModeValue = static_cast<AnimatorComponent::CullingMode>(next);
+                            cullingModeButton->SetText(std::string("Culling Mode: ") + AnimatorCullingModeName(anim.CullingModeValue));
+                        });
+                    item->AddChild(cullingModeButton);
+
+                    const int stateCount = animator.Layers.empty()
+                        ? static_cast<int>(animator.States.size())
+                        : static_cast<int>(animator.Layers[std::clamp(animator.ActiveLayerIndex, 0, static_cast<int>(animator.Layers.size()) - 1)].States.size());
+                    auto summaryButton = new UI::Button("AnimatorSummary",
+                        "Info: States " + std::to_string(stateCount) +
+                        " / Layers " + std::to_string(animator.Layers.size()) +
+                        " / Params " + std::to_string(animator.Parameters.size()));
+                    summaryButton->SetAnchorMin(0.0f, 0.0f); summaryButton->SetAnchorMax(1.0f, 0.0f);
+                    summaryButton->SetOffsetMin(15.0f, 0.0f); summaryButton->SetOffsetMax(-10.0f, 28.0f);
+                    item->AddChild(summaryButton);
+
+                    auto openGraphButton = new UI::Button("AnimatorOpenGraph", "Open Animator Graph");
+                    openGraphButton->SetAnchorMin(0.0f, 0.0f); openGraphButton->SetAnchorMax(1.0f, 0.0f);
+                    openGraphButton->SetOffsetMin(15.0f, 0.0f); openGraphButton->SetOffsetMax(-10.0f, 28.0f);
+                    openGraphButton->SetOnClick([entity]() mutable
+                        {
+                            if (entity && entity.HasComponent<AnimatorComponent>())
+                                entity.GetComponent<AnimatorComponent>().EditorOpenGraphRequested = true;
+                        });
+                    item->AddChild(openGraphButton);
+
+                    // Unity처럼 Animator 컴포넌트는 실행에 필요한 참조와 정책만 노출한다.
+                    // 레이어, 전이, 루트 모션 세부 설정은 Animator Graph 전용 창에서 다룬다.
+                    AddRemoveComponentButton<AnimatorComponent>(parent, item, entity, "Animator");
+                    return;
+                    }
+
                     Entity controllerModelRoot = FindModelRoot(entity);
                     std::string sourceLabel = "Animation Source: (none)";
                     if (controllerModelRoot && controllerModelRoot.HasComponent<ModelComponent>())
@@ -1029,6 +1375,228 @@ namespace CCEngine {
                     sourceButton->SetAnchorMin(0.0f, 0.0f); sourceButton->SetAnchorMax(1.0f, 0.0f);
                     sourceButton->SetOffsetMin(15.0f, 0.0f); sourceButton->SetOffsetMax(-10.0f, 28.0f);
                     item->AddChild(sourceButton);
+
+                    std::filesystem::path sourceAvatarPath = animator.SourceAvatarPath;
+                    if (!animator.SourceAvatarGuid.empty())
+                    {
+                        std::filesystem::path guidPath = AssetDatabase::GetPathFromGuid(animator.SourceAvatarGuid);
+                        if (!guidPath.empty())
+                            sourceAvatarPath = guidPath;
+                    }
+
+                    auto sourceAvatarButton = new UI::Button("AnimatorSourceAvatarAsset",
+                        sourceAvatarPath.empty()
+                            ? "Source Avatar: Auto / None"
+                            : "Source Avatar: " + sourceAvatarPath.filename().string());
+                    sourceAvatarButton->SetAnchorMin(0.0f, 0.0f); sourceAvatarButton->SetAnchorMax(1.0f, 0.0f);
+                    sourceAvatarButton->SetOffsetMin(15.0f, 0.0f); sourceAvatarButton->SetOffsetMax(-10.0f, 28.0f);
+                    sourceAvatarButton->SetOnClick([entity, sourceAvatarButton]() mutable
+                        {
+                            if (!entity || !entity.HasComponent<AnimatorComponent>())
+                                return;
+
+                            std::string filepath = PlatformUtils::OpenFile("CC Avatar (*.ccavatar)\0*.ccavatar\0");
+                            if (filepath.empty() || AssetDatabase::GetAssetKind(filepath) != AssetKind::Avatar)
+                                return;
+
+                            auto& anim = entity.GetComponent<AnimatorComponent>();
+                            anim.SourceAvatarPath = filepath;
+                            anim.SourceAvatarGuid = AssetDatabase::GetGuidFromPath(filepath);
+                            sourceAvatarButton->SetText("Source Avatar: " + std::filesystem::path(filepath).filename().string());
+                        });
+                    item->AddChild(sourceAvatarButton);
+
+                    std::filesystem::path avatarPath = animator.AvatarPath;
+                    if (!animator.AvatarGuid.empty())
+                    {
+                        std::filesystem::path guidPath = AssetDatabase::GetPathFromGuid(animator.AvatarGuid);
+                        if (!guidPath.empty())
+                            avatarPath = guidPath;
+                    }
+
+                    auto avatarButton = new UI::Button("AnimatorAvatarAsset",
+                        avatarPath.empty()
+                            ? "Target Avatar: None (assign .ccavatar)"
+                            : "Target Avatar: " + avatarPath.filename().string());
+                    avatarButton->SetAnchorMin(0.0f, 0.0f); avatarButton->SetAnchorMax(1.0f, 0.0f);
+                    avatarButton->SetOffsetMin(15.0f, 0.0f); avatarButton->SetOffsetMax(-10.0f, 28.0f);
+                    avatarButton->SetOnClick([entity, avatarButton]() mutable
+                        {
+                            if (!entity || !entity.HasComponent<AnimatorComponent>())
+                                return;
+
+                            std::string filepath = PlatformUtils::OpenFile("CC Avatar (*.ccavatar)\0*.ccavatar\0");
+                            if (filepath.empty() || AssetDatabase::GetAssetKind(filepath) != AssetKind::Avatar)
+                                return;
+
+                            auto& anim = entity.GetComponent<AnimatorComponent>();
+                            anim.AvatarPath = filepath;
+                            anim.AvatarGuid = AssetDatabase::GetGuidFromPath(filepath);
+                            avatarButton->SetText("Target Avatar: " + std::filesystem::path(filepath).filename().string());
+                        });
+                    item->AddChild(avatarButton);
+
+                    auto retargetButton = new UI::Button("AnimatorRetargetToggle", animator.RetargetToHumanoid ? "Retarget: On" : "Retarget: Off");
+                    retargetButton->SetAnchorMin(0.0f, 0.0f); retargetButton->SetAnchorMax(1.0f, 0.0f);
+                    retargetButton->SetOffsetMin(15.0f, 0.0f); retargetButton->SetOffsetMax(-10.0f, 28.0f);
+                    retargetButton->SetActive(animator.RetargetToHumanoid);
+                    retargetButton->SetOnClick([entity, retargetButton]() mutable
+                        {
+                            if (!entity || !entity.HasComponent<AnimatorComponent>())
+                                return;
+
+                            auto& anim = entity.GetComponent<AnimatorComponent>();
+                            anim.RetargetToHumanoid = !anim.RetargetToHumanoid;
+                            retargetButton->SetActive(anim.RetargetToHumanoid);
+                            retargetButton->SetText(anim.RetargetToHumanoid ? "Retarget: On" : "Retarget: Off");
+                        });
+                    item->AddChild(retargetButton);
+
+                    auto rootInput = new UI::TextInput("AnimatorRootBoneInput", "Humanoid Root Bone");
+                    rootInput->SetAnchorMin(0.0f, 0.0f); rootInput->SetAnchorMax(1.0f, 0.0f);
+                    rootInput->SetOffsetMin(15.0f, 0.0f); rootInput->SetOffsetMax(-10.0f, 28.0f);
+                    rootInput->SetText(animator.HumanoidRootBone, false);
+                    rootInput->SetOnTextChanged([entity](const std::string& text) mutable
+                        {
+                            if (entity && entity.HasComponent<AnimatorComponent>())
+                                entity.GetComponent<AnimatorComponent>().HumanoidRootBone = text.empty() ? "Hips" : text;
+                        });
+                    item->AddChild(rootInput);
+
+                    auto autoRootButton = new UI::Button("AnimatorAutoRootBone", "Auto Root Bone");
+                    autoRootButton->SetAnchorMin(0.0f, 0.0f); autoRootButton->SetAnchorMax(1.0f, 0.0f);
+                    autoRootButton->SetOffsetMin(15.0f, 0.0f); autoRootButton->SetOffsetMax(-10.0f, 28.0f);
+                    autoRootButton->SetOnClick([entity, rootInput, autoRootButton]() mutable
+                        {
+                            if (!entity || !entity.HasComponent<AnimatorComponent>())
+                                return;
+
+                            // 후보 점수 계산은 Hips/Pelvis/Root 같은 관례 이름을 찾기 위한 보조 단계다.
+                            // 저장할 때는 원본 문자열을 그대로 써야 FBX 애니메이션 채널 이름과 정확히 맞는다.
+                            const std::string detected = FindBestRootBoneCandidate(entity);
+                            auto& anim = entity.GetComponent<AnimatorComponent>();
+                            anim.HumanoidRootBone = detected.empty() ? "Hips" : detected;
+                            rootInput->SetText(anim.HumanoidRootBone, false);
+                            autoRootButton->SetText("Auto Root Bone");
+                            SaveAnimatorControllerIfAssigned(anim);
+                        });
+                    item->AddChild(autoRootButton);
+
+                    if (auto* activeState = FindInspectorActiveState(animator))
+                    {
+                        auto importSummary = new UI::Button("AnimatorRootImportSummary", "Active Root Import");
+                        importSummary->SetAnchorMin(0.0f, 0.0f); importSummary->SetAnchorMax(1.0f, 0.0f);
+                        importSummary->SetOffsetMin(15.0f, 0.0f); importSummary->SetOffsetMax(-10.0f, 28.0f);
+                        item->AddChild(importSummary);
+
+                        auto addImportToggle = [&](const std::string& id, const std::string& label, bool active, auto mutator)
+                        {
+                            auto button = new UI::Button(id, label + (active ? ": On" : ": Off"));
+                            button->SetAnchorMin(0.0f, 0.0f); button->SetAnchorMax(1.0f, 0.0f);
+                            button->SetOffsetMin(15.0f, 0.0f); button->SetOffsetMax(-10.0f, 28.0f);
+                            button->SetActive(active);
+                            button->SetOnClick([entity, button, label, mutator]() mutable
+                                {
+                                    if (!entity || !entity.HasComponent<AnimatorComponent>())
+                                        return;
+
+                                    auto& anim = entity.GetComponent<AnimatorComponent>();
+                                    auto* state = FindInspectorActiveState(anim);
+                                    if (!state)
+                                        return;
+
+                                    const bool enabled = mutator(anim, *state);
+                                    SaveAnimatorControllerIfAssigned(anim);
+                                    button->SetActive(enabled);
+                                    button->SetText(label + (enabled ? ": On" : ": Off"));
+                                });
+                            item->AddChild(button);
+                        };
+
+                        addImportToggle("AnimatorApplyRootMotionImport", "Apply Root Motion", activeState->ApplyRootMotion,
+                            [](AnimatorComponent& anim, AnimatorComponent::State& state)
+                            {
+                                state.ApplyRootMotion = !state.ApplyRootMotion;
+                                anim.ApplyRootMotion = state.ApplyRootMotion;
+                                return state.ApplyRootMotion;
+                            });
+                        addImportToggle("AnimatorBakeRootTransformImport", "Bake Root Transform", activeState->ImportSettings.BakeRootTransform,
+                            [](AnimatorComponent&, AnimatorComponent::State& state)
+                            {
+                                state.ImportSettings.BakeRootTransform = !state.ImportSettings.BakeRootTransform;
+                                return state.ImportSettings.BakeRootTransform;
+                            });
+                        addImportToggle("AnimatorLockRootXZImport", "Lock Root XZ", activeState->ImportSettings.LockRootPositionXZ,
+                            [](AnimatorComponent&, AnimatorComponent::State& state)
+                            {
+                                state.ImportSettings.LockRootPositionXZ = !state.ImportSettings.LockRootPositionXZ;
+                                return state.ImportSettings.LockRootPositionXZ;
+                            });
+                        addImportToggle("AnimatorLockRootYImport", "Lock Root Y", activeState->ImportSettings.LockRootPositionY,
+                            [](AnimatorComponent&, AnimatorComponent::State& state)
+                            {
+                                state.ImportSettings.LockRootPositionY = !state.ImportSettings.LockRootPositionY;
+                                return state.ImportSettings.LockRootPositionY;
+                            });
+                        addImportToggle("AnimatorLockRootRotationImport", "Lock Root Rotation", activeState->ImportSettings.LockRootRotation,
+                            [](AnimatorComponent&, AnimatorComponent::State& state)
+                            {
+                                state.ImportSettings.LockRootRotation = !state.ImportSettings.LockRootRotation;
+                                return state.ImportSettings.LockRootRotation;
+                            });
+                    }
+
+                    if (!avatarPath.empty() && controllerModelRoot && controllerModelRoot.HasComponent<ModelComponent>())
+                    {
+                        AvatarAsset avatar;
+                        if (AvatarAsset::LoadFromFile(avatarPath, avatar))
+                        {
+                            const AvatarValidationResult validation = AvatarAsset::ValidateAgainstModel(avatar, controllerModelRoot.GetComponent<ModelComponent>());
+                            auto validationButton = new UI::Button("AnimatorAvatarValidation",
+                                validation.Valid
+                                    ? "Avatar Valid: " + std::to_string(validation.RequiredMapped) + " required bones"
+                                    : "Avatar Missing: " + std::to_string(validation.RequiredMissing) + " required bones");
+                            validationButton->SetAnchorMin(0.0f, 0.0f); validationButton->SetAnchorMax(1.0f, 0.0f);
+                            validationButton->SetOffsetMin(15.0f, 0.0f); validationButton->SetOffsetMax(-10.0f, 28.0f);
+                            validationButton->SetActive(validation.Valid);
+                            item->AddChild(validationButton);
+
+                            int shownIssues = 0;
+                            for (const AvatarValidationIssue& issue : validation.Issues)
+                            {
+                                if (!issue.Error || shownIssues >= 3)
+                                    continue;
+
+                                // 검증 결과는 너무 길게 뿌리지 않는다.
+                                // 인스펙터에서는 첫 문제 몇 개만 보여주고, 실제 수정은 Avatar 에셋 전용 UI에서 확장한다.
+                                auto issueButton = new UI::Button("AnimatorAvatarIssue" + std::to_string(shownIssues),
+                                    "Missing: " + issue.HumanBone + " -> " + issue.SourceBone);
+                                issueButton->SetAnchorMin(0.0f, 0.0f); issueButton->SetAnchorMax(1.0f, 0.0f);
+                                issueButton->SetOffsetMin(15.0f, 0.0f); issueButton->SetOffsetMax(-10.0f, 28.0f);
+                                item->AddChild(issueButton);
+                                ++shownIssues;
+                            }
+                        }
+                    }
+
+                    auto assignControllerButton = new UI::Button("AnimatorAssignController", "Assign Controller...");
+                    assignControllerButton->SetAnchorMin(0.0f, 0.0f); assignControllerButton->SetAnchorMax(1.0f, 0.0f);
+                    assignControllerButton->SetOffsetMin(15.0f, 0.0f); assignControllerButton->SetOffsetMax(-10.0f, 28.0f);
+                    assignControllerButton->SetOnClick([entity]() mutable
+                        {
+                            if (!entity || !entity.HasComponent<AnimatorComponent>())
+                                return;
+
+                            std::string filepath = PlatformUtils::OpenFile("CC Animator Controller (*.ccanimcontroller)\0*.ccanimcontroller\0");
+                            if (filepath.empty() || AssetDatabase::GetAssetKind(filepath) != AssetKind::AnimatorController)
+                                return;
+
+                            auto& anim = entity.GetComponent<AnimatorComponent>();
+                            anim.ControllerPath = filepath;
+                            anim.ControllerAssetGuid = AssetDatabase::GetGuidFromPath(filepath);
+                            AnimatorControllerAsset::LoadFromFile(filepath, anim);
+                        });
+                    item->AddChild(assignControllerButton);
 
                     auto openGraphButton = new UI::Button("AnimatorOpenGraph", "Open Animator Graph");
                     openGraphButton->SetAnchorMin(0.0f, 0.0f); openGraphButton->SetAnchorMax(1.0f, 0.0f);

@@ -31,6 +31,7 @@ namespace CCEngine
     float UIRenderer::s_ClipY = 0.0f;
     float UIRenderer::s_ClipW = 0.0f;
     float UIRenderer::s_ClipH = 0.0f;
+    std::vector<DirectX::XMFLOAT4> UIRenderer::s_ClipStack;
 
     void UIRenderer::Init()
     {
@@ -58,7 +59,53 @@ namespace CCEngine
         s_ClipX = x; s_ClipY = y; s_ClipW = w; s_ClipH = h;
     }
 
-    void UIRenderer::ClearClipRect() { s_ClipEnabled = false; }
+    void UIRenderer::PushClipRect(float x, float y, float w, float h)
+    {
+        if (s_ClipEnabled)
+        {
+            s_ClipStack.push_back({ s_ClipX, s_ClipY, s_ClipW, s_ClipH });
+
+            const float currentRight = s_ClipX + s_ClipW;
+            const float currentBottom = s_ClipY + s_ClipH;
+            const float nextRight = x + w;
+            const float nextBottom = y + h;
+            const float clippedX = (std::max)(s_ClipX, x);
+            const float clippedY = (std::max)(s_ClipY, y);
+            const float clippedRight = (std::min)(currentRight, nextRight);
+            const float clippedBottom = (std::min)(currentBottom, nextBottom);
+            SetClipRect(clippedX, clippedY, (std::max)(0.0f, clippedRight - clippedX), (std::max)(0.0f, clippedBottom - clippedY));
+        }
+        else
+        {
+            s_ClipStack.push_back({ 0.0f, 0.0f, -1.0f, -1.0f });
+            SetClipRect(x, y, w, h);
+        }
+    }
+
+    void UIRenderer::PopClipRect()
+    {
+        if (s_ClipStack.empty())
+        {
+            ClearClipRect();
+            return;
+        }
+
+        const DirectX::XMFLOAT4 previous = s_ClipStack.back();
+        s_ClipStack.pop_back();
+        if (previous.z < 0.0f || previous.w < 0.0f)
+        {
+            s_ClipEnabled = false;
+            return;
+        }
+
+        SetClipRect(previous.x, previous.y, previous.z, previous.w);
+    }
+
+    void UIRenderer::ClearClipRect()
+    {
+        s_ClipEnabled = false;
+        s_ClipStack.clear();
+    }
 
     void UIRenderer::DrawRectFilled(float x, float y, float width, float height, const DirectX::XMFLOAT4& color, int entityID)
     {

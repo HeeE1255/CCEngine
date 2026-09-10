@@ -43,6 +43,7 @@ namespace CCEngine
             void SetOnSceneSelected(std::function<void(const std::string&)> callback) { m_OnSceneSelected = callback; }
             void SetOnAssetSelected(std::function<void(const std::string&, const std::string&)> callback) { m_OnAssetSelected = std::move(callback); }
             void SetOnCodeAssetOpened(std::function<void(const std::string&)> callback) { m_OnCodeAssetOpened = std::move(callback); }
+            void SetOnAnimatorControllerOpened(std::function<void(const std::string&)> callback) { m_OnAnimatorControllerOpened = std::move(callback); }
             void SetOnAssetDropped(std::function<void(const std::string&, const std::string&, float, float)> callback) { m_OnAssetDropped = callback; }
             void SetOnAssetDatabaseChanged(std::function<void()> callback) { m_OnAssetDatabaseChanged = std::move(callback); }
             void SetOnAssetHistoryChanged(std::function<void()> callback) { m_OnAssetHistoryChanged = std::move(callback); }
@@ -79,6 +80,7 @@ namespace CCEngine
                 Shader,
                 VisualShader,
                 AnimatorController,
+                Avatar,
                 Model,
                 FbxMesh,
                 Texture,
@@ -110,7 +112,8 @@ namespace CCEngine
                 Shader,
                 Prefab,
                 Scene,
-                Script
+                Script,
+                Avatar
             };
 
             enum class SortMode
@@ -149,6 +152,7 @@ namespace CCEngine
             bool CreateShaderInCurrentDirectory();
             bool CreateVisualShaderInCurrentDirectory();
             bool CreateAnimatorControllerInCurrentDirectory();
+            bool CreateAvatarInCurrentDirectory();
             bool RenameSelectedAsset(const std::string& newName);
             void BeginCreateFolder();
             void BeginRenameSelected();
@@ -395,6 +399,7 @@ namespace CCEngine
             std::function<void(const std::string&)> m_OnSceneSelected = nullptr;
             std::function<void(const std::string&, const std::string&)> m_OnAssetSelected = nullptr;
             std::function<void(const std::string&)> m_OnCodeAssetOpened = nullptr;
+            std::function<void(const std::string&)> m_OnAnimatorControllerOpened = nullptr;
             std::function<void(const std::string&, const std::string&, float, float)> m_OnAssetDropped = nullptr;
             std::function<void()> m_OnAssetDatabaseChanged = nullptr;
             std::function<void()> m_OnAssetHistoryChanged = nullptr;

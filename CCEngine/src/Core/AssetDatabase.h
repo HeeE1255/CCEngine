@@ -16,6 +16,8 @@ namespace CCEngine
         Material,
         Shader,
         VisualShader,
+        AnimatorController,
+        Avatar,
         Model,
         Texture,
         Script

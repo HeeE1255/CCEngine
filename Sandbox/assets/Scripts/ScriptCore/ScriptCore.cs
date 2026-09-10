@@ -88,6 +88,7 @@ namespace CCEngine
         protected virtual void OnTriggerEnter2D(uint otherEntityID) { }
         protected virtual void OnTriggerStay2D(uint otherEntityID) { }
         protected virtual void OnTriggerExit2D(uint otherEntityID) { }
+        protected virtual void OnAnimationEvent(string eventName, string argument) { }
 
         internal void InvokeAwake() => Awake();
         internal void InvokeOnEnable() => OnEnable();
@@ -110,6 +111,11 @@ namespace CCEngine
                 case 4: OnTriggerStay2D(otherEntityID); break;
                 case 5: OnTriggerExit2D(otherEntityID); break;
             }
+        }
+
+        internal void InvokeAnimationEvent(string eventName, string argument)
+        {
+            OnAnimationEvent(eventName, argument);
         }
     }
 
@@ -291,6 +297,49 @@ namespace CCEngine.Internal
 
             try { state.Instance.InvokePhysicsEvent(eventType, otherEntityID); }
             catch (Exception exception) { NativeApi.Log(exception.ToString()); }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        public static void InvokeAnimationEventInstance(uint entityID, nint functionName, nint stringArgument)
+        {
+            if (!s_Instances.TryGetValue(entityID, out ScriptInstanceState? state))
+                return;
+
+            try
+            {
+                string eventName = Marshal.PtrToStringUTF8(functionName) ?? string.Empty;
+                string argument = Marshal.PtrToStringUTF8(stringArgument) ?? string.Empty;
+                InvokeNamedAnimationEvent(state.Instance, eventName, argument);
+            }
+            catch (Exception exception) { NativeApi.Log(exception.ToString()); }
+        }
+
+        private static void InvokeNamedAnimationEvent(CCEngine.GameScript instance, string eventName, string argument)
+        {
+            if (string.IsNullOrWhiteSpace(eventName) || eventName == "OnAnimationEvent")
+            {
+                instance.InvokeAnimationEvent(eventName, argument);
+                return;
+            }
+
+            // Animation Event는 사용자가 마커마다 함수 이름을 적는 기능이다.
+            // 인자 개수가 0, 1, 2개인 메서드를 허용해 작은 테스트 스크립트부터 확장형 스크립트까지 같은 규칙으로 부른다.
+            MethodInfo? method = instance.GetType().GetMethod(eventName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (method == null)
+            {
+                instance.InvokeAnimationEvent(eventName, argument);
+                return;
+            }
+
+            ParameterInfo[] parameters = method.GetParameters();
+            if (parameters.Length == 0)
+                method.Invoke(instance, null);
+            else if (parameters.Length == 1 && parameters[0].ParameterType == typeof(string))
+                method.Invoke(instance, new object[] { argument });
+            else if (parameters.Length == 2 && parameters[0].ParameterType == typeof(string) && parameters[1].ParameterType == typeof(string))
+                method.Invoke(instance, new object[] { eventName, argument });
+            else
+                instance.InvokeAnimationEvent(eventName, argument);
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]

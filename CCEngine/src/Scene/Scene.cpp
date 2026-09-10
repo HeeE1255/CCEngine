@@ -4,12 +4,16 @@
 #include "Renderer/Renderer2D.h"
 #include "Renderer/Renderer3D.h"
 #include "Scripting/ScriptEngine.h"
+#include "Animation/AvatarAsset.h"
 #include "Core/AssetDatabase.h"
+#include "Core/ConsoleLog.h"
 #include <box2d/box2d.h>
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <functional>
+#include <limits>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -59,6 +63,182 @@ namespace CCEngine
             return animator.SourcePath;
         }
 
+        float ReadAnimatorFloatParameter(const AnimatorComponent& animator, const std::string& name)
+        {
+            auto it = std::find_if(animator.Parameters.begin(), animator.Parameters.end(), [&name](const AnimatorComponent::Parameter& parameter)
+            {
+                return parameter.Name == name;
+            });
+            if (it == animator.Parameters.end())
+                return 0.0f;
+            if (it->ParamType == AnimatorComponent::Parameter::Type::Float)
+                return it->FloatValue;
+            return it->BoolValue ? 1.0f : 0.0f;
+        }
+
+        int ResolveAnimatorStateClipIndex(const AnimatorComponent& animator, const AnimatorComponent::State& state)
+        {
+            if (state.Motion == AnimatorComponent::State::MotionType::Clip && state.ClipIndex < 0)
+                return -1;
+            if (state.Motion != AnimatorComponent::State::MotionType::BlendTree || state.Tree.Children.empty())
+                return state.ClipIndex;
+
+            const auto& children = state.Tree.Children;
+            int bestClip = children.front().ClipIndex;
+            float bestScore = std::numeric_limits<float>::max();
+
+            // Blend Tree는 여러 클립 중 어느 클립을 평가할지 먼저 고른다.
+            // 현재 재생기는 단일 포즈 출력 구조라, 파라미터에 가장 가까운 자식 클립을 선택해 기존 전환/이벤트 경로와 충돌하지 않게 둔다.
+            if (state.Tree.TreeType == AnimatorComponent::State::BlendTree::Type::Direct)
+            {
+                for (const auto& child : children)
+                {
+                    const float score = -child.Weight;
+                    if (score < bestScore)
+                    {
+                        bestScore = score;
+                        bestClip = child.ClipIndex;
+                    }
+                }
+                return bestClip;
+            }
+
+            const float x = ReadAnimatorFloatParameter(animator, state.Tree.ParameterX);
+            const float y = ReadAnimatorFloatParameter(animator, state.Tree.ParameterY);
+            for (const auto& child : children)
+            {
+                float score = 0.0f;
+                if (state.Tree.TreeType == AnimatorComponent::State::BlendTree::Type::OneD)
+                {
+                    score = std::abs(x - child.Threshold);
+                }
+                else
+                {
+                    const float dx = x - child.Position.x;
+                    const float dy = y - child.Position.y;
+                    score = dx * dx + dy * dy;
+                }
+
+                if (score < bestScore)
+                {
+                    bestScore = score;
+                    bestClip = child.ClipIndex;
+                }
+            }
+            return bestClip;
+        }
+
+        std::filesystem::path ResolveAvatarPath(const std::string& guid, const std::string& storedPath)
+        {
+            if (!guid.empty())
+            {
+                std::filesystem::path guidPath = AssetDatabase::GetPathFromGuid(guid);
+                if (!guidPath.empty() && std::filesystem::exists(guidPath))
+                    return guidPath;
+            }
+
+            if (!storedPath.empty() && std::filesystem::exists(storedPath))
+                return storedPath;
+
+            return {};
+        }
+
+        bool LoadAnimatorAvatar(const std::string& guid, const std::string& storedPath, AvatarAsset& outAvatar)
+        {
+            const std::filesystem::path path = ResolveAvatarPath(guid, storedPath);
+            if (path.empty())
+                return false;
+
+            struct CachedAvatar
+            {
+                AvatarAsset Asset;
+                std::filesystem::file_time_type LastWriteTime{};
+            };
+
+            static std::unordered_map<std::string, CachedAvatar> s_AvatarCache;
+
+            std::error_code ec;
+            const std::filesystem::path normalizedPath = std::filesystem::absolute(path, ec).lexically_normal();
+            const std::string cacheKey = ec ? path.string() : normalizedPath.string();
+            const auto writeTime = std::filesystem::last_write_time(path, ec);
+
+            auto cached = s_AvatarCache.find(cacheKey);
+            if (cached != s_AvatarCache.end() && !ec && cached->second.LastWriteTime == writeTime)
+            {
+                outAvatar = cached->second.Asset;
+                return true;
+            }
+
+            AvatarAsset loaded;
+            if (!AvatarAsset::LoadFromFile(path, loaded))
+                return false;
+
+            // Avatar는 런타임 포즈 평가 때 매 프레임 참조된다.
+            // 파일을 매번 읽으면 애니메이션 재생 중 잔멈춤이 생기므로, 수정 시간이 바뀔 때만 다시 읽는다.
+            s_AvatarCache[cacheKey] = { loaded, ec ? std::filesystem::file_time_type{} : writeTime };
+            outAvatar = loaded;
+            return true;
+        }
+
+        std::string ResolveSourceAvatarBone(const AnimatorComponent& animator, const std::string& humanBone)
+        {
+            AvatarAsset sourceAvatar;
+            if (LoadAnimatorAvatar(animator.SourceAvatarGuid, animator.SourceAvatarPath, sourceAvatar))
+            {
+                std::string sourceBone;
+                if (AvatarAsset::ResolveSourceBone(sourceAvatar, humanBone, nullptr, sourceBone))
+                    return sourceBone;
+            }
+
+            AvatarAsset defaultAvatar = AvatarAsset::CreateDefault("Default Source Avatar");
+            std::string sourceBone;
+            if (AvatarAsset::ResolveSourceBone(defaultAvatar, humanBone, nullptr, sourceBone))
+                return sourceBone;
+            return humanBone;
+        }
+
+        struct RetargetContext
+        {
+            AvatarAsset SourceAvatar;
+            std::unordered_map<std::string, std::string> HumanToTargetBone;
+            std::unordered_map<std::string, DirectX::XMFLOAT3> HumanRotationOffsets;
+        };
+
+        std::unique_ptr<RetargetContext> BuildRetargetContext(const AnimatorComponent& animator, const ModelComponent& targetModel)
+        {
+            if (!animator.RetargetToHumanoid)
+                return nullptr;
+
+            AvatarAsset targetAvatar;
+            if (!LoadAnimatorAvatar(animator.AvatarGuid, animator.AvatarPath, targetAvatar))
+                return nullptr;
+
+            auto context = std::make_unique<RetargetContext>();
+            if (!LoadAnimatorAvatar(animator.SourceAvatarGuid, animator.SourceAvatarPath, context->SourceAvatar))
+                context->SourceAvatar = AvatarAsset::CreateDefault("Default Source Avatar");
+
+            for (const HumanoidBoneMapping& mapping : targetAvatar.BoneMappings)
+            {
+                std::string targetBone;
+                if (!AvatarAsset::ResolveSourceBone(targetAvatar, mapping.HumanBone, &targetModel, targetBone))
+                    continue;
+
+                // HumanToTargetBone은 표준 Humanoid 이름에서 현재 모델의 실제 본 이름으로 가는 표다.
+                // 클립 채널 이름은 프레임마다 SourceAvatar로 해석하고, 여기서 대상 본으로 바꾼다.
+                context->HumanToTargetBone[mapping.HumanBone] = targetBone;
+
+                float offsetX = 0.0f;
+                float offsetY = 0.0f;
+                float offsetZ = 0.0f;
+                if (AvatarAsset::GetPoseOffsetDegrees(targetAvatar, mapping.HumanBone, offsetX, offsetY, offsetZ))
+                    context->HumanRotationOffsets[mapping.HumanBone] = { offsetX, offsetY, offsetZ };
+            }
+
+            if (context->HumanToTargetBone.empty())
+                return nullptr;
+            return context;
+        }
+
         void PrepareAnimatorClip(AnimatorComponent& animator, const ModelComponent& model)
         {
             std::string sourcePath = ResolveAnimatorSourcePath(animator, model);
@@ -69,12 +249,20 @@ namespace CCEngine
             {
                 animator.ActiveStateIndex = std::clamp(animator.ActiveStateIndex, 0, static_cast<int>(animator.States.size() - 1));
                 auto& state = animator.States[animator.ActiveStateIndex];
+                const int resolvedClipIndex = ResolveAnimatorStateClipIndex(animator, state);
+                if (resolvedClipIndex < 0)
+                {
+                    animator.RuntimeClip.reset();
+                    animator.RuntimeClipKey.clear();
+                    animator.AnimPlayer.StopAnimation();
+                    return;
+                }
                 const bool changedStateSetting =
-                    animator.SelectedClipIndex != state.ClipIndex ||
+                    animator.SelectedClipIndex != resolvedClipIndex ||
                     animator.Loop != state.Loop ||
                     std::abs(animator.Speed - state.Speed) > 0.0001f;
 
-                animator.SelectedClipIndex = state.ClipIndex;
+                animator.SelectedClipIndex = resolvedClipIndex;
                 animator.Loop = state.Loop;
                 animator.Speed = state.Speed;
 
@@ -110,8 +298,1018 @@ namespace CCEngine
             if (!animator.States.empty())
             {
                 auto& state = animator.States[animator.ActiveStateIndex];
-                state.ClipIndex = animator.SelectedClipIndex;
+                if (state.Motion == AnimatorComponent::State::MotionType::Clip)
+                    state.ClipIndex = animator.SelectedClipIndex;
             }
+        }
+
+        std::shared_ptr<AnimationClip> LoadAnimatorStateClip(AnimatorComponent& animator, const ModelComponent& model, const AnimatorComponent::State& state)
+        {
+            const std::string sourcePath = ResolveAnimatorSourcePath(animator, model);
+            if (sourcePath.empty() || !std::filesystem::exists(sourcePath))
+                return nullptr;
+
+            const int clipIndex = ResolveAnimatorStateClipIndex(animator, state);
+            if (clipIndex < 0)
+                return nullptr;
+            return AnimationClip::LoadShared(sourcePath, static_cast<uint32_t>((std::max)(0, clipIndex)));
+        }
+
+        float ResolveStateSampleTime(const AnimatorComponent::State& state, const AnimationClip& clip, float stateTimeSeconds)
+        {
+            float duration = clip.GetDurationSeconds();
+            if (duration <= 0.0f)
+                return 0.0f;
+
+            float start = 0.0f;
+            float end = duration;
+            if (state.ImportSettings.UseCustomRange)
+            {
+                start = std::clamp(state.ImportSettings.StartSeconds, 0.0f, duration);
+                end = std::clamp(state.ImportSettings.EndSeconds, start, duration);
+            }
+
+            const float range = (std::max)(0.0001f, end - start);
+            float localTime = state.Loop ? std::fmod(stateTimeSeconds, range) : (std::min)(stateTimeSeconds, range);
+            return start + localTime;
+        }
+
+        void ResolveStateSampleRange(const AnimatorComponent::State& state, const AnimationClip& clip, float& outStart, float& outEnd)
+        {
+            float duration = clip.GetDurationSeconds();
+            outStart = 0.0f;
+            outEnd = (std::max)(0.0f, duration);
+            if (state.ImportSettings.UseCustomRange)
+            {
+                outStart = std::clamp(state.ImportSettings.StartSeconds, 0.0f, duration);
+                outEnd = std::clamp(state.ImportSettings.EndSeconds, outStart, duration);
+            }
+        }
+
+        void BlendBonePose(BonePose& target, const BonePose& sample, float alpha)
+        {
+            alpha = std::clamp(alpha, 0.0f, 1.0f);
+            if (sample.HasTranslation)
+            {
+                if (!target.HasTranslation)
+                {
+                    target.Translation = sample.Translation;
+                    target.HasTranslation = true;
+                }
+                else
+                {
+                    target.Translation = {
+                        target.Translation.x + (sample.Translation.x - target.Translation.x) * alpha,
+                        target.Translation.y + (sample.Translation.y - target.Translation.y) * alpha,
+                        target.Translation.z + (sample.Translation.z - target.Translation.z) * alpha
+                    };
+                }
+            }
+
+            if (sample.HasScale)
+            {
+                if (!target.HasScale)
+                {
+                    target.Scale = sample.Scale;
+                    target.HasScale = true;
+                }
+                else
+                {
+                    target.Scale = {
+                        target.Scale.x + (sample.Scale.x - target.Scale.x) * alpha,
+                        target.Scale.y + (sample.Scale.y - target.Scale.y) * alpha,
+                        target.Scale.z + (sample.Scale.z - target.Scale.z) * alpha
+                    };
+                }
+            }
+
+            if (sample.HasRotation)
+            {
+                if (!target.HasRotation)
+                {
+                    target.Rotation = sample.Rotation;
+                    target.HasRotation = true;
+                }
+                else
+                {
+                    DirectX::XMVECTOR from = DirectX::XMLoadFloat4(&target.Rotation);
+                    DirectX::XMVECTOR to = DirectX::XMLoadFloat4(&sample.Rotation);
+                    DirectX::XMStoreFloat4(&target.Rotation, DirectX::XMQuaternionSlerp(from, to, alpha));
+                }
+            }
+        }
+
+        void AddClipPoseSample(
+            const std::shared_ptr<AnimationClip>& clip,
+            const AnimatorComponent::State& state,
+            float stateTimeSeconds,
+            float weight,
+            const RetargetContext* retarget,
+            std::unordered_map<std::string, BonePose>& pose,
+            float& accumulatedWeight)
+        {
+            if (!clip || weight <= 0.0001f)
+                return;
+
+            const float sampleTicks = ResolveStateSampleTime(state, *clip, stateTimeSeconds) * clip->GetTicksPerSecond();
+            const float alpha = weight / (accumulatedWeight + weight);
+
+            for (const auto& [boneName, channel] : clip->GetChannels())
+            {
+                std::string targetBoneName = boneName;
+                std::string resolvedHumanBone;
+                if (retarget)
+                {
+                    std::string humanBone;
+                    if (AvatarAsset::ResolveHumanBone(retarget->SourceAvatar, boneName, humanBone))
+                    {
+                        auto targetIt = retarget->HumanToTargetBone.find(humanBone);
+                        if (targetIt != retarget->HumanToTargetBone.end())
+                        {
+                            targetBoneName = targetIt->second;
+                            resolvedHumanBone = humanBone;
+                        }
+                    }
+                }
+
+                BonePose sample;
+                sample.HasTranslation = !channel.PositionKeys.empty();
+                sample.HasRotation = !channel.RotationKeys.empty();
+                sample.HasScale = !channel.ScaleKeys.empty();
+                channel.UpdateLocalTransform(sampleTicks, sample.Translation, sample.Rotation, sample.Scale);
+                if (retarget && sample.HasRotation && !resolvedHumanBone.empty())
+                {
+                    auto offsetIt = retarget->HumanRotationOffsets.find(resolvedHumanBone);
+                    if (offsetIt != retarget->HumanRotationOffsets.end())
+                    {
+                        const DirectX::XMFLOAT3& offsetDegrees = offsetIt->second;
+                        const float toRadians = DirectX::XM_PI / 180.0f;
+                        DirectX::XMVECTOR sourceRotation = DirectX::XMQuaternionNormalize(DirectX::XMLoadFloat4(&sample.Rotation));
+                        DirectX::XMVECTOR correction = DirectX::XMQuaternionRotationRollPitchYaw(
+                            offsetDegrees.x * toRadians,
+                            offsetDegrees.y * toRadians,
+                            offsetDegrees.z * toRadians);
+
+                        // Retarget Pose Offset은 Source 리그의 회전에 Target 리그 기준 자세 차이를 더하는 값이다.
+                        // 예를 들어 A-Pose 팔을 T-Pose 클립에 맞출 때, 매 프레임 회전 위에 같은 보정 회전을 얹는다.
+                        DirectX::XMStoreFloat4(&sample.Rotation, DirectX::XMQuaternionNormalize(DirectX::XMQuaternionMultiply(sourceRotation, correction)));
+                    }
+                }
+                BlendBonePose(pose[targetBoneName], sample, alpha);
+            }
+
+            accumulatedWeight += weight;
+        }
+
+        std::vector<std::pair<int, float>> ResolveBlendTreeWeights(const AnimatorComponent& animator, const AnimatorComponent::State& state)
+        {
+            std::vector<std::pair<int, float>> weights;
+            const auto& children = state.Tree.Children;
+            if (children.empty())
+                return weights;
+
+            if (state.Tree.TreeType == AnimatorComponent::State::BlendTree::Type::Direct)
+            {
+                float total = 0.0f;
+                for (const auto& child : children)
+                    total += (std::max)(0.0f, child.Weight);
+                if (total <= 0.0001f)
+                    total = 1.0f;
+                for (const auto& child : children)
+                    weights.push_back({ child.ClipIndex, (std::max)(0.0f, child.Weight) / total });
+                return weights;
+            }
+
+            const float x = ReadAnimatorFloatParameter(animator, state.Tree.ParameterX);
+            if (state.Tree.TreeType == AnimatorComponent::State::BlendTree::Type::OneD)
+            {
+                std::vector<AnimatorComponent::State::BlendTreeChild> sorted = children;
+                std::sort(sorted.begin(), sorted.end(), [](const auto& left, const auto& right)
+                {
+                    return left.Threshold < right.Threshold;
+                });
+
+                if (x <= sorted.front().Threshold)
+                    return { { sorted.front().ClipIndex, 1.0f } };
+                if (x >= sorted.back().Threshold)
+                    return { { sorted.back().ClipIndex, 1.0f } };
+
+                for (size_t i = 0; i + 1 < sorted.size(); ++i)
+                {
+                    if (x < sorted[i].Threshold || x > sorted[i + 1].Threshold)
+                        continue;
+                    const float span = (std::max)(0.0001f, sorted[i + 1].Threshold - sorted[i].Threshold);
+                    const float t = (x - sorted[i].Threshold) / span;
+                    return { { sorted[i].ClipIndex, 1.0f - t }, { sorted[i + 1].ClipIndex, t } };
+                }
+            }
+
+            const float y = ReadAnimatorFloatParameter(animator, state.Tree.ParameterY);
+            float total = 0.0f;
+            for (const auto& child : children)
+            {
+                const float dx = x - child.Position.x;
+                const float dy = y - child.Position.y;
+                const float distanceSq = dx * dx + dy * dy;
+                const float weight = 1.0f / ((std::max)(0.0001f, distanceSq));
+                weights.push_back({ child.ClipIndex, weight });
+                total += weight;
+            }
+            for (auto& [clipIndex, weight] : weights)
+                weight = total > 0.0001f ? weight / total : 0.0f;
+            return weights;
+        }
+
+        std::unordered_map<std::string, BonePose> EvaluateAnimatorStatePose(
+            AnimatorComponent& animator,
+            const ModelComponent& model,
+            const AnimatorComponent::State& state,
+            float stateTimeSeconds,
+            const RetargetContext* retarget)
+        {
+            std::unordered_map<std::string, BonePose> pose;
+            float accumulatedWeight = 0.0f;
+            if (state.Motion == AnimatorComponent::State::MotionType::BlendTree)
+            {
+                // Blend Tree는 파라미터를 읽어 여러 클립의 비율을 정하고, 같은 본 이름끼리 포즈를 섞는다.
+                // 이렇게 해두면 Direct, 1D, 2D 방식이 모두 같은 최종 포즈 경로를 사용한다.
+                const std::string sourcePath = ResolveAnimatorSourcePath(animator, model);
+                if (sourcePath.empty() || !std::filesystem::exists(sourcePath))
+                    return pose;
+                for (const auto& [clipIndex, weight] : ResolveBlendTreeWeights(animator, state))
+                {
+                    auto clip = AnimationClip::LoadShared(sourcePath, static_cast<uint32_t>((std::max)(0, clipIndex)));
+                    AddClipPoseSample(clip, state, stateTimeSeconds, weight, retarget, pose, accumulatedWeight);
+                }
+            }
+            else if (state.Motion == AnimatorComponent::State::MotionType::Clip)
+            {
+                AddClipPoseSample(LoadAnimatorStateClip(animator, model, state), state, stateTimeSeconds, 1.0f, retarget, pose, accumulatedWeight);
+            }
+            return pose;
+        }
+
+        void CollectMaskBoneNames(const ModelNode& node, const AnimatorComponent::Layer& layer, bool insideMask, std::unordered_set<std::string>& outBones)
+        {
+            const bool explicitBone = std::find(layer.MaskBoneNames.begin(), layer.MaskBoneNames.end(), node.Name) != layer.MaskBoneNames.end() ||
+                (!node.Path.empty() && std::find(layer.MaskBoneNames.begin(), layer.MaskBoneNames.end(), node.Path) != layer.MaskBoneNames.end());
+            const bool nowInside = insideMask || explicitBone || (!layer.MaskRootBone.empty() && (node.Name == layer.MaskRootBone || node.Path == layer.MaskRootBone));
+            if (nowInside)
+                outBones.insert(node.Name);
+            for (const auto& child : node.Children)
+                CollectMaskBoneNames(child, layer, nowInside, outBones);
+        }
+
+        bool LayerAllowsBone(const AnimatorComponent::Layer& layer, const Model& model, const std::string& boneName, std::unordered_set<std::string>& maskCache)
+        {
+            if (layer.MaskRootBone.empty() && layer.MaskBoneNames.empty())
+                return true;
+            if (maskCache.empty())
+                CollectMaskBoneNames(model.GetRootNode(), layer, false, maskCache);
+            return maskCache.find(boneName) != maskCache.end();
+        }
+
+        void ApplyLayerPose(std::unordered_map<std::string, BonePose>& finalPose, const std::unordered_map<std::string, BonePose>& layerPose, const AnimatorComponent::Layer& layer, const Model& model)
+        {
+            const float layerWeight = std::clamp(layer.Weight, 0.0f, 1.0f);
+            if (layerWeight <= 0.0001f)
+                return;
+
+            std::unordered_set<std::string> maskCache;
+            for (const auto& [boneName, pose] : layerPose)
+            {
+                if (!LayerAllowsBone(layer, model, boneName, maskCache))
+                    continue;
+                // 아래 레이어가 나중에 적용되므로 같은 본을 다시 쓰면 아래 레이어가 우선한다.
+                // Weight는 그 우선권을 얼마나 강하게 적용할지 정하는 값이다.
+                BlendBonePose(finalPose[boneName], pose, layerWeight);
+            }
+        }
+
+        std::unordered_map<std::string, BonePose> EvaluateAnimatorLayeredPose(AnimatorComponent& animator, const ModelComponent& modelComponent)
+        {
+            std::unordered_map<std::string, BonePose> finalPose;
+            if (!modelComponent.TargetModel)
+                return finalPose;
+
+            const std::unique_ptr<RetargetContext> retarget = BuildRetargetContext(animator, modelComponent);
+            const RetargetContext* retargetContext = retarget.get();
+
+            for (auto& layer : animator.Layers)
+            {
+                if (layer.Exited || layer.Weight <= 0.0001f || layer.ActiveStateIndex < 0 || layer.ActiveStateIndex >= static_cast<int>(layer.States.size()))
+                    continue;
+
+                const auto& currentState = layer.States[layer.ActiveStateIndex];
+                auto layerPose = EvaluateAnimatorStatePose(animator, modelComponent, currentState, layer.StateTime, retargetContext);
+                if (layer.PreviousStateIndex >= 0 && layer.PreviousStateIndex < static_cast<int>(layer.States.size()) && layer.BlendDuration > 0.0001f)
+                {
+                    auto previousPose = EvaluateAnimatorStatePose(animator, modelComponent, layer.States[layer.PreviousStateIndex], layer.PreviousStateTime, retargetContext);
+                    const float alpha = std::clamp(layer.BlendElapsed / layer.BlendDuration, 0.0f, 1.0f);
+                    for (const auto& [boneName, pose] : layerPose)
+                        BlendBonePose(previousPose[boneName], pose, alpha);
+                    layerPose = std::move(previousPose);
+                }
+
+                ApplyLayerPose(finalPose, layerPose, layer, *modelComponent.TargetModel);
+            }
+            return finalPose;
+        }
+
+        DirectX::XMFLOAT4 EvaluatePropertyKeys(const std::vector<AnimatorComponent::State::PropertyKey>& keys, float timeSeconds)
+        {
+            if (keys.empty())
+                return {};
+            if (keys.size() == 1 || timeSeconds <= keys.front().TimeSeconds)
+                return keys.front().Value;
+            if (timeSeconds >= keys.back().TimeSeconds)
+                return keys.back().Value;
+
+            for (size_t i = 0; i + 1 < keys.size(); ++i)
+            {
+                if (timeSeconds < keys[i].TimeSeconds || timeSeconds > keys[i + 1].TimeSeconds)
+                    continue;
+
+                const float span = (std::max)(0.0001f, keys[i + 1].TimeSeconds - keys[i].TimeSeconds);
+                const float t = (timeSeconds - keys[i].TimeSeconds) / span;
+                const auto& a = keys[i].Value;
+                const auto& b = keys[i + 1].Value;
+                if (keys[i].Interp == AnimatorComponent::State::PropertyKey::Interpolation::Constant)
+                    return a;
+
+                const float blend = keys[i].Interp == AnimatorComponent::State::PropertyKey::Interpolation::EaseInOut
+                    ? t * t * (3.0f - 2.0f * t)
+                    : t;
+                // EaseInOut은 양 끝에서 천천히 시작/종료하는 보간이다.
+                // 위치/색처럼 눈에 보이는 값은 Linear보다 부드럽게 보이고, Bool은 Constant로 처리해 중간값을 만들지 않는다.
+                return {
+                    a.x + (b.x - a.x) * blend,
+                    a.y + (b.y - a.y) * blend,
+                    a.z + (b.z - a.z) * blend,
+                    a.w + (b.w - a.w) * blend
+                };
+            }
+            return keys.back().Value;
+        }
+
+        Entity ResolvePropertyTrackTarget(Scene* scene, entt::entity owner, const std::string& path)
+        {
+            if (!scene || path.empty() || path == ".")
+                return { owner, scene };
+            return scene->FindEntityByName(path);
+        }
+
+        void ApplyAnimatorPropertyTrack(Scene* scene, entt::entity owner, const AnimatorComponent::State::PropertyTrack& track, float stateTimeSeconds)
+        {
+            Entity target = ResolvePropertyTrackTarget(scene, owner, track.EntityPath);
+            if (!target || track.Keys.empty())
+                return;
+
+            const DirectX::XMFLOAT4 value = EvaluatePropertyKeys(track.Keys, stateTimeSeconds);
+            if (track.ComponentName == "Transform" && target.HasComponent<TransformComponent>())
+            {
+                auto& transform = target.GetComponent<TransformComponent>();
+                if (track.PropertyName == "Position" || track.PropertyName == "Translation")
+                    transform.Translation = { value.x, value.y, value.z };
+                else if (track.PropertyName == "Rotation")
+                    transform.Rotation = { value.x, value.y, value.z };
+                else if (track.PropertyName == "Scale")
+                    transform.Scale = { value.x, value.y, value.z };
+                return;
+            }
+
+            if (track.ComponentName == "Active")
+            {
+                auto& active = target.HasComponent<ActiveComponent>() ? target.GetComponent<ActiveComponent>() : target.AddComponent<ActiveComponent>();
+                active.ActiveSelf = value.x >= 0.5f;
+                return;
+            }
+
+            if (track.ComponentName == "Light" && target.HasComponent<LightComponent>())
+            {
+                auto& light = target.GetComponent<LightComponent>();
+                if (track.PropertyName == "Intensity")
+                    light.Intensity = value.x;
+                else if (track.PropertyName == "Color")
+                    light.LightColor = { value.x, value.y, value.z };
+                return;
+            }
+
+            if (track.ComponentName == "Material" && target.HasComponent<MeshComponent>())
+            {
+                auto& mesh = target.GetComponent<MeshComponent>();
+                if (track.PropertyName == "AlbedoColor")
+                {
+                    if (mesh.Material)
+                        mesh.Material->AlbedoColor = value;
+                    else
+                        mesh.BaseColor = value;
+                }
+                return;
+            }
+
+            if (track.ComponentName == "Script" && target.HasComponent<ScriptComponent>())
+            {
+                if (track.PropertyName == "Enabled")
+                    target.GetComponent<ScriptComponent>().Enabled = value.x >= 0.5f;
+                return;
+            }
+
+            if (track.ComponentName == "Camera" && target.HasComponent<CameraComponent>())
+            {
+                auto& camera = target.GetComponent<CameraComponent>();
+                if (track.PropertyName == "FOV")
+                    camera.FOV = value.x;
+                return;
+            }
+
+            if (track.ComponentName == "Audio" && target.HasComponent<AudioComponent>())
+            {
+                auto& audio = target.GetComponent<AudioComponent>();
+                if (track.PropertyName == "Volume")
+                    audio.Volume = std::clamp(value.x, 0.0f, 1.0f);
+                else if (track.PropertyName == "Pitch")
+                    audio.Pitch = (std::max)(0.01f, value.x);
+                else if (track.PropertyName == "PlayTrigger")
+                {
+                    const bool risingEdge = audio.RuntimeLastPlaySignal < 0.5f && value.x >= 0.5f;
+                    // Trigger 키프레임은 값 자체가 아니라 "눌린 순간"이 중요하다.
+                    // 1 상태를 매 프레임 재생으로 해석하면 같은 사운드가 프레임마다 다시 시작되므로 0->1 변화만 요청으로 남긴다.
+                    audio.RuntimePlayRequested = audio.RuntimePlayRequested || risingEdge;
+                    audio.RuntimeLastPlaySignal = value.x;
+                }
+            }
+        }
+
+        void ApplyAnimatorPropertyTracks(Scene* scene, entt::entity owner, AnimatorComponent& animator)
+        {
+            for (const auto& layer : animator.Layers)
+            {
+                if (layer.Exited || layer.Weight <= 0.0001f || layer.ActiveStateIndex < 0 || layer.ActiveStateIndex >= static_cast<int>(layer.States.size()))
+                    continue;
+
+                const auto& state = layer.States[layer.ActiveStateIndex];
+                if (state.Motion != AnimatorComponent::State::MotionType::PropertyClip)
+                    continue;
+
+                // Property Animation은 본이 없는 일반 오브젝트도 State Machine에서 움직이게 하는 경로다.
+                // Transform, Active, Light, Camera처럼 게임 결과에 영향을 주는 값을 같은 시간축으로 적용한다.
+                for (const auto& track : state.PropertyTracks)
+                    ApplyAnimatorPropertyTrack(scene, owner, track, layer.StateTime);
+            }
+        }
+
+        bool SampleRootTransform(const std::shared_ptr<AnimationClip>& clip, const AnimatorComponent::State& state, float stateTimeSeconds, const std::string& rootBone, DirectX::XMFLOAT3& outTranslation, DirectX::XMFLOAT4& outRotation)
+        {
+            if (!clip)
+                return false;
+            auto channelIt = clip->GetChannels().find(rootBone);
+            if (channelIt == clip->GetChannels().end() || channelIt->second.PositionKeys.empty())
+                return false;
+
+            DirectX::XMFLOAT3 scale;
+            channelIt->second.UpdateLocalTransform(ResolveStateSampleTime(state, *clip, stateTimeSeconds) * clip->GetTicksPerSecond(), outTranslation, outRotation, scale);
+            return true;
+        }
+
+        bool SampleRootTransformAtClipTime(const std::shared_ptr<AnimationClip>& clip, float clipTimeSeconds, const std::string& rootBone, DirectX::XMFLOAT3& outTranslation, DirectX::XMFLOAT4& outRotation)
+        {
+            if (!clip)
+                return false;
+            auto channelIt = clip->GetChannels().find(rootBone);
+            if (channelIt == clip->GetChannels().end() || channelIt->second.PositionKeys.empty())
+                return false;
+
+            DirectX::XMFLOAT3 scale;
+            channelIt->second.UpdateLocalTransform(clipTimeSeconds * clip->GetTicksPerSecond(), outTranslation, outRotation, scale);
+            return true;
+        }
+
+        DirectX::XMFLOAT3 TransformRootMotionPoint(const TransformComponent& transform, const DirectX::XMFLOAT3& localPoint)
+        {
+            DirectX::XMMATRIX world =
+                DirectX::XMMatrixScaling(transform.Scale.x, transform.Scale.y, transform.Scale.z) *
+                DirectX::XMMatrixRotationQuaternion(DirectX::XMLoadFloat4(&transform.QuaternionRotation)) *
+                DirectX::XMMatrixTranslation(transform.Translation.x, transform.Translation.y, transform.Translation.z);
+
+            DirectX::XMFLOAT3 result;
+            DirectX::XMStoreFloat3(&result, DirectX::XMVector3TransformCoord(DirectX::XMLoadFloat3(&localPoint), world));
+            return result;
+        }
+
+        void ResetRootMotionDebugTrace(AnimatorComponent& animator)
+        {
+            // Root Motion 디버그 경로는 실행 결과라서 Play 시작/종료 경계에서 항상 비운다.
+            // 이전 실행의 궤적이 남으면 새 테스트에서 실제 이동 경로를 오해하기 쉽다.
+            animator.RuntimeRootMotionDelta = { 0.0f, 0.0f, 0.0f };
+            animator.RuntimeRootMotionRotationDelta = { 0.0f, 0.0f, 0.0f, 1.0f };
+            animator.RuntimeRootMotionRootWorld = { 0.0f, 0.0f, 0.0f };
+            animator.RuntimeRootMotionRootMissing = false;
+            animator.RuntimeRootMotionWrappedLoop = false;
+            animator.RuntimeRootMotionLockXZ = false;
+            animator.RuntimeRootMotionLockY = false;
+            animator.RuntimeRootMotionLockRotation = false;
+            animator.RuntimeRootMotionBaked = false;
+            animator.RuntimeRootMotionRotationDegrees = 0.0f;
+            animator.RuntimeRootMotionPath.clear();
+        }
+
+        void ApplyAnimatorRootMotion(Scene* scene, entt::entity owner, AnimatorComponent& animator, AnimatorComponent::Layer& layer, const ModelComponent& model, float previousTimeSeconds)
+        {
+            if (!scene || layer.ActiveStateIndex < 0 || layer.ActiveStateIndex >= static_cast<int>(layer.States.size()))
+                return;
+
+            auto& state = layer.States[layer.ActiveStateIndex];
+            if (!animator.ApplyRootMotion && !state.ApplyRootMotion)
+                return;
+
+            animator.RuntimeRootMotionRootMissing = false;
+            animator.RuntimeRootMotionWrappedLoop = false;
+            animator.RuntimeRootMotionLockXZ = state.ImportSettings.LockRootPositionXZ;
+            animator.RuntimeRootMotionLockY = state.ImportSettings.LockRootPositionY;
+            animator.RuntimeRootMotionLockRotation = state.ImportSettings.LockRootRotation;
+            animator.RuntimeRootMotionBaked = state.ImportSettings.BakeRootTransform;
+            animator.RuntimeRootMotionRotationDegrees = 0.0f;
+
+            auto clip = LoadAnimatorStateClip(animator, model, state);
+            DirectX::XMFLOAT3 prevRoot;
+            DirectX::XMFLOAT3 nowRoot;
+            DirectX::XMFLOAT4 prevRootRotation;
+            DirectX::XMFLOAT4 nowRootRotation;
+            const std::string sourceRootBone = animator.RetargetToHumanoid
+                ? ResolveSourceAvatarBone(animator, animator.HumanoidRootBone.empty() ? "Hips" : animator.HumanoidRootBone)
+                : animator.HumanoidRootBone;
+
+            if (!SampleRootTransform(clip, state, previousTimeSeconds, sourceRootBone, prevRoot, prevRootRotation) ||
+                !SampleRootTransform(clip, state, layer.StateTime, sourceRootBone, nowRoot, nowRootRotation))
+            {
+                // 루트 본 이름이 틀리거나 클립에 루트 채널이 없으면 이동값을 만들 수 없다.
+                // 콘솔을 매 프레임 찍지 않고 상태값만 남겨 Scene View Debug가 한 번에 보여주게 한다.
+                animator.RuntimeRootMotionRootMissing = true;
+                return;
+            }
+
+            const float previousSampleTime = ResolveStateSampleTime(state, *clip, previousTimeSeconds);
+            const float currentSampleTime = ResolveStateSampleTime(state, *clip, layer.StateTime);
+            const bool wrappedLoop = state.Loop && currentSampleTime + 0.0001f < previousSampleTime;
+            animator.RuntimeRootMotionWrappedLoop = wrappedLoop;
+
+            DirectX::XMFLOAT3 delta = {
+                (nowRoot.x - prevRoot.x) * std::clamp(layer.Weight, 0.0f, 1.0f),
+                (nowRoot.y - prevRoot.y) * std::clamp(layer.Weight, 0.0f, 1.0f),
+                (nowRoot.z - prevRoot.z) * std::clamp(layer.Weight, 0.0f, 1.0f)
+            };
+            DirectX::XMVECTOR rotationDelta = DirectX::XMQuaternionIdentity();
+
+            if (wrappedLoop)
+            {
+                float sampleStart = 0.0f;
+                float sampleEnd = 0.0f;
+                ResolveStateSampleRange(state, *clip, sampleStart, sampleEnd);
+
+                DirectX::XMFLOAT3 startRoot;
+                DirectX::XMFLOAT3 endRoot;
+                DirectX::XMFLOAT4 startRotation;
+                DirectX::XMFLOAT4 endRotation;
+                if (SampleRootTransformAtClipTime(clip, sampleStart, sourceRootBone, startRoot, startRotation) &&
+                    SampleRootTransformAtClipTime(clip, sampleEnd, sourceRootBone, endRoot, endRotation))
+                {
+                    // 루프가 끝에서 처음으로 감길 때는 단순 now-prev가 반대 방향 큰 이동으로 보일 수 있다.
+                    // 끝까지 간 거리와 시작점부터 현재까지 간 거리를 나눠 더해야 자연스러운 Root Motion이 된다.
+                    const float layerWeight = std::clamp(layer.Weight, 0.0f, 1.0f);
+                    delta = {
+                        ((endRoot.x - prevRoot.x) + (nowRoot.x - startRoot.x)) * layerWeight,
+                        ((endRoot.y - prevRoot.y) + (nowRoot.y - startRoot.y)) * layerWeight,
+                        ((endRoot.z - prevRoot.z) + (nowRoot.z - startRoot.z)) * layerWeight
+                    };
+
+                    DirectX::XMVECTOR previousRotation = DirectX::XMQuaternionNormalize(DirectX::XMLoadFloat4(&prevRootRotation));
+                    DirectX::XMVECTOR endRotationQ = DirectX::XMQuaternionNormalize(DirectX::XMLoadFloat4(&endRotation));
+                    DirectX::XMVECTOR startRotationQ = DirectX::XMQuaternionNormalize(DirectX::XMLoadFloat4(&startRotation));
+                    DirectX::XMVECTOR currentRotation = DirectX::XMQuaternionNormalize(DirectX::XMLoadFloat4(&nowRootRotation));
+                    DirectX::XMVECTOR firstDelta = DirectX::XMQuaternionMultiply(DirectX::XMQuaternionInverse(previousRotation), endRotationQ);
+                    DirectX::XMVECTOR secondDelta = DirectX::XMQuaternionMultiply(DirectX::XMQuaternionInverse(startRotationQ), currentRotation);
+                    rotationDelta = DirectX::XMQuaternionMultiply(firstDelta, secondDelta);
+                }
+            }
+            else
+            {
+                DirectX::XMVECTOR previousRotation = DirectX::XMQuaternionNormalize(DirectX::XMLoadFloat4(&prevRootRotation));
+                DirectX::XMVECTOR currentRotation = DirectX::XMQuaternionNormalize(DirectX::XMLoadFloat4(&nowRootRotation));
+                rotationDelta = DirectX::XMQuaternionMultiply(DirectX::XMQuaternionInverse(previousRotation), currentRotation);
+            }
+
+            if (state.ImportSettings.LockRootPositionXZ)
+            {
+                delta.x = 0.0f;
+                delta.z = 0.0f;
+            }
+            if (state.ImportSettings.LockRootPositionY)
+                delta.y = 0.0f;
+            if (state.ImportSettings.BakeRootTransform)
+            {
+                // Bake Root Transform은 루트 이동을 오브젝트 Transform에 누적하지 않는 옵션이다.
+                // 루트 본의 움직임은 클립 포즈에 남고, 씬 오브젝트 위치는 제자리에서 유지된다.
+                delta = { 0.0f, 0.0f, 0.0f };
+                rotationDelta = DirectX::XMQuaternionIdentity();
+            }
+
+            Entity entity{ owner, scene };
+            if (!entity || !entity.HasComponent<TransformComponent>())
+                return;
+            auto& transform = entity.GetComponent<TransformComponent>();
+            transform.Translation.x += delta.x;
+            transform.Translation.y += delta.y;
+            transform.Translation.z += delta.z;
+            animator.RuntimeRootMotionDelta = delta;
+
+            if (!state.ImportSettings.LockRootRotation && !state.ImportSettings.BakeRootTransform)
+            {
+                // 회전 Root Motion은 이전 루트 회전에서 현재 루트 회전으로 가는 차이값만 뽑는다.
+                // 절대 회전을 덮어쓰면 캐릭터가 가진 배치 회전까지 잃기 때문에 delta만 오브젝트에 누적한다.
+                rotationDelta = DirectX::XMQuaternionSlerp(DirectX::XMQuaternionIdentity(), rotationDelta, std::clamp(layer.Weight, 0.0f, 1.0f));
+
+                DirectX::XMVECTOR entityRotation = DirectX::XMLoadFloat4(&transform.QuaternionRotation);
+                entityRotation = DirectX::XMQuaternionNormalize(DirectX::XMQuaternionMultiply(entityRotation, rotationDelta));
+                DirectX::XMStoreFloat4(&transform.QuaternionRotation, entityRotation);
+            }
+            else
+            {
+                rotationDelta = DirectX::XMQuaternionIdentity();
+            }
+
+            DirectX::XMStoreFloat4(&animator.RuntimeRootMotionRotationDelta, rotationDelta);
+            DirectX::XMFLOAT4 rotationDebug;
+            DirectX::XMStoreFloat4(&rotationDebug, DirectX::XMQuaternionNormalize(rotationDelta));
+            const float clampedW = std::clamp(rotationDebug.w, -1.0f, 1.0f);
+            float angleDegrees = DirectX::XMConvertToDegrees(2.0f * std::acos(clampedW));
+            if (angleDegrees > 180.0f)
+                angleDegrees = 360.0f - angleDegrees;
+            animator.RuntimeRootMotionRotationDegrees = angleDegrees;
+            animator.RuntimeRootMotionRootWorld = TransformRootMotionPoint(transform, nowRoot);
+            animator.RuntimeRootMotionPath.push_back(animator.RuntimeRootMotionRootWorld);
+            const size_t maxPathPoints = std::clamp(animator.RuntimeRootMotionMaxPathPoints, (size_t)16, (size_t)2048);
+            if (animator.RuntimeRootMotionPath.size() > maxPathPoints)
+                animator.RuntimeRootMotionPath.erase(animator.RuntimeRootMotionPath.begin(), animator.RuntimeRootMotionPath.begin() + (animator.RuntimeRootMotionPath.size() - maxPathPoints));
+        }
+
+        void EnsureAnimatorRuntimeLayers(AnimatorComponent& animator)
+        {
+            if (animator.Layers.empty())
+                animator.Layers.push_back({});
+
+            if (animator.Layers[0].States.empty() && !animator.States.empty())
+            {
+                animator.Layers[0].States = animator.States;
+                animator.Layers[0].Transitions = animator.Transitions;
+                animator.Layers[0].ActiveStateIndex = animator.ActiveStateIndex;
+                animator.Layers[0].EntryStateIndex = animator.EntryStateIndex;
+                animator.Layers[0].SelectedTransitionIndex = animator.SelectedTransitionIndex;
+            }
+
+            animator.ActiveLayerIndex = std::clamp(animator.ActiveLayerIndex, 0, static_cast<int>(animator.Layers.size()) - 1);
+            for (auto& layer : animator.Layers)
+            {
+                if (layer.States.empty())
+                {
+                    layer.ActiveStateIndex = -1;
+                    layer.EntryStateIndex = -1;
+                    layer.PreviousStateIndex = -1;
+                    layer.StateTime = 0.0f;
+                    layer.PreviousStateTime = 0.0f;
+                    layer.BlendElapsed = 0.0f;
+                    layer.BlendDuration = 0.0f;
+                    layer.PreviousRuntimeClip.reset();
+                    layer.Exited = false;
+                    continue;
+                }
+
+                layer.EntryStateIndex = std::clamp(layer.EntryStateIndex, 0, static_cast<int>(layer.States.size()) - 1);
+                if (!layer.Exited && (layer.ActiveStateIndex < 0 || layer.ActiveStateIndex >= static_cast<int>(layer.States.size())))
+                    layer.ActiveStateIndex = layer.EntryStateIndex;
+                layer.PreviousStateIndex = std::clamp(layer.PreviousStateIndex, -1, static_cast<int>(layer.States.size()) - 1);
+            }
+        }
+
+        AnimatorComponent::Parameter* FindAnimatorParameter(AnimatorComponent& animator, const std::string& name)
+        {
+            auto it = std::find_if(animator.Parameters.begin(), animator.Parameters.end(), [&name](const AnimatorComponent::Parameter& parameter)
+            {
+                return parameter.Name == name;
+            });
+            return it != animator.Parameters.end() ? &(*it) : nullptr;
+        }
+
+        bool EvaluateAnimatorCondition(AnimatorComponent& animator, const AnimatorComponent::TransitionCondition& condition)
+        {
+            AnimatorComponent::Parameter* parameter = FindAnimatorParameter(animator, condition.ParameterName);
+            if (!parameter)
+                return false;
+
+            switch (parameter->ParamType)
+            {
+                case AnimatorComponent::Parameter::Type::Bool:
+                {
+                    if (condition.Mode == AnimatorComponent::TransitionCondition::CompareMode::If)
+                        return parameter->BoolValue;
+                    if (condition.Mode == AnimatorComponent::TransitionCondition::CompareMode::IfNot)
+                        return !parameter->BoolValue;
+                    return parameter->BoolValue == condition.BoolValue;
+                }
+                case AnimatorComponent::Parameter::Type::Trigger:
+                {
+                    // Trigger는 Bool처럼 보이지만, 전이에 성공하면 한 번 쓰고 꺼지는 입력이다.
+                    // 점프 버튼처럼 한 프레임성 신호를 상태머신에 전달할 때 사용한다.
+                    if (condition.Mode == AnimatorComponent::TransitionCondition::CompareMode::IfNot)
+                        return !parameter->BoolValue;
+                    return parameter->BoolValue;
+                }
+                case AnimatorComponent::Parameter::Type::Float:
+                default:
+                {
+                    const float value = parameter->FloatValue;
+                    switch (condition.Mode)
+                    {
+                        case AnimatorComponent::TransitionCondition::CompareMode::Greater: return value > condition.FloatValue;
+                        case AnimatorComponent::TransitionCondition::CompareMode::Less: return value < condition.FloatValue;
+                        case AnimatorComponent::TransitionCondition::CompareMode::Equals: return std::abs(value - condition.FloatValue) <= 0.0001f;
+                        case AnimatorComponent::TransitionCondition::CompareMode::NotEquals: return std::abs(value - condition.FloatValue) > 0.0001f;
+                        case AnimatorComponent::TransitionCondition::CompareMode::IfNot: return value <= 0.0f;
+                        case AnimatorComponent::TransitionCondition::CompareMode::If:
+                        default: return value > 0.0f;
+                    }
+                }
+            }
+        }
+
+        void ConsumeAnimatorTriggers(AnimatorComponent& animator, const AnimatorComponent::Transition& transition)
+        {
+            for (const auto& condition : transition.Conditions)
+            {
+                AnimatorComponent::Parameter* parameter = FindAnimatorParameter(animator, condition.ParameterName);
+                if (parameter && parameter->ParamType == AnimatorComponent::Parameter::Type::Trigger)
+                    parameter->BoolValue = false;
+            }
+        }
+
+        bool TransitionExitTimeReached(const AnimatorComponent::Layer& layer, const AnimatorComponent::Transition& transition, const std::shared_ptr<AnimationClip>& currentClip)
+        {
+            if (!transition.HasExitTime)
+                return true;
+            if (layer.ActiveStateIndex < 0 || layer.ActiveStateIndex >= static_cast<int>(layer.States.size()))
+                return false;
+            if (!currentClip || currentClip->GetDurationSeconds() <= 0.0f)
+                return false;
+
+            const auto& state = layer.States[layer.ActiveStateIndex];
+            const float duration = currentClip->GetDurationSeconds();
+            const float normalizedTime = state.Loop
+                ? std::fmod(layer.StateTime, duration) / duration
+                : (std::min)(layer.StateTime / duration, 1.0f);
+            return normalizedTime >= std::clamp(transition.ExitTime, 0.0f, 1.0f);
+        }
+
+        bool EvaluateAnimatorTransition(AnimatorComponent& animator, AnimatorComponent::Layer& layer, const AnimatorComponent::Transition& transition, const std::shared_ptr<AnimationClip>& currentClip)
+        {
+            const bool fromAnyState = transition.FromStateIndex == AnimatorComponent::Transition::AnyStateIndex;
+            const bool fromCurrentState = transition.FromStateIndex == layer.ActiveStateIndex;
+            if (!fromAnyState && !fromCurrentState)
+                return false;
+            if (transition.ToStateIndex != AnimatorComponent::Transition::ExitStateIndex &&
+                (transition.ToStateIndex < 0 || transition.ToStateIndex >= static_cast<int>(layer.States.size())))
+                return false;
+            if (fromAnyState && transition.ToStateIndex == layer.ActiveStateIndex)
+                return false;
+
+            // 조건도 Exit Time도 없는 전이는 실수로 만든 선일 가능성이 높다.
+            // 자동으로 매 프레임 전환시키지 않고, 조건이나 Exit Time을 사용자가 명확히 넣었을 때만 실행한다.
+            if (!transition.HasExitTime && transition.Conditions.empty())
+                return false;
+            if (!TransitionExitTimeReached(layer, transition, currentClip))
+                return false;
+
+            for (const auto& condition : transition.Conditions)
+            {
+                if (!EvaluateAnimatorCondition(animator, condition))
+                    return false;
+            }
+            return true;
+        }
+
+        bool IsAnimatorLayerBlending(const AnimatorComponent::Layer& layer)
+        {
+            return layer.PreviousStateIndex >= 0 && layer.BlendDuration > 0.0001f && layer.BlendElapsed < layer.BlendDuration;
+        }
+
+        int SelectAnimatorTransition(AnimatorComponent& animator, AnimatorComponent::Layer& layer, const std::shared_ptr<AnimationClip>& currentClip)
+        {
+            int selectedIndex = -1;
+            int selectedPriority = std::numeric_limits<int>::max();
+            int selectedSourceRank = std::numeric_limits<int>::max();
+            const bool isBlending = IsAnimatorLayerBlending(layer);
+
+            for (int i = 0; i < static_cast<int>(layer.Transitions.size()); ++i)
+            {
+                const auto& transition = layer.Transitions[i];
+                if (isBlending && !transition.CanInterrupt)
+                    continue;
+                if (!EvaluateAnimatorTransition(animator, layer, transition, currentClip))
+                    continue;
+
+                // 같은 프레임에 여러 전이가 참이면 Priority가 낮은 전이를 먼저 탄다.
+                // Priority가 같으면 현재 State 전이를 Any State 전이보다 먼저 골라 사용자가 만든 직접 연결을 우선한다.
+                const int sourceRank = transition.FromStateIndex == AnimatorComponent::Transition::AnyStateIndex ? 1 : 0;
+                if (transition.Priority < selectedPriority ||
+                    (transition.Priority == selectedPriority && sourceRank < selectedSourceRank))
+                {
+                    selectedIndex = i;
+                    selectedPriority = transition.Priority;
+                    selectedSourceRank = sourceRank;
+                }
+            }
+
+            return selectedIndex;
+        }
+
+        void DispatchAnimatorEvents(entt::entity owner, AnimatorComponent::Layer& layer, const AnimatorComponent::State& state, const std::shared_ptr<AnimationClip>& currentClip)
+        {
+            if (!currentClip || state.Events.empty())
+                return;
+
+            const float duration = currentClip->GetDurationSeconds();
+            if (duration <= 0.0f)
+                return;
+
+            const float previousTime = layer.PreviousLoopTime;
+            const float currentTime = state.Loop ? std::fmod(layer.StateTime, duration) : (std::min)(layer.StateTime, duration);
+            const bool looped = state.Loop && currentTime < previousTime;
+            if (looped)
+                layer.FiredEventIndices.clear();
+
+            for (int i = 0; i < (int)state.Events.size(); ++i)
+            {
+                const auto& event = state.Events[i];
+                const float eventTime = std::clamp(event.TimeSeconds, 0.0f, duration);
+                const bool alreadyFired = std::find(layer.FiredEventIndices.begin(), layer.FiredEventIndices.end(), i) != layer.FiredEventIndices.end();
+                if (alreadyFired)
+                    continue;
+
+                const bool crossed = looped
+                    ? (eventTime >= previousTime || eventTime <= currentTime)
+                    : (eventTime >= previousTime && eventTime <= currentTime);
+                if (!crossed)
+                    continue;
+
+                layer.FiredEventIndices.push_back(i);
+                if (ScriptEngine::IsRunning())
+                {
+                    // Animation Event는 State가 가진 마커를 Play 중 C# 스크립트 함수 호출로 바꾸는 지점이다.
+                    // 에디터 저장 데이터는 시간과 문자열만 알고, 실제 호출 여부는 ScriptEngine 실행 상태에서 결정한다.
+                    ScriptEngine::InvokeAnimationEvent(static_cast<uint32_t>(owner), event.FunctionName.c_str(), event.StringArgument.c_str());
+                }
+                else
+                {
+                    ConsoleLog::Info("Animation Event: " + state.Name + "." + event.FunctionName + "(" + event.StringArgument + ")");
+                }
+            }
+
+            layer.PreviousLoopTime = currentTime;
+        }
+
+        void ClearAnimatorBlendState(AnimatorComponent::Layer& layer)
+        {
+            layer.PreviousStateIndex = -1;
+            layer.PreviousStateTime = 0.0f;
+            layer.BlendElapsed = 0.0f;
+            layer.BlendDuration = 0.0f;
+            layer.PreviousRuntimeClip.reset();
+        }
+
+        void BeginAnimatorTransition(AnimatorComponent& animator, AnimatorComponent::Layer& layer, const AnimatorComponent::Transition& transition, const std::shared_ptr<AnimationClip>& currentClip)
+        {
+            layer.PreviousStateIndex = layer.ActiveStateIndex;
+            layer.PreviousStateTime = layer.StateTime;
+            layer.PreviousRuntimeClip = currentClip;
+            if (transition.ToStateIndex == AnimatorComponent::Transition::ExitStateIndex)
+            {
+                if (transition.ExitTargetStateIndex >= 0 && transition.ExitTargetStateIndex < static_cast<int>(layer.States.size()))
+                {
+                    // 중첩 상태머신에서는 Exit가 레이어 종료가 아니라 부모 그래프의 다음 State로 빠질 수 있다.
+                    // 아직 UI는 단순하지만 저장/런타임 규칙을 먼저 열어두면 나중에 Sub-State Machine을 붙일 때 데이터 포맷을 다시 바꾸지 않아도 된다.
+                    layer.ActiveStateIndex = transition.ExitTargetStateIndex;
+                    layer.Exited = false;
+                    layer.StateTime = 0.0f;
+                    layer.PreviousLoopTime = 0.0f;
+                    layer.FiredEventIndices.clear();
+                    layer.BlendElapsed = 0.0f;
+                    layer.BlendDuration = (std::max)(0.0f, transition.BlendTime);
+                    if (layer.BlendDuration <= 0.0001f || !layer.PreviousRuntimeClip)
+                        ClearAnimatorBlendState(layer);
+                    ConsumeAnimatorTriggers(animator, transition);
+                    return;
+                }
+
+                // Exit는 실제 클립을 재생하는 State가 아니라, 현재 레이어의 평가를 끝내는 목적지다.
+                // 위 레이어가 빠지면 아래 레이어가 다시 포즈를 담당하므로 레이어 우선순위가 자연스럽게 유지된다.
+                layer.ActiveStateIndex = -1;
+                layer.Exited = true;
+                ClearAnimatorBlendState(layer);
+                ConsumeAnimatorTriggers(animator, transition);
+                return;
+            }
+            layer.ActiveStateIndex = transition.ToStateIndex;
+            layer.Exited = false;
+            layer.StateTime = 0.0f;
+            layer.PreviousLoopTime = 0.0f;
+            layer.FiredEventIndices.clear();
+            layer.BlendElapsed = 0.0f;
+            layer.BlendDuration = (std::max)(0.0f, transition.BlendTime);
+
+            if (layer.BlendDuration <= 0.0001f || !layer.PreviousRuntimeClip)
+                ClearAnimatorBlendState(layer);
+
+            ConsumeAnimatorTriggers(animator, transition);
+        }
+
+        void AdvanceAnimatorLayer(AnimatorComponent& animator, AnimatorComponent::Layer& layer, const ModelComponent* model, entt::entity owner, float deltaTime, bool shouldPlay)
+        {
+            if (layer.States.empty())
+                return;
+            if (layer.Exited)
+                return;
+
+            layer.ActiveStateIndex = std::clamp(layer.ActiveStateIndex, 0, static_cast<int>(layer.States.size()) - 1);
+            auto& activeState = layer.States[layer.ActiveStateIndex];
+            const float activeSpeed = (std::max)(0.0f, activeState.Speed);
+
+            if (shouldPlay)
+            {
+                layer.StateTime += deltaTime * activeSpeed;
+                if (layer.PreviousStateIndex >= 0)
+                {
+                    const auto& previousState = layer.States[layer.PreviousStateIndex];
+                    layer.PreviousStateTime += deltaTime * (std::max)(0.0f, previousState.Speed);
+                    layer.BlendElapsed += deltaTime;
+                    if (layer.BlendElapsed >= layer.BlendDuration)
+                        ClearAnimatorBlendState(layer);
+                }
+
+                std::shared_ptr<AnimationClip> currentClip = model ? LoadAnimatorStateClip(animator, *model, activeState) : nullptr;
+                DispatchAnimatorEvents(owner, layer, activeState, currentClip);
+                const int selectedTransitionIndex = SelectAnimatorTransition(animator, layer, currentClip);
+                if (selectedTransitionIndex >= 0 && selectedTransitionIndex < static_cast<int>(layer.Transitions.size()))
+                {
+                    BeginAnimatorTransition(animator, layer, layer.Transitions[selectedTransitionIndex], currentClip);
+                }
+            }
+            else
+            {
+                layer.StateTime = 0.0f;
+                layer.PreviousLoopTime = 0.0f;
+                layer.FiredEventIndices.clear();
+                ClearAnimatorBlendState(layer);
+            }
+        }
+
+        int SelectRuntimeAnimatorLayer(const AnimatorComponent& animator)
+        {
+            int selectedLayer = -1;
+            for (int i = 0; i < static_cast<int>(animator.Layers.size()); ++i)
+            {
+                const auto& layer = animator.Layers[i];
+                if (!layer.Exited && !layer.States.empty() && layer.Weight > 0.0001f && layer.ActiveStateIndex >= 0 && layer.ActiveStateIndex < static_cast<int>(layer.States.size()))
+                    selectedLayer = i;
+            }
+            return selectedLayer;
+        }
+
+        void ApplyRuntimeLayerToLegacyFields(AnimatorComponent& animator, int layerIndex)
+        {
+            if (layerIndex < 0 || layerIndex >= static_cast<int>(animator.Layers.size()))
+                return;
+
+            const auto& layer = animator.Layers[layerIndex];
+            // 현재 스키닝 재생기는 한 번에 한 포즈를 출력한다.
+            // 본 마스크가 들어오기 전까지는 Unity처럼 아래 레이어를 우선권으로 보고, 선택된 레이어를 기존 재생 필드에 복사한다.
+            const bool graphStructureChanged =
+                animator.RuntimePlaybackLayerIndex != layerIndex ||
+                animator.States.size() != layer.States.size() ||
+                animator.Transitions.size() != layer.Transitions.size();
+
+            if (graphStructureChanged)
+            {
+                animator.States = layer.States;
+                animator.Transitions = layer.Transitions;
+                animator.RuntimePlaybackLayerIndex = layerIndex;
+            }
+            else if (layer.ActiveStateIndex >= 0 && layer.ActiveStateIndex < static_cast<int>(layer.States.size()) &&
+                layer.ActiveStateIndex < static_cast<int>(animator.States.size()))
+            {
+                animator.States[layer.ActiveStateIndex] = layer.States[layer.ActiveStateIndex];
+            }
+            animator.ActiveStateIndex = layer.ActiveStateIndex;
+            animator.EntryStateIndex = layer.EntryStateIndex;
+            animator.SelectedTransitionIndex = layer.SelectedTransitionIndex;
         }
 
         std::string MakeDuplicateName(Scene* scene, const std::string& sourceName)
@@ -150,6 +1348,9 @@ namespace CCEngine
 
             if (srcEntity.HasComponent<CameraComponent>())
                 dstEntity.AddComponent<CameraComponent>(srcEntity.GetComponent<CameraComponent>());
+
+            if (srcEntity.HasComponent<AudioComponent>())
+                dstEntity.AddComponent<AudioComponent>(srcEntity.GetComponent<AudioComponent>());
 
             if (srcEntity.HasComponent<SpriteRendererComponent>())
                 dstEntity.AddComponent<SpriteRendererComponent>(srcEntity.GetComponent<SpriteRendererComponent>());
@@ -588,6 +1789,11 @@ namespace CCEngine
                 if (srcEntity.HasComponent<CameraComponent>())
                 {
                     dstEntity.AddComponent<CameraComponent>(srcEntity.GetComponent<CameraComponent>());
+                }
+
+                if (srcEntity.HasComponent<AudioComponent>())
+                {
+                    dstEntity.AddComponent<AudioComponent>(srcEntity.GetComponent<AudioComponent>());
                 }
 
                 if (srcEntity.HasComponent<SpriteRendererComponent>())
@@ -1088,17 +2294,46 @@ namespace CCEngine
         for (auto e : animatorView)
         {
             auto& animator = animatorView.get<AnimatorComponent>(e);
-            if (animator.States.empty())
+            EnsureAnimatorRuntimeLayers(animator);
+            ResetRootMotionDebugTrace(animator);
+            if (animator.Layers.empty())
                 continue;
 
-            // Play 모드에 들어갈 때는 에디터에서 마지막으로 눌러 둔 상태가 아니라 Entry State에서 시작한다.
-            // 이렇게 해야 Unity Animator처럼 런타임 시작점이 명확하고, 에디터 프리뷰 선택이 게임 실행에 섞이지 않는다.
-            animator.EntryStateIndex = std::clamp(animator.EntryStateIndex, 0, static_cast<int>(animator.States.size() - 1));
-            animator.ActiveStateIndex = animator.EntryStateIndex;
+            for (auto& layer : animator.Layers)
+            {
+                if (layer.States.empty())
+                    continue;
+
+                // Play 모드에 들어갈 때는 에디터에서 마지막으로 눌러 둔 상태가 아니라 Entry State에서 시작한다.
+                // 이렇게 해야 Unity Animator처럼 런타임 시작점이 명확하고, 에디터 프리뷰 선택이 게임 실행에 섞이지 않는다.
+                layer.EntryStateIndex = std::clamp(layer.EntryStateIndex, 0, static_cast<int>(layer.States.size() - 1));
+                layer.ActiveStateIndex = layer.EntryStateIndex;
+                layer.Exited = false;
+                layer.PreviousStateIndex = -1;
+                layer.StateTime = 0.0f;
+                layer.PreviousLoopTime = 0.0f;
+                layer.PreviousStateTime = 0.0f;
+                layer.BlendElapsed = 0.0f;
+                layer.BlendDuration = 0.0f;
+                layer.FiredEventIndices.clear();
+                layer.PreviousRuntimeClip.reset();
+            }
+
+            ApplyRuntimeLayerToLegacyFields(animator, SelectRuntimeAnimatorLayer(animator));
             animator.RuntimeClip.reset();
             animator.RuntimeClipKey.clear();
             animator.AnimPlayer.StopAnimation();
             animator.IsPlaying = animator.AutoPlay;
+        }
+
+        auto audioView = m_Registry.view<AudioComponent>();
+        for (auto e : audioView)
+        {
+            auto& audio = audioView.get<AudioComponent>(e);
+            audio.RuntimePlaying = false;
+            audio.RuntimeStopRequested = false;
+            audio.RuntimeLastPlaySignal = 0.0f;
+            audio.RuntimePlayRequested = audio.Enabled && audio.PlayOnStart;
         }
 
         StartScriptRuntime();
@@ -1123,6 +2358,20 @@ namespace CCEngine
         {
             b2DestroyWorld(m_PhysicsWorldId);
             m_PhysicsWorldId = b2_nullWorldId;
+        }
+
+        auto animatorView = m_Registry.view<AnimatorComponent>();
+        for (auto e : animatorView)
+            ResetRootMotionDebugTrace(animatorView.get<AnimatorComponent>(e));
+
+        auto audioView = m_Registry.view<AudioComponent>();
+        for (auto e : audioView)
+        {
+            auto& audio = audioView.get<AudioComponent>(e);
+            audio.RuntimePlaying = false;
+            audio.RuntimePlayRequested = false;
+            audio.RuntimeStopRequested = false;
+            audio.RuntimeLastPlaySignal = 0.0f;
         }
 
         m_Registry.view<NativeScriptComponent>().each([](auto entityID, auto& nsc)
@@ -1203,6 +2452,20 @@ namespace CCEngine
                 if (!IsEntityActiveInHierarchy(entity))
                     return;
 
+                bool shouldPlay = false;
+                if (m_State == SceneState::Play)
+                {
+                    shouldPlay = animComp.AutoPlay || animComp.IsPlaying;
+                    if (animComp.AutoPlay)
+                        animComp.IsPlaying = true;
+                }
+                else
+                {
+                    shouldPlay = animComp.PreviewInEdit && animComp.IsPlaying;
+                }
+
+                EnsureAnimatorRuntimeLayers(animComp);
+
                 Entity current = entity;
                 while (current.HasComponent<RelationshipComponent>() && !current.HasComponent<ModelComponent>())
                 {
@@ -1224,48 +2487,55 @@ namespace CCEngine
                     if (!model)
                         return;
 
-                    bool shouldPlay = false;
-                    if (m_State == SceneState::Play)
+                    if (shouldPlay)
                     {
-                        shouldPlay = animComp.AutoPlay || animComp.IsPlaying;
-                        if (animComp.AutoPlay)
-                            animComp.IsPlaying = true;
+                        for (auto& layer : animComp.Layers)
+                        {
+                            const float previousTime = layer.StateTime;
+                            AdvanceAnimatorLayer(animComp, layer, &modelComponent, entityID, deltaTime, true);
+                            ApplyAnimatorRootMotion(this, entityID, animComp, layer, modelComponent, previousTime);
+                        }
+                        ApplyAnimatorPropertyTracks(this, entityID, animComp);
                     }
-                    else
-                    {
-                        shouldPlay = animComp.PreviewInEdit && animComp.IsPlaying;
-                    }
+
+                    const int runtimeLayerIndex = SelectRuntimeAnimatorLayer(animComp);
+                    ApplyRuntimeLayerToLegacyFields(animComp, runtimeLayerIndex);
 
                     if (shouldPlay)
                     {
-                        // 정지 상태의 에디터는 포즈 계산만 필요하고, 재생용 클립 데이터까지 미리 읽을 필요는 없다.
-                        // FBX 클립 로드는 큰 메모리 작업이므로 Play/Preview가 실제로 시작될 때만 준비한다.
-                        PrepareAnimatorClip(animComp, modelComponent);
-                    }
-
-                    animComp.AnimPlayer.SetLoop(animComp.Loop);
-                    animComp.AnimPlayer.SetSpeed(animComp.Speed);
-                    if (!animComp.States.empty())
-                    {
-                        int stateIndex = std::clamp(animComp.ActiveStateIndex, 0, static_cast<int>(animComp.States.size() - 1));
-                        animComp.AnimPlayer.SetWriteDefaults(animComp.States[stateIndex].WriteDefaults);
-                    }
-                    else
-                    {
-                        animComp.AnimPlayer.SetWriteDefaults(true);
-                    }
-                    if (shouldPlay && animComp.RuntimeClip)
-                    {
-                        bool sameClip = animComp.AnimPlayer.GetCurrentClip() == animComp.RuntimeClip.get();
-                        animComp.AnimPlayer.PlayAnimation(animComp.RuntimeClip, !sameClip);
+                        const auto finalPose = EvaluateAnimatorLayeredPose(animComp, modelComponent);
+                        if (!finalPose.empty())
+                        {
+                            // State Machine이 계산한 최종 포즈를 재생기에 직접 넣는다.
+                            // 단일 클립 재생 경로를 유지하면서도 Layer Weight와 Blend Tree 결과를 스키닝에 반영하기 위한 연결점이다.
+                            animComp.AnimPlayer.SetWriteDefaults(true);
+                            animComp.AnimPlayer.SetPoseOverride(finalPose);
+                        }
+                        else
+                        {
+                            animComp.AnimPlayer.ClearPoseOverride();
+                            animComp.AnimPlayer.StopAnimation();
+                        }
                     }
                     else if (animComp.AnimPlayer.IsPlaying())
                     {
+                        animComp.AnimPlayer.ClearPoseOverride();
                         animComp.AnimPlayer.StopAnimation();
+                    }
+                    else
+                    {
+                        animComp.AnimPlayer.ClearPoseOverride();
+                        animComp.AnimPlayer.ClearBlendSource();
                     }
 
                     const auto& nodeMap = modelComponent.NodePathEntityMap.empty() ? modelComponent.NodeEntityMap : modelComponent.NodePathEntityMap;
-                    animComp.AnimPlayer.Update(deltaTime, model.get(), this, &nodeMap);
+                    animComp.AnimPlayer.Update(0.0f, model.get(), this, &nodeMap);
+                }
+                else if (shouldPlay)
+                {
+                    for (auto& layer : animComp.Layers)
+                        AdvanceAnimatorLayer(animComp, layer, nullptr, entityID, deltaTime, true);
+                    ApplyAnimatorPropertyTracks(this, entityID, animComp);
                 }
             });
     }

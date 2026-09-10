@@ -68,6 +68,7 @@ namespace CCEngine {
         void HandleAssetDropped(const std::string& filepath, const std::string& assetType, float mouseX, float mouseY);
         bool ApplyTextureAssetToEntity(Entity entity, const std::string& filepath);
         bool ApplyMaterialAssetToEntity(Entity entity, const std::string& filepath);
+        bool AssignAnimatorControllerToEntity(Entity entity, const std::filesystem::path& controllerPath, bool openGraph);
         void SelectAssetForInspection(const std::filesystem::path& assetPath, const std::string& assetType);
         void ClearMissingInspectorAssetSelections();
         void ApplyMaterialAssetPreview(const std::filesystem::path& materialPath, const MaterialAsset& material);
@@ -117,9 +118,15 @@ namespace CCEngine {
         void ProcessAnimatorGraphOpenRequests();
         void BringEditorOverlaysToFront();
         void RenderPhysicsDebugView(const PerspectiveCamera& camera, const std::vector<Entity>& selectedEntities);
+        void RenderRootMotionDebugView(const PerspectiveCamera& camera, const std::vector<Entity>& selectedEntities);
         void CyclePhysicsDebugViewMode();
         void UpdatePhysicsDebugButton();
+        void UpdateRootMotionDebugButton();
+        void UpdateRootMotionDebugOptionButtons();
+        void ClearRootMotionDebugPaths();
+        void SetRootMotionDebugPathLimit(size_t maxPoints);
         void UpdateColliderOutlineButton();
+        void HideRootMotionDebugDropdown();
         void HideColliderDebugDropdown();
         bool CreateAnimatorStateMachineTestScene();
         bool RunEditorQualityAssurance(bool closeWhenFinished);
@@ -220,6 +227,17 @@ namespace CCEngine {
         UI::Button* m_BtnToolSnap = nullptr;
         UI::Button* m_BtnToolFrame = nullptr;
         UI::Button* m_BtnPhysicsDebug = nullptr;
+        UI::Button* m_BtnRootMotionDebug = nullptr;
+        UI::Button* m_BtnRootMotionOptions = nullptr;
+        UI::Button* m_BtnRootMotionClear = nullptr;
+        UI::Button* m_BtnRootMotionPathShorter = nullptr;
+        UI::Button* m_BtnRootMotionPathLonger = nullptr;
+        UI::Panel* m_RootMotionDebugDropdownPanel = nullptr;
+        UI::Button* m_BtnRootMotionScopeMode = nullptr;
+        UI::Button* m_BtnRootMotionPathMode = nullptr;
+        UI::Button* m_BtnRootMotionRootMode = nullptr;
+        UI::Button* m_BtnRootMotionDeltaMode = nullptr;
+        UI::Button* m_BtnRootMotionRotationMode = nullptr;
         UI::Button* m_BtnColliderOutline = nullptr;
         UI::Panel* m_ColliderDebugDropdownPanel = nullptr;
         UI::Button* m_BtnColliderOutlineMode = nullptr;
@@ -268,6 +286,13 @@ namespace CCEngine {
         float m_LastViewportRightClickX = 0.0f;
         float m_LastViewportRightClickY = 0.0f;
         int m_PhysicsDebugViewMode = 0; // 0: Off, 1/2: 2D Selected/All, 3/4: 3D Selected/All, 5/6: Both Selected/All
+        bool m_ShowRootMotionDebug = false;
+        bool m_RootMotionDebugAllAnimators = false;
+        bool m_ShowRootMotionPath = true;
+        bool m_ShowRootMotionRoot = true;
+        bool m_ShowRootMotionDelta = true;
+        bool m_ShowRootMotionRotation = true;
+        size_t m_RootMotionDebugPathLimit = 128;
         bool m_ShowColliderOutlines = false;
         bool m_ShowMeshColliderWire = false;
 

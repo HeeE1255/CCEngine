@@ -40,6 +40,7 @@ namespace CCEngine
         static void DestroyInstance(uint32_t entityID);
         static void InvokeLifecycle(uint32_t entityID, ScriptLifecycleEvent eventType, float deltaTime = 0.0f);
         static void InvokePhysicsEvent(uint32_t entityID, ScriptPhysicsEvent eventType, uint32_t otherEntityID);
+        static void InvokeAnimationEvent(uint32_t entityID, const char* functionName, const char* stringArgument);
         static void UpdateInstance(uint32_t entityID, float deltaTime);
         static bool IsRunning();
     };

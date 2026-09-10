@@ -1,4 +1,5 @@
 #include "EditorLayer.h"
+#include "Animation/AnimatorControllerAsset.h"
 #include "Renderer/Renderer.h"
 #include "Renderer/Renderer2D.h"
 #include "Renderer/Renderer3D.h"
@@ -358,6 +359,55 @@ namespace CCEngine {
 
             drawBillboardLine(thickness * 2.0f, { 0.02f, 0.02f, 0.02f, 0.78f });
             drawBillboardLine(thickness, color);
+        }
+
+        float Length3(const DirectX::XMFLOAT3& v)
+        {
+            return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+        }
+
+        DirectX::XMFLOAT3 Add3(const DirectX::XMFLOAT3& a, const DirectX::XMFLOAT3& b)
+        {
+            return { a.x + b.x, a.y + b.y, a.z + b.z };
+        }
+
+        DirectX::XMFLOAT3 Scale3(const DirectX::XMFLOAT3& v, float scale)
+        {
+            return { v.x * scale, v.y * scale, v.z * scale };
+        }
+
+        DirectX::XMFLOAT3 Normalize3(const DirectX::XMFLOAT3& v)
+        {
+            const float length = Length3(v);
+            if (length <= 0.0001f)
+                return { 0.0f, 0.0f, 0.0f };
+            return { v.x / length, v.y / length, v.z / length };
+        }
+
+        void DrawRootMotionArrow3D(const DirectX::XMFLOAT3& from, const DirectX::XMFLOAT3& to, const DirectX::XMFLOAT3& cameraPosition, const DirectX::XMFLOAT4& color)
+        {
+            DirectX::XMFLOAT3 dir = Normalize3({ to.x - from.x, to.y - from.y, to.z - from.z });
+            if (Length3(dir) <= 0.0001f)
+                return;
+
+            DrawWorldDebugLine3D(from, to, cameraPosition, 0.035f, color);
+
+            DirectX::XMVECTOR direction = DirectX::XMLoadFloat3(&dir);
+            DirectX::XMVECTOR camera = DirectX::XMLoadFloat3(&cameraPosition);
+            DirectX::XMVECTOR target = DirectX::XMLoadFloat3(&to);
+            DirectX::XMVECTOR toCamera = DirectX::XMVector3Normalize(DirectX::XMVectorSubtract(camera, target));
+            DirectX::XMVECTOR side = DirectX::XMVector3Cross(direction, toCamera);
+            if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(side)) <= 0.0001f)
+                side = DirectX::XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f);
+            side = DirectX::XMVector3Normalize(side);
+
+            DirectX::XMFLOAT3 sideVector;
+            DirectX::XMStoreFloat3(&sideVector, side);
+            DirectX::XMFLOAT3 back = Scale3(dir, -0.18f);
+            DirectX::XMFLOAT3 left = Add3(to, Add3(back, Scale3(sideVector, 0.10f)));
+            DirectX::XMFLOAT3 right = Add3(to, Add3(back, Scale3(sideVector, -0.10f)));
+            DrawWorldDebugLine3D(to, left, cameraPosition, 0.03f, color);
+            DrawWorldDebugLine3D(to, right, cameraPosition, 0.03f, color);
         }
 
         void DrawColliderBoxOutline(DirectX::XMMATRIX entityWorld, const BoxCollider2DComponent& collider, const DirectX::XMFLOAT4& color)
@@ -895,6 +945,7 @@ namespace CCEngine {
         auto selectedEntity = m_HierarchyPanel->GetSelectedEntity();
         auto selectedEntities = m_HierarchyPanel->GetSelectedEntities();
         RenderPhysicsDebugView(m_Camera, selectedEntities);
+        RenderRootMotionDebugView(m_Camera, selectedEntities);
         m_GizmoSystem.OnRenderSkeleton(selectedEntity);
         m_GizmoSystem.OnRender(selectedEntities, selectedEntity, m_Camera.GetViewMatrix(), m_Camera.GetProjectionMatrix());
 
@@ -1014,6 +1065,7 @@ namespace CCEngine {
         if (m_FileDropdownPanel) m_FileDropdownPanel->BringToFront();
         if (m_EditDropdownPanel) m_EditDropdownPanel->BringToFront();
         if (m_WindowDropdownPanel) m_WindowDropdownPanel->BringToFront();
+        if (m_RootMotionDebugDropdownPanel) m_RootMotionDebugDropdownPanel->BringToFront();
         if (m_ColliderDebugDropdownPanel) m_ColliderDebugDropdownPanel->BringToFront();
     }
 
@@ -1080,6 +1132,7 @@ namespace CCEngine {
             (m_FileDropdownPanel && m_FileDropdownPanel->IsVisible()) ||
             (m_EditDropdownPanel && m_EditDropdownPanel->IsVisible()) ||
             (m_WindowDropdownPanel && m_WindowDropdownPanel->IsVisible()) ||
+            (m_RootMotionDebugDropdownPanel && m_RootMotionDebugDropdownPanel->IsVisible()) ||
             (m_ColliderDebugDropdownPanel && m_ColliderDebugDropdownPanel->IsVisible()) ||
             (m_ObjectContextMenuPanel && m_ObjectContextMenuPanel->IsVisible()) ||
             (m_MeshObjectSubmenuPanel && m_MeshObjectSubmenuPanel->IsVisible()) ||
@@ -1134,6 +1187,15 @@ namespace CCEngine {
                     !m_BtnColliderOutline->IsPointInside(mouseEvent.GetX(), mouseEvent.GetY()))
                 {
                     HideColliderDebugDropdown();
+                }
+            }
+
+            if (m_RootMotionDebugDropdownPanel && m_RootMotionDebugDropdownPanel->IsVisible())
+            {
+                if (!m_RootMotionDebugDropdownPanel->IsPointInside(mouseEvent.GetX(), mouseEvent.GetY()) &&
+                    (!m_BtnRootMotionOptions || !m_BtnRootMotionOptions->IsPointInside(mouseEvent.GetX(), mouseEvent.GetY())))
+                {
+                    HideRootMotionDebugDropdown();
                 }
             }
 
@@ -1861,6 +1923,7 @@ namespace CCEngine {
             m_BtnToolSnap->SetActive(m_GizmoSystem.IsSnappingEnabled());
 
         UpdatePhysicsDebugButton();
+        UpdateRootMotionDebugButton();
         UpdateColliderOutlineButton();
     }
 
@@ -1939,6 +2002,103 @@ namespace CCEngine {
                 m_BtnPhysicsDebug->SetActive(false);
                 break;
         }
+    }
+
+    void EditorLayer::UpdateRootMotionDebugButton()
+    {
+        if (!m_BtnRootMotionDebug)
+            return;
+
+        m_BtnRootMotionDebug->SetText(m_ShowRootMotionDebug ? "Root Motion: On" : "Root Motion: Off");
+        m_BtnRootMotionDebug->SetActive(m_ShowRootMotionDebug);
+
+        if (m_BtnRootMotionPathShorter)
+            m_BtnRootMotionPathShorter->SetText("Limit -");
+        if (m_BtnRootMotionPathLonger)
+            m_BtnRootMotionPathLonger->SetText("Limit +");
+        if (m_BtnRootMotionOptions)
+            m_BtnRootMotionOptions->SetText("Options " + std::to_string(m_RootMotionDebugPathLimit));
+        UpdateRootMotionDebugOptionButtons();
+    }
+
+    void EditorLayer::UpdateRootMotionDebugOptionButtons()
+    {
+        if (m_BtnRootMotionScopeMode)
+        {
+            m_BtnRootMotionScopeMode->SetText(m_RootMotionDebugAllAnimators ? "Scope: All" : "Scope: Selected");
+            m_BtnRootMotionScopeMode->SetActive(m_RootMotionDebugAllAnimators);
+        }
+        if (m_BtnRootMotionPathMode)
+        {
+            m_BtnRootMotionPathMode->SetText(m_ShowRootMotionPath ? "Path: On" : "Path: Off");
+            m_BtnRootMotionPathMode->SetActive(m_ShowRootMotionPath);
+        }
+        if (m_BtnRootMotionRootMode)
+        {
+            m_BtnRootMotionRootMode->SetText(m_ShowRootMotionRoot ? "Root: On" : "Root: Off");
+            m_BtnRootMotionRootMode->SetActive(m_ShowRootMotionRoot);
+        }
+        if (m_BtnRootMotionDeltaMode)
+        {
+            m_BtnRootMotionDeltaMode->SetText(m_ShowRootMotionDelta ? "Delta: On" : "Delta: Off");
+            m_BtnRootMotionDeltaMode->SetActive(m_ShowRootMotionDelta);
+        }
+        if (m_BtnRootMotionRotationMode)
+        {
+            m_BtnRootMotionRotationMode->SetText(m_ShowRootMotionRotation ? "Rotation: On" : "Rotation: Off");
+            m_BtnRootMotionRotationMode->SetActive(m_ShowRootMotionRotation);
+        }
+    }
+
+    void EditorLayer::ClearRootMotionDebugPaths()
+    {
+        if (!m_ActiveScene)
+            return;
+
+        auto view = m_ActiveScene->GetRegistry().view<AnimatorComponent>();
+        for (auto entityID : view)
+        {
+            auto& animator = view.get<AnimatorComponent>(entityID);
+            // Clear는 디버그 표시용 런타임 기록만 지운다.
+            // Animator 설정이나 현재 재생 상태를 건드리지 않아야 Play 테스트가 끊기지 않는다.
+            animator.RuntimeRootMotionDelta = { 0.0f, 0.0f, 0.0f };
+            animator.RuntimeRootMotionRotationDelta = { 0.0f, 0.0f, 0.0f, 1.0f };
+            animator.RuntimeRootMotionRootWorld = { 0.0f, 0.0f, 0.0f };
+            animator.RuntimeRootMotionRootMissing = false;
+            animator.RuntimeRootMotionWrappedLoop = false;
+            animator.RuntimeRootMotionLockXZ = false;
+            animator.RuntimeRootMotionLockY = false;
+            animator.RuntimeRootMotionLockRotation = false;
+            animator.RuntimeRootMotionBaked = false;
+            animator.RuntimeRootMotionRotationDegrees = 0.0f;
+            animator.RuntimeRootMotionPath.clear();
+        }
+    }
+
+    void EditorLayer::SetRootMotionDebugPathLimit(size_t maxPoints)
+    {
+        m_RootMotionDebugPathLimit = std::clamp(maxPoints, (size_t)16, (size_t)2048);
+        UpdateRootMotionDebugButton();
+        if (!m_ActiveScene)
+            return;
+
+        auto view = m_ActiveScene->GetRegistry().view<AnimatorComponent>();
+        for (auto entityID : view)
+        {
+            auto& animator = view.get<AnimatorComponent>(entityID);
+            animator.RuntimeRootMotionMaxPathPoints = m_RootMotionDebugPathLimit;
+            if (animator.RuntimeRootMotionPath.size() > m_RootMotionDebugPathLimit)
+            {
+                const size_t removeCount = animator.RuntimeRootMotionPath.size() - m_RootMotionDebugPathLimit;
+                animator.RuntimeRootMotionPath.erase(animator.RuntimeRootMotionPath.begin(), animator.RuntimeRootMotionPath.begin() + removeCount);
+            }
+        }
+    }
+
+    void EditorLayer::HideRootMotionDebugDropdown()
+    {
+        if (m_RootMotionDebugDropdownPanel)
+            m_RootMotionDebugDropdownPanel->SetVisible(false);
     }
 
     void EditorLayer::RenderPhysicsDebugView(const PerspectiveCamera& camera, const std::vector<Entity>& selectedEntities)
@@ -2075,6 +2235,172 @@ namespace CCEngine {
                         DrawMeshColliderWire3D(mesh, meshWorld, cameraPosition, color);
                     }
                 }
+            }
+        }
+
+        Renderer2D::EndScene();
+    }
+
+    void EditorLayer::RenderRootMotionDebugView(const PerspectiveCamera& camera, const std::vector<Entity>& selectedEntities)
+    {
+        if (!m_ActiveScene || !m_ShowRootMotionDebug)
+            return;
+
+        std::vector<Entity> targets;
+        std::unordered_set<entt::entity> uniqueTargets;
+        if (m_RootMotionDebugAllAnimators)
+        {
+            auto view = m_ActiveScene->GetRegistry().view<AnimatorComponent>();
+            for (auto entityID : view)
+            {
+                Entity entity{ entityID, m_ActiveScene };
+                if (m_ActiveScene->IsEntityActiveInHierarchy(entity))
+                    targets.push_back(entity);
+            }
+        }
+        else
+        {
+            for (Entity selected : selectedEntities)
+            {
+                Entity current = selected;
+                while (current && current.GetScene() == m_ActiveScene)
+                {
+                    if (current.HasComponent<AnimatorComponent>())
+                    {
+                        entt::entity handle = (entt::entity)current;
+                        if (uniqueTargets.insert(handle).second)
+                            targets.push_back(current);
+                        break;
+                    }
+
+                    if (!current.HasComponent<RelationshipComponent>() ||
+                        current.GetComponent<RelationshipComponent>().Parent == entt::null)
+                    {
+                        break;
+                    }
+                    current = { current.GetComponent<RelationshipComponent>().Parent, m_ActiveScene };
+                }
+            }
+        }
+
+        if (targets.empty())
+            return;
+
+        const DirectX::XMFLOAT3 cameraPosition = camera.GetPosition();
+        Renderer2D::BeginScene(camera);
+
+        for (Entity entity : targets)
+        {
+            if (!entity || !entity.HasComponent<TransformComponent>() || !entity.HasComponent<AnimatorComponent>() ||
+                !m_ActiveScene->IsEntityActiveInHierarchy(entity))
+            {
+                continue;
+            }
+
+            const auto& animator = entity.GetComponent<AnimatorComponent>();
+            if (!animator.ApplyRootMotion && animator.RuntimeRootMotionPath.empty())
+                continue;
+
+            const DirectX::XMFLOAT4 pathXZColor = { 0.26f, 0.74f, 1.0f, 0.96f };
+            const DirectX::XMFLOAT4 pathYColor = { 1.0f, 0.78f, 0.22f, 0.96f };
+            const DirectX::XMFLOAT4 deltaColor = { 0.24f, 1.0f, 0.48f, 0.96f };
+            const DirectX::XMFLOAT4 rootColor = animator.RuntimeRootMotionBaked
+                ? DirectX::XMFLOAT4{ 0.62f, 0.64f, 0.68f, 0.90f }
+                : DirectX::XMFLOAT4{ 1.0f, 0.82f, 0.18f, 0.96f };
+            const DirectX::XMFLOAT4 rotationColor = animator.RuntimeRootMotionLockRotation
+                ? DirectX::XMFLOAT4{ 0.50f, 0.52f, 0.55f, 0.88f }
+                : DirectX::XMFLOAT4{ 1.0f, 0.42f, 0.22f, 0.96f };
+            const DirectX::XMFLOAT4 warningColor = { 1.0f, 0.18f, 0.12f, 0.98f };
+
+            if (m_ShowRootMotionPath)
+            {
+                // 표시 옵션은 계산 데이터와 분리한다.
+                // 궤적을 끄더라도 기록은 계속 남겨야 다시 켰을 때 흐름을 바로 확인할 수 있다.
+                for (size_t i = 1; i < animator.RuntimeRootMotionPath.size(); ++i)
+                {
+                    const DirectX::XMFLOAT3 previous = animator.RuntimeRootMotionPath[i - 1];
+                    const DirectX::XMFLOAT3 current = animator.RuntimeRootMotionPath[i];
+                    const DirectX::XMFLOAT3 xzStep = { current.x, previous.y, current.z };
+
+                    // XZ 이동과 Y 이동을 같은 색으로 그리면 점프/낙하와 평면 이동을 구분하기 어렵다.
+                    // 먼저 바닥 방향 이동을 그리고, 높이 변화가 있으면 세로 성분을 따로 그린다.
+                    DrawWorldDebugLine3D(previous, xzStep, cameraPosition, 0.025f, pathXZColor);
+                    if (std::fabs(current.y - previous.y) > 0.001f)
+                        DrawWorldDebugLine3D(xzStep, current, cameraPosition, 0.025f, pathYColor);
+                }
+            }
+
+            DirectX::XMFLOAT3 rootPosition = animator.RuntimeRootMotionRootWorld;
+            if (animator.RuntimeRootMotionPath.empty())
+                rootPosition = entity.GetComponent<TransformComponent>().Translation;
+            if (m_ShowRootMotionRoot)
+            {
+                DirectX::XMMATRIX rootMarker =
+                    DirectX::XMMatrixScaling(0.18f, 0.18f, 0.18f) *
+                    DirectX::XMMatrixTranslation(rootPosition.x, rootPosition.y, rootPosition.z);
+                DrawWireBox3D(rootMarker, cameraPosition, rootColor);
+
+                if (animator.RuntimeRootMotionBaked)
+                {
+                    // Bake가 켜진 루트는 "클립 안에 구워져서 오브젝트가 안 움직이는" 상태다.
+                    // 작은 십자 표시를 같이 그려 움직임이 빠진 이유를 Scene View에서 바로 구분한다.
+                    DrawWorldDebugLine3D(
+                        { rootPosition.x - 0.18f, rootPosition.y, rootPosition.z },
+                        { rootPosition.x + 0.18f, rootPosition.y, rootPosition.z },
+                        cameraPosition, 0.022f, rootColor);
+                    DrawWorldDebugLine3D(
+                        { rootPosition.x, rootPosition.y, rootPosition.z - 0.18f },
+                        { rootPosition.x, rootPosition.y, rootPosition.z + 0.18f },
+                        cameraPosition, 0.022f, rootColor);
+                }
+            }
+
+            if (m_ShowRootMotionDelta)
+            {
+                DirectX::XMFLOAT3 previousRoot = {
+                    rootPosition.x - animator.RuntimeRootMotionDelta.x,
+                    rootPosition.y - animator.RuntimeRootMotionDelta.y,
+                    rootPosition.z - animator.RuntimeRootMotionDelta.z
+                };
+                DrawRootMotionArrow3D(previousRoot, rootPosition, cameraPosition, deltaColor);
+            }
+
+            if (m_ShowRootMotionRotation)
+            {
+                const auto& transform = entity.GetComponent<TransformComponent>();
+                DirectX::XMVECTOR rotation = DirectX::XMLoadFloat4(&transform.QuaternionRotation);
+                DirectX::XMVECTOR forward = DirectX::XMVector3Rotate(DirectX::XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f), rotation);
+                DirectX::XMFLOAT3 forwardOffset;
+                DirectX::XMStoreFloat3(&forwardOffset, DirectX::XMVectorScale(DirectX::XMVector3Normalize(forward), 0.65f));
+                DirectX::XMFLOAT3 rotationEnd = {
+                    rootPosition.x + forwardOffset.x,
+                    rootPosition.y + forwardOffset.y,
+                    rootPosition.z + forwardOffset.z
+                };
+                DrawWorldDebugLine3D(rootPosition, rotationEnd, cameraPosition, 0.035f, rotationColor);
+
+                if (animator.RuntimeRootMotionLockRotation)
+                {
+                    // 회전 Lock이 켜져 있으면 방향선은 남기되, 작은 X표로 "계산은 됐지만 적용하지 않음"을 보인다.
+                    // 수치만 숨기면 사용자는 회전 Root Motion이 고장난 것처럼 느낄 수 있다.
+                    DrawWorldDebugLine3D(
+                        { rootPosition.x - 0.12f, rootPosition.y + 0.12f, rootPosition.z },
+                        { rootPosition.x + 0.12f, rootPosition.y - 0.12f, rootPosition.z },
+                        cameraPosition, 0.025f, warningColor);
+                    DrawWorldDebugLine3D(
+                        { rootPosition.x - 0.12f, rootPosition.y - 0.12f, rootPosition.z },
+                        { rootPosition.x + 0.12f, rootPosition.y + 0.12f, rootPosition.z },
+                        cameraPosition, 0.025f, warningColor);
+                }
+            }
+
+            if (animator.RuntimeRootMotionRootMissing || animator.RuntimeRootMotionWrappedLoop || Length3(animator.RuntimeRootMotionDelta) > 2.0f)
+            {
+                const float markerSize = animator.RuntimeRootMotionRootMissing ? 0.34f : 0.24f;
+                DirectX::XMMATRIX warningMarker =
+                    DirectX::XMMatrixScaling(markerSize, markerSize, markerSize) *
+                    DirectX::XMMatrixTranslation(rootPosition.x, rootPosition.y + 0.35f, rootPosition.z);
+                DrawWireBox3D(warningMarker, cameraPosition, warningColor);
             }
         }
 
@@ -3473,22 +3799,8 @@ namespace CCEngine {
         if (assetType == "animatorcontroller" && m_HierarchyPanel)
         {
             Entity selected = m_HierarchyPanel->GetSelectedEntity();
-            if (selected && selected.HasComponent<AnimatorComponent>())
-            {
-                auto& animator = selected.GetComponent<AnimatorComponent>();
-                animator.ControllerPath = assetPath.string();
-                animator.ControllerAssetGuid = AssetDatabase::GetGuidFromPath(assetPath);
-
-                // Animator Controller는 컴포넌트의 Object Slot에 들어가는 에셋이다.
-                // 선택된 Animator가 있으면 Asset Inspector로 바꾸지 않고 슬롯 참조만 갱신한다.
-                for (UI::InspectorPanel* inspector : m_InspectorPanels)
-                {
-                    if (inspector && inspector->IsVisible())
-                        inspector->SetSelectedEntity(selected);
-                }
-                ConsoleLog::Info("Animator controller assigned: " + assetPath.filename().string());
+            if (AssignAnimatorControllerToEntity(selected, assetPath, false))
                 return;
-            }
         }
 
         if (m_HierarchyPanel)
@@ -3499,6 +3811,32 @@ namespace CCEngine {
             if (inspector && inspector->IsVisible())
                 inspector->SetSelectedAsset(assetPath, assetType);
         }
+    }
+
+    bool EditorLayer::AssignAnimatorControllerToEntity(Entity entity, const std::filesystem::path& controllerPath, bool openGraph)
+    {
+        if (!entity || !entity.HasComponent<AnimatorComponent>())
+            return false;
+        if (controllerPath.empty() || AssetDatabase::GetAssetKind(controllerPath) != AssetKind::AnimatorController)
+            return false;
+
+        auto& animator = entity.GetComponent<AnimatorComponent>();
+        animator.ControllerPath = controllerPath.string();
+        animator.ControllerAssetGuid = AssetDatabase::GetGuidFromPath(controllerPath);
+        AnimatorControllerAsset::LoadFromFile(controllerPath, animator);
+
+        // Controller는 Animator 컴포넌트의 오브젝트 슬롯에 들어가는 공유 에셋이다.
+        // 할당 후 Inspector를 Entity 모드로 되돌려야 사용자가 즉시 어떤 Controller가 연결됐는지 볼 수 있다.
+        for (UI::InspectorPanel* inspector : m_InspectorPanels)
+        {
+            if (inspector && inspector->IsVisible())
+                inspector->SetSelectedEntity(entity);
+        }
+
+        ConsoleLog::Info("Animator controller assigned: " + controllerPath.filename().string());
+        if (openGraph)
+            OpenAnimatorGraphEditorWindow(entity);
+        return true;
     }
 
     void EditorLayer::ClearMissingInspectorAssetSelections()
@@ -3622,6 +3960,9 @@ namespace CCEngine {
             mouseY = fallbackMouseY;
         }
 
+        if (m_AnimatorGraphPanel && m_AnimatorGraphPanel->TryAcceptAssetDrop(filepath, assetType, mouseX, mouseY))
+            return;
+
         if (assetType == "texture")
         {
             for (UI::InspectorPanel* inspector : m_InspectorPanels)
@@ -3682,17 +4023,11 @@ namespace CCEngine {
                     continue;
 
                 Entity selected = inspector->GetSelectedEntity();
-                if (!selected || !selected.HasComponent<AnimatorComponent>())
+                if (!AssignAnimatorControllerToEntity(selected, filepath, false))
                 {
                     ConsoleLog::Warning("Animator controller drop ignored: selected object has no Animator.");
                     return;
                 }
-
-                auto& animator = selected.GetComponent<AnimatorComponent>();
-                animator.ControllerPath = filepath;
-                animator.ControllerAssetGuid = AssetDatabase::GetGuidFromPath(filepath);
-                inspector->SetSelectedEntity(selected);
-                ConsoleLog::Info("Animator controller assigned: " + std::filesystem::path(filepath).filename().string());
                 return;
             }
 
@@ -4169,6 +4504,12 @@ namespace CCEngine {
                         OpenMaterialGraphEditorWindow(assetPath);
                     else
                         OpenCodeAssetInExternalEditor(assetPath);
+                });
+            browser->SetOnAnimatorControllerOpened([this](const std::string& path)
+                {
+                    Entity selected = m_HierarchyPanel ? m_HierarchyPanel->GetSelectedEntity() : Entity{};
+                    if (!AssignAnimatorControllerToEntity(selected, path, true))
+                        SelectAssetForInspection(path, "animatorcontroller");
                 });
             browser->SetOnAssetDropped([this](const std::string& path, const std::string& type, float x, float y) { HandleAssetDropped(path, type, x, y); });
             browser->SetOnAssetDatabaseChanged([this]()
@@ -4694,18 +5035,77 @@ namespace CCEngine {
         m_BtnPhysicsDebug->SetOffsetMin(432.0f, -12.0f); m_BtnPhysicsDebug->SetOffsetMax(580.0f, 12.0f);
         m_ToolbarPanel->AddChild(m_BtnPhysicsDebug);
 
+        m_BtnRootMotionDebug = new UI::Button("BtnRootMotionDebug", "Root Motion: Off");
+        m_BtnRootMotionDebug->SetAnchorMin(0.0f, 0.5f); m_BtnRootMotionDebug->SetAnchorMax(0.0f, 0.5f);
+        m_BtnRootMotionDebug->SetOffsetMin(588.0f, -12.0f); m_BtnRootMotionDebug->SetOffsetMax(724.0f, 12.0f);
+        m_ToolbarPanel->AddChild(m_BtnRootMotionDebug);
+
+        m_BtnRootMotionOptions = new UI::Button("BtnRootMotionOptions", "Options");
+        m_BtnRootMotionOptions->SetAnchorMin(0.0f, 0.5f); m_BtnRootMotionOptions->SetAnchorMax(0.0f, 0.5f);
+        m_BtnRootMotionOptions->SetOffsetMin(728.0f, -12.0f); m_BtnRootMotionOptions->SetOffsetMax(824.0f, 12.0f);
+        m_ToolbarPanel->AddChild(m_BtnRootMotionOptions);
+
+        m_BtnRootMotionClear = new UI::Button("BtnRootMotionClear", "Clear");
+        m_BtnRootMotionClear->SetAnchorMin(0.0f, 0.5f); m_BtnRootMotionClear->SetAnchorMax(0.0f, 0.5f);
+        m_BtnRootMotionClear->SetOffsetMin(828.0f, -12.0f); m_BtnRootMotionClear->SetOffsetMax(880.0f, 12.0f);
+        m_ToolbarPanel->AddChild(m_BtnRootMotionClear);
+
+        m_BtnRootMotionPathShorter = new UI::Button("BtnRootMotionPathShorter", "Path -");
+        m_BtnRootMotionPathShorter->SetAnchorMin(0.0f, 0.5f); m_BtnRootMotionPathShorter->SetAnchorMax(0.0f, 0.5f);
+        m_BtnRootMotionPathShorter->SetOffsetMin(884.0f, -12.0f); m_BtnRootMotionPathShorter->SetOffsetMax(952.0f, 12.0f);
+        m_ToolbarPanel->AddChild(m_BtnRootMotionPathShorter);
+
+        m_BtnRootMotionPathLonger = new UI::Button("BtnRootMotionPathLonger", "Path +");
+        m_BtnRootMotionPathLonger->SetAnchorMin(0.0f, 0.5f); m_BtnRootMotionPathLonger->SetAnchorMax(0.0f, 0.5f);
+        m_BtnRootMotionPathLonger->SetOffsetMin(956.0f, -12.0f); m_BtnRootMotionPathLonger->SetOffsetMax(1024.0f, 12.0f);
+        m_ToolbarPanel->AddChild(m_BtnRootMotionPathLonger);
+
         m_BtnColliderOutline = new UI::Button("BtnColliderOutline", "Collider: Off");
         m_BtnColliderOutline->SetAnchorMin(0.0f, 0.5f); m_BtnColliderOutline->SetAnchorMax(0.0f, 0.5f);
-        m_BtnColliderOutline->SetOffsetMin(588.0f, -12.0f); m_BtnColliderOutline->SetOffsetMax(724.0f, 12.0f);
+        m_BtnColliderOutline->SetOffsetMin(1032.0f, -12.0f); m_BtnColliderOutline->SetOffsetMax(1168.0f, 12.0f);
         m_ToolbarPanel->AddChild(m_BtnColliderOutline);
+
+        m_RootMotionDebugDropdownPanel = new UI::Panel("RootMotionDebugDropdown", { 0.18f, 0.18f, 0.18f, 1.0f });
+        m_RootMotionDebugDropdownPanel->SetVisible(false);
+        m_RootMotionDebugDropdownPanel->SetBlockMouseEvents(true);
+        m_RootMotionDebugDropdownPanel->SetAnchorMin(0.0f, 0.0f);
+        m_RootMotionDebugDropdownPanel->SetAnchorMax(0.0f, 0.0f);
+        m_RootMotionDebugDropdownPanel->SetOffsetMin(728.0f, 88.0f);
+        m_RootMotionDebugDropdownPanel->SetOffsetMax(930.0f, 218.0f);
+        m_RootUI->AddChild(m_RootMotionDebugDropdownPanel);
+
+        m_BtnRootMotionScopeMode = new UI::Button("BtnRootMotionScopeMode", "Scope: Selected");
+        m_BtnRootMotionScopeMode->SetAnchorMin(0.0f, 0.0f); m_BtnRootMotionScopeMode->SetAnchorMax(1.0f, 0.0f);
+        m_BtnRootMotionScopeMode->SetOffsetMin(0.0f, 0.0f); m_BtnRootMotionScopeMode->SetOffsetMax(0.0f, 26.0f);
+        m_RootMotionDebugDropdownPanel->AddChild(m_BtnRootMotionScopeMode);
+
+        m_BtnRootMotionPathMode = new UI::Button("BtnRootMotionPathMode", "Path: On");
+        m_BtnRootMotionPathMode->SetAnchorMin(0.0f, 0.0f); m_BtnRootMotionPathMode->SetAnchorMax(1.0f, 0.0f);
+        m_BtnRootMotionPathMode->SetOffsetMin(0.0f, 26.0f); m_BtnRootMotionPathMode->SetOffsetMax(0.0f, 52.0f);
+        m_RootMotionDebugDropdownPanel->AddChild(m_BtnRootMotionPathMode);
+
+        m_BtnRootMotionRootMode = new UI::Button("BtnRootMotionRootMode", "Root: On");
+        m_BtnRootMotionRootMode->SetAnchorMin(0.0f, 0.0f); m_BtnRootMotionRootMode->SetAnchorMax(1.0f, 0.0f);
+        m_BtnRootMotionRootMode->SetOffsetMin(0.0f, 52.0f); m_BtnRootMotionRootMode->SetOffsetMax(0.0f, 78.0f);
+        m_RootMotionDebugDropdownPanel->AddChild(m_BtnRootMotionRootMode);
+
+        m_BtnRootMotionDeltaMode = new UI::Button("BtnRootMotionDeltaMode", "Delta: On");
+        m_BtnRootMotionDeltaMode->SetAnchorMin(0.0f, 0.0f); m_BtnRootMotionDeltaMode->SetAnchorMax(1.0f, 0.0f);
+        m_BtnRootMotionDeltaMode->SetOffsetMin(0.0f, 78.0f); m_BtnRootMotionDeltaMode->SetOffsetMax(0.0f, 104.0f);
+        m_RootMotionDebugDropdownPanel->AddChild(m_BtnRootMotionDeltaMode);
+
+        m_BtnRootMotionRotationMode = new UI::Button("BtnRootMotionRotationMode", "Rotation: On");
+        m_BtnRootMotionRotationMode->SetAnchorMin(0.0f, 0.0f); m_BtnRootMotionRotationMode->SetAnchorMax(1.0f, 0.0f);
+        m_BtnRootMotionRotationMode->SetOffsetMin(0.0f, 104.0f); m_BtnRootMotionRotationMode->SetOffsetMax(0.0f, 130.0f);
+        m_RootMotionDebugDropdownPanel->AddChild(m_BtnRootMotionRotationMode);
 
         m_ColliderDebugDropdownPanel = new UI::Panel("ColliderDebugDropdown", { 0.18f, 0.18f, 0.18f, 1.0f });
         m_ColliderDebugDropdownPanel->SetVisible(false);
         m_ColliderDebugDropdownPanel->SetBlockMouseEvents(true);
         m_ColliderDebugDropdownPanel->SetAnchorMin(0.0f, 0.0f);
         m_ColliderDebugDropdownPanel->SetAnchorMax(0.0f, 0.0f);
-        m_ColliderDebugDropdownPanel->SetOffsetMin(838.0f, 88.0f);
-        m_ColliderDebugDropdownPanel->SetOffsetMax(1010.0f, 140.0f);
+        m_ColliderDebugDropdownPanel->SetOffsetMin(1032.0f, 88.0f);
+        m_ColliderDebugDropdownPanel->SetOffsetMax(1204.0f, 140.0f);
         m_RootUI->AddChild(m_ColliderDebugDropdownPanel);
 
         m_BtnColliderOutlineMode = new UI::Button("BtnColliderOutlineMode", "Outline: Off");
@@ -4779,6 +5179,12 @@ namespace CCEngine {
                     OpenMaterialGraphEditorWindow(assetPath);
                 else
                     OpenCodeAssetInExternalEditor(assetPath);
+            });
+        m_AssetBrowserPanel->SetOnAnimatorControllerOpened([this](const std::string& path)
+            {
+                Entity selected = m_HierarchyPanel ? m_HierarchyPanel->GetSelectedEntity() : Entity{};
+                if (!AssignAnimatorControllerToEntity(selected, path, true))
+                    SelectAssetForInspection(path, "animatorcontroller");
             });
         m_AssetBrowserPanel->SetOnAssetDropped([this](const std::string& path, const std::string& type, float x, float y) { HandleAssetDropped(path, type, x, y); });
         m_AssetBrowserPanel->SetOnAssetDatabaseChanged([this]()
@@ -5005,6 +5411,7 @@ namespace CCEngine {
                 m_FileDropdownPanel->SetVisible(!m_FileDropdownPanel->IsVisible());
                 m_EditDropdownPanel->SetVisible(false);
                 m_WindowDropdownPanel->SetVisible(false);
+                HideRootMotionDebugDropdown();
                 HideColliderDebugDropdown();
                 BringEditorOverlaysToFront();
             });
@@ -5013,6 +5420,7 @@ namespace CCEngine {
                 m_EditDropdownPanel->SetVisible(!m_EditDropdownPanel->IsVisible());
                 m_FileDropdownPanel->SetVisible(false);
                 m_WindowDropdownPanel->SetVisible(false);
+                HideRootMotionDebugDropdown();
                 HideColliderDebugDropdown();
                 BringEditorOverlaysToFront();
             });
@@ -5021,6 +5429,7 @@ namespace CCEngine {
                 m_WindowDropdownPanel->SetVisible(!m_WindowDropdownPanel->IsVisible());
                 m_FileDropdownPanel->SetVisible(false);
                 m_EditDropdownPanel->SetVisible(false);
+                HideRootMotionDebugDropdown();
                 HideColliderDebugDropdown();
                 BringEditorOverlaysToFront();
             });
@@ -5081,6 +5490,63 @@ namespace CCEngine {
         m_BtnToolSnap->SetOnClick([this]() { m_GizmoSystem.ToggleSnapping(); UpdateSceneToolButtons(); });
         m_BtnToolFrame->SetOnClick([this]() { FrameSelectedEntity(); });
         m_BtnPhysicsDebug->SetOnClick([this]() { CyclePhysicsDebugViewMode(); });
+        m_BtnRootMotionDebug->SetOnClick([this]()
+            {
+                m_ShowRootMotionDebug = !m_ShowRootMotionDebug;
+                UpdateRootMotionDebugButton();
+            });
+        m_BtnRootMotionOptions->SetOnClick([this]()
+            {
+                if (!m_RootMotionDebugDropdownPanel)
+                    return;
+
+                // 루트 모션 디버그는 표시 항목이 많다.
+                // 메인 버튼은 전체 기능 On/Off, Options는 화면에 그릴 항목만 고르게 분리한다.
+                m_RootMotionDebugDropdownPanel->SetVisible(!m_RootMotionDebugDropdownPanel->IsVisible());
+                if (m_FileDropdownPanel) m_FileDropdownPanel->SetVisible(false);
+                if (m_EditDropdownPanel) m_EditDropdownPanel->SetVisible(false);
+                if (m_WindowDropdownPanel) m_WindowDropdownPanel->SetVisible(false);
+                HideColliderDebugDropdown();
+                m_RootMotionDebugDropdownPanel->BringToFront();
+                UpdateRootMotionDebugOptionButtons();
+            });
+        m_BtnRootMotionClear->SetOnClick([this]()
+            {
+                ClearRootMotionDebugPaths();
+            });
+        m_BtnRootMotionPathShorter->SetOnClick([this]()
+            {
+                SetRootMotionDebugPathLimit(m_RootMotionDebugPathLimit / 2);
+            });
+        m_BtnRootMotionPathLonger->SetOnClick([this]()
+            {
+                SetRootMotionDebugPathLimit(m_RootMotionDebugPathLimit * 2);
+            });
+        m_BtnRootMotionScopeMode->SetOnClick([this]()
+            {
+                m_RootMotionDebugAllAnimators = !m_RootMotionDebugAllAnimators;
+                UpdateRootMotionDebugOptionButtons();
+            });
+        m_BtnRootMotionPathMode->SetOnClick([this]()
+            {
+                m_ShowRootMotionPath = !m_ShowRootMotionPath;
+                UpdateRootMotionDebugOptionButtons();
+            });
+        m_BtnRootMotionRootMode->SetOnClick([this]()
+            {
+                m_ShowRootMotionRoot = !m_ShowRootMotionRoot;
+                UpdateRootMotionDebugOptionButtons();
+            });
+        m_BtnRootMotionDeltaMode->SetOnClick([this]()
+            {
+                m_ShowRootMotionDelta = !m_ShowRootMotionDelta;
+                UpdateRootMotionDebugOptionButtons();
+            });
+        m_BtnRootMotionRotationMode->SetOnClick([this]()
+            {
+                m_ShowRootMotionRotation = !m_ShowRootMotionRotation;
+                UpdateRootMotionDebugOptionButtons();
+            });
         m_BtnColliderOutline->SetOnClick([this]()
             {
                 if (!m_ColliderDebugDropdownPanel)
@@ -5092,6 +5558,7 @@ namespace CCEngine {
                 if (m_FileDropdownPanel) m_FileDropdownPanel->SetVisible(false);
                 if (m_EditDropdownPanel) m_EditDropdownPanel->SetVisible(false);
                 if (m_WindowDropdownPanel) m_WindowDropdownPanel->SetVisible(false);
+                HideRootMotionDebugDropdown();
                 m_ColliderDebugDropdownPanel->BringToFront();
             });
         m_BtnColliderOutlineMode->SetOnClick([this]()

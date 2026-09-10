@@ -30,6 +30,7 @@ namespace CCEngine
         using ManagedDestroyFn = void(__cdecl*)(uint32_t);
         using ManagedLifecycleFn = void(__cdecl*)(uint32_t, int, float);
         using ManagedPhysicsEventFn = void(__cdecl*)(uint32_t, int, uint32_t);
+        using ManagedAnimationEventFn = void(__cdecl*)(uint32_t, const char*, const char*);
         using ManagedUpdateFn = void(__cdecl*)(uint32_t, float);
 
         using GetTranslationFn = int(__cdecl*)(uint32_t, float*, float*, float*);
@@ -46,6 +47,7 @@ namespace CCEngine
             ManagedDestroyFn Destroy = nullptr;
             ManagedLifecycleFn InvokeLifecycle = nullptr;
             ManagedPhysicsEventFn InvokePhysicsEvent = nullptr;
+            ManagedAnimationEventFn InvokeAnimationEvent = nullptr;
             ManagedUpdateFn Update = nullptr;
             bool RuntimeLoaded = false;
             bool Running = false;
@@ -281,6 +283,7 @@ namespace CCEngine
                 LoadManagedFunction(loadAssembly, coreAssembly, L"DestroyInstance", reinterpret_cast<void**>(&s_Data.Destroy)) &&
                 LoadManagedFunction(loadAssembly, coreAssembly, L"InvokeLifecycleInstance", reinterpret_cast<void**>(&s_Data.InvokeLifecycle)) &&
                 LoadManagedFunction(loadAssembly, coreAssembly, L"InvokePhysicsEventInstance", reinterpret_cast<void**>(&s_Data.InvokePhysicsEvent)) &&
+                LoadManagedFunction(loadAssembly, coreAssembly, L"InvokeAnimationEventInstance", reinterpret_cast<void**>(&s_Data.InvokeAnimationEvent)) &&
                 LoadManagedFunction(loadAssembly, coreAssembly, L"UpdateInstance", reinterpret_cast<void**>(&s_Data.Update));
 
             if (!loaded)
@@ -347,6 +350,7 @@ namespace CCEngine
         s_Data.Destroy = nullptr;
         s_Data.InvokeLifecycle = nullptr;
         s_Data.InvokePhysicsEvent = nullptr;
+        s_Data.InvokeAnimationEvent = nullptr;
         s_Data.Update = nullptr;
         s_Data.RuntimeLoaded = false;
     }
@@ -376,6 +380,12 @@ namespace CCEngine
     {
         if (s_Data.Running && s_Data.InvokePhysicsEvent)
             s_Data.InvokePhysicsEvent(entityID, static_cast<int>(eventType), otherEntityID);
+    }
+
+    void ScriptEngine::InvokeAnimationEvent(uint32_t entityID, const char* functionName, const char* stringArgument)
+    {
+        if (s_Data.Running && s_Data.InvokeAnimationEvent)
+            s_Data.InvokeAnimationEvent(entityID, functionName ? functionName : "", stringArgument ? stringArgument : "");
     }
 
     void ScriptEngine::UpdateInstance(uint32_t entityID, float deltaTime)

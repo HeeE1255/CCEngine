@@ -2,6 +2,8 @@
 #define NOMINMAX
 #include <Windows.h>
 #include <shellapi.h>
+#include "Animation/AnimatorControllerAsset.h"
+#include "Animation/AvatarAsset.h"
 #include "Core/AssetDatabase.h"
 #include "Core/ConsoleLog.h"
 #include "Editor/AssetUndoManager.h"
@@ -60,7 +62,7 @@ namespace CCEngine
             constexpr float kTypeFilterButtonWidth = 126.0f;
             constexpr float kSortButtonWidth = 102.0f;
             constexpr float kDropdownItemHeight = 26.0f;
-            constexpr int kTypeFilterItemCount = 8;
+            constexpr int kTypeFilterItemCount = 9;
             constexpr int kSortItemCount = 3;
 
             bool TryAcquirePreviewSlot(std::atomic<int>& counter, int maxCount)
@@ -2227,6 +2229,7 @@ namespace CCEngine
             if (extension == ".hlsl" || extension == ".ccshader") return AssetType::Shader;
             if (extension == ".ccvshader") return AssetType::VisualShader;
             if (extension == ".ccanimcontroller") return AssetType::AnimatorController;
+            if (extension == ".ccavatar") return AssetType::Avatar;
             if (extension == ".fbx" || extension == ".obj" || extension == ".gltf" || extension == ".glb") return AssetType::Model;
             if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".tga") return AssetType::Texture;
             if (extension == ".cs") return AssetType::Script;
@@ -2244,6 +2247,7 @@ namespace CCEngine
                 case AssetType::Shader: return "SHD";
                 case AssetType::VisualShader: return "VSH";
                 case AssetType::AnimatorController: return "ACT";
+                case AssetType::Avatar: return "AVT";
                 case AssetType::Model: return "MDL";
                 case AssetType::FbxMesh: return "MSH";
                 case AssetType::Texture: return "TEX";
@@ -2262,6 +2266,7 @@ namespace CCEngine
                 case AssetType::Shader: return "shader";
                 case AssetType::VisualShader: return "visualshader";
                 case AssetType::AnimatorController: return "animatorcontroller";
+                case AssetType::Avatar: return "avatar";
                 case AssetType::Model: return "model";
                 case AssetType::FbxMesh: return "mesh";
                 case AssetType::Texture: return "texture";
@@ -2282,6 +2287,7 @@ namespace CCEngine
                 case TypeFilter::Prefab: return "Prefab";
                 case TypeFilter::Scene: return "Scene";
                 case TypeFilter::Script: return "Script";
+                case TypeFilter::Avatar: return "Avatar";
                 default: return "All Types";
             }
         }
@@ -2350,6 +2356,14 @@ namespace CCEngine
                     // 생성 HLSL은 저장 결과물이므로 더블클릭은 그래프 편집기를 여는 쪽이 맞다.
                     if (m_OnCodeAssetOpened)
                         m_OnCodeAssetOpened(entry.Path.string());
+                    break;
+                }
+                case AssetType::AnimatorController:
+                {
+                    // Animator Controller도 사용자가 편집하는 그래프 에셋이다.
+                    // 더블클릭은 단순 선택이 아니라 선택 오브젝트의 Animator 슬롯에 연결하고 Graph를 여는 동작으로 둔다.
+                    if (m_OnAnimatorControllerOpened)
+                        m_OnAnimatorControllerOpened(path);
                     break;
                 }
                 default:
@@ -2585,30 +2599,36 @@ namespace CCEngine
                 return false;
 
             std::filesystem::path controllerPath = MakeUniquePath(m_CurrentDirectory, "New Animator Controller", ".ccanimcontroller");
-            nlohmann::json data;
-            data["Version"] = 1;
-            data["Name"] = controllerPath.stem().string();
-            data["SourceGuid"] = "";
-            data["SourcePath"] = "";
-            data["SelectedClipIndex"] = 0;
-            data["SelectedClipName"] = "";
-            data["AutoPlay"] = true;
-            data["Loop"] = true;
-            data["Speed"] = 1.0f;
-            data["ActiveStateIndex"] = -1;
-            data["EntryStateIndex"] = -1;
-            data["States"] = nlohmann::json::array();
-            data["Parameters"] = nlohmann::json::array();
-            data["Transitions"] = nlohmann::json::array();
-
-            std::ofstream file(controllerPath);
-            if (!file.is_open())
+            AnimatorComponent animator;
+            animator.Layers.clear();
+            animator.Layers.push_back({});
+            animator.ActiveLayerIndex = 0;
+            if (!AnimatorControllerAsset::SaveToFile(controllerPath, animator))
                 return false;
-            file << data.dump(4);
 
             // Animator Controller는 상태머신 원본 에셋이다.
-            // 씬에는 컨트롤러 GUID만 저장하고, 노드/전이 데이터는 이 파일에서 읽도록 확장할 수 있다.
+            // 처음부터 같은 저장 헬퍼를 쓰면 생성 파일과 그래프 저장 파일의 구조가 어긋나지 않는다.
             AssetDatabase::EnsureMetaFile(controllerPath);
+            AssetDatabase::MarkDirty(m_RootDirectory);
+
+            m_TreeChildCache.clear();
+            Refresh(true);
+            return true;
+        }
+
+        bool AssetBrowserPanel::CreateAvatarInCurrentDirectory()
+        {
+            if (!IsPathInsideRoot(m_CurrentDirectory, true))
+                return false;
+
+            std::filesystem::path avatarPath = MakeUniquePath(m_CurrentDirectory, "New Avatar", ".ccavatar");
+            AvatarAsset avatar = AvatarAsset::CreateDefault(avatarPath.stem().string());
+            if (!avatar.SaveToFile(avatarPath))
+                return false;
+
+            // Avatar는 캐릭터 본 이름을 엔진 표준 Humanoid 이름으로 묶는 에셋이다.
+            // 씬/프리팹에는 파일 경로보다 GUID를 저장해야 이동/이름 변경 뒤에도 참조가 유지된다.
+            AssetDatabase::EnsureMetaFile(avatarPath);
             AssetDatabase::MarkDirty(m_RootDirectory);
 
             m_TreeChildCache.clear();
@@ -3196,6 +3216,8 @@ namespace CCEngine
                         queryTypeFilter = TypeFilter::Scene;
                     else if (typeText == "script" || typeText == "cs")
                         queryTypeFilter = TypeFilter::Script;
+                    else if (typeText == "avatar" || typeText == "avt")
+                        queryTypeFilter = TypeFilter::Avatar;
                     continue;
                 }
 
@@ -3252,12 +3274,11 @@ namespace CCEngine
                         case TypeFilter::Texture: return entry.Type == AssetType::Texture;
                         case TypeFilter::Model: return entry.Type == AssetType::Model || entry.Type == AssetType::FbxMesh;
                         case TypeFilter::Material: return entry.Type == AssetType::Material;
-                case TypeFilter::Shader: return entry.Type == AssetType::Shader || entry.Type == AssetType::VisualShader;
-                        // Animator Controller는 그래프/상태머신을 담는 에셋이라 Shader/Script와 다르게 독립 타입으로 다룬다.
-                        // 아직 전용 필터는 없으므로 텍스트 검색과 All Types에서 찾는다.
-                case TypeFilter::Prefab: return entry.Type == AssetType::Prefab;
+                        case TypeFilter::Shader: return entry.Type == AssetType::Shader || entry.Type == AssetType::VisualShader;
+                        case TypeFilter::Prefab: return entry.Type == AssetType::Prefab;
                         case TypeFilter::Scene: return entry.Type == AssetType::Scene;
                         case TypeFilter::Script: return entry.Type == AssetType::Script;
+                        case TypeFilter::Avatar: return entry.Type == AssetType::Avatar;
                         default: return true;
                     }
                 };
@@ -5217,6 +5238,14 @@ namespace CCEngine
                     iconColor = { 0.36f, 0.58f, 0.78f, 1.0f };
                     label = "VSH";
                     break;
+                case AssetType::AnimatorController:
+                    iconColor = { 0.38f, 0.54f, 0.78f, 1.0f };
+                    label = "ACT";
+                    break;
+                case AssetType::Avatar:
+                    iconColor = { 0.32f, 0.68f, 0.62f, 1.0f };
+                    label = "AVT";
+                    break;
                 case AssetType::FbxMesh:
                     iconColor = { 0.42f, 0.62f, 0.86f, 1.0f };
                     label = "MSH";
@@ -5240,7 +5269,7 @@ namespace CCEngine
                 return;
             }
 
-            if (entry.Type == AssetType::Model || entry.Type == AssetType::Prefab || entry.Type == AssetType::FbxMesh)
+            if (entry.Type == AssetType::Model || entry.Type == AssetType::Prefab || entry.Type == AssetType::FbxMesh || entry.Type == AssetType::Avatar)
             {
                 float body = size * 0.54f;
                 float bx = x + size * 0.23f;
@@ -6114,6 +6143,8 @@ namespace CCEngine
                             CreateVisualShaderInCurrentDirectory();
                         else if (command == "Create Animator Controller")
                             CreateAnimatorControllerInCurrentDirectory();
+                        else if (command == "Create Avatar")
+                            CreateAvatarInCurrentDirectory();
                         else if (command == "Refresh")
                             RefreshCurrentFolder(false);
                         else if (command == "Refresh All")
@@ -6313,6 +6344,7 @@ namespace CCEngine
                         m_ContextMenuItems.push_back("Create Shader");
                         m_ContextMenuItems.push_back("Create Visual Shader");
                         m_ContextMenuItems.push_back("Create Animator Controller");
+                        m_ContextMenuItems.push_back("Create Avatar");
                         m_ContextMenuItems.push_back("Refresh");
                         m_ContextMenuItems.push_back("Refresh All");
                     }

@@ -81,12 +81,14 @@ namespace CCEngine
                 SphereCollider3D,
                 CylinderCollider3D,
                 MeshCollider3D,
+                Audio,
                 Animator,
                 Script
             };
             void RebuildInspector();
             void BuildMaterialInspector();
             void BuildShaderInspector();
+            void BuildAvatarInspector();
             void BuildGenericAssetInspector();
             MaterialAsset BuildShaderPreviewMaterial(const std::filesystem::path& shaderPath) const;
             void MarkSelectedMaterialDirty();

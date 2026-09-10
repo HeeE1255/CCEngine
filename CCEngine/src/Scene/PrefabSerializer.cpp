@@ -1,4 +1,5 @@
 #include "Scene/PrefabSerializer.h"
+#include "Animation/AnimatorControllerAsset.h"
 #include "Core/AssetDatabase.h"
 #include "Scene/Components.h"
 #include "Renderer/MeshFactory.h"
@@ -45,6 +46,239 @@ namespace CCEngine
         DirectX::XMFLOAT4 JsonToFloat4(const nlohmann::json& data)
         {
             return { data[0].get<float>(), data[1].get<float>(), data[2].get<float>(), data[3].get<float>() };
+        }
+
+        nlohmann::json AnimatorEventsToJson(const AnimatorComponent::State& state)
+        {
+            nlohmann::json events = nlohmann::json::array();
+            for (const auto& event : state.Events)
+            {
+                events.push_back({
+                    { "TimeSeconds", event.TimeSeconds },
+                    { "FunctionName", event.FunctionName },
+                    { "StringArgument", event.StringArgument }
+                    });
+            }
+            return events;
+        }
+
+        void LoadAnimatorEvents(const nlohmann::json& stateData, AnimatorComponent::State& state)
+        {
+            state.Events.clear();
+            if (!stateData.contains("Events") || !stateData["Events"].is_array())
+                return;
+
+            for (const auto& eventData : stateData["Events"])
+            {
+                AnimatorComponent::State::AnimationEvent event;
+                event.TimeSeconds = eventData.value("TimeSeconds", 0.0f);
+                event.FunctionName = eventData.value("FunctionName", "OnAnimationEvent");
+                event.StringArgument = eventData.value("StringArgument", "");
+                state.Events.push_back(event);
+            }
+            state.SelectedEventIndex = std::clamp(state.SelectedEventIndex, -1, static_cast<int>(state.Events.size()) - 1);
+        }
+
+        nlohmann::json AnimatorPropertyTracksToJson(const AnimatorComponent::State& state)
+        {
+            nlohmann::json tracks = nlohmann::json::array();
+            for (const auto& track : state.PropertyTracks)
+            {
+                nlohmann::json keys = nlohmann::json::array();
+                for (const auto& key : track.Keys)
+                    keys.push_back({
+                        { "TimeSeconds", key.TimeSeconds },
+                        { "Value", Float4ToJson(key.Value) },
+                        { "Interpolation", static_cast<int>(key.Interp) }
+                        });
+
+                tracks.push_back({
+                    { "EntityPath", track.EntityPath },
+                    { "ComponentName", track.ComponentName },
+                    { "PropertyName", track.PropertyName },
+                    { "Type", static_cast<int>(track.Type) },
+                    { "Keys", keys }
+                    });
+            }
+            return tracks;
+        }
+
+        void LoadAnimatorPropertyTracks(const nlohmann::json& stateData, AnimatorComponent::State& state)
+        {
+            state.PropertyTracks.clear();
+            if (!stateData.contains("PropertyTracks") || !stateData["PropertyTracks"].is_array())
+                return;
+
+            for (const auto& trackData : stateData["PropertyTracks"])
+            {
+                AnimatorComponent::State::PropertyTrack track;
+                track.EntityPath = trackData.value("EntityPath", "");
+                track.ComponentName = trackData.value("ComponentName", "");
+                track.PropertyName = trackData.value("PropertyName", "");
+                track.Type = static_cast<AnimatorComponent::State::PropertyTrack::ValueType>(trackData.value("Type", 0));
+                if (trackData.contains("Keys") && trackData["Keys"].is_array())
+                {
+                    for (const auto& keyData : trackData["Keys"])
+                    {
+                        AnimatorComponent::State::PropertyKey key;
+                        key.TimeSeconds = keyData.value("TimeSeconds", 0.0f);
+                        if (keyData.contains("Value") && keyData["Value"].is_array())
+                            key.Value = JsonToFloat4(keyData["Value"]);
+                        key.Interp = static_cast<AnimatorComponent::State::PropertyKey::Interpolation>(keyData.value("Interpolation", 1));
+                        track.Keys.push_back(key);
+                    }
+                }
+                state.PropertyTracks.push_back(track);
+            }
+        }
+
+        nlohmann::json AnimatorStateToJson(const AnimatorComponent::State& state)
+        {
+            nlohmann::json children = nlohmann::json::array();
+            for (const auto& child : state.Tree.Children)
+            {
+                children.push_back({
+                    { "ClipIndex", child.ClipIndex },
+                    { "Threshold", child.Threshold },
+                    { "Position", Float2ToJson(child.Position) },
+                    { "Weight", child.Weight }
+                    });
+            }
+
+            return {
+                { "Name", state.Name },
+                { "Motion", static_cast<int>(state.Motion) },
+                { "ClipIndex", state.ClipIndex },
+                { "MotionGuid", state.MotionAssetGuid },
+                { "MotionPath", state.MotionPath },
+                { "Loop", state.Loop },
+                { "Speed", state.Speed },
+                { "ApplyRootMotion", state.ApplyRootMotion },
+                { "BlendTree", {
+                    { "Type", static_cast<int>(state.Tree.TreeType) },
+                    { "ParameterX", state.Tree.ParameterX },
+                    { "ParameterY", state.Tree.ParameterY },
+                    { "Children", children }
+                    } },
+                { "ImportSettings", {
+                    { "DisplayName", state.ImportSettings.DisplayName },
+                    { "UseCustomRange", state.ImportSettings.UseCustomRange },
+                    { "StartSeconds", state.ImportSettings.StartSeconds },
+                    { "EndSeconds", state.ImportSettings.EndSeconds },
+                    { "LoopPose", state.ImportSettings.LoopPose },
+                    { "BakeRootTransform", state.ImportSettings.BakeRootTransform },
+                    { "LockRootPositionXZ", state.ImportSettings.LockRootPositionXZ },
+                    { "LockRootPositionY", state.ImportSettings.LockRootPositionY },
+                    { "LockRootRotation", state.ImportSettings.LockRootRotation }
+                    } },
+                { "PropertyTracks", AnimatorPropertyTracksToJson(state) },
+                { "GraphPosition", Float2ToJson(state.GraphPosition) },
+                { "WriteDefaults", state.WriteDefaults },
+                { "Events", AnimatorEventsToJson(state) }
+            };
+        }
+
+        AnimatorComponent::State JsonToAnimatorState(const nlohmann::json& stateData)
+        {
+            AnimatorComponent::State state;
+            state.Name = stateData.value("Name", "State");
+            state.Motion = static_cast<AnimatorComponent::State::MotionType>(stateData.value("Motion", 0));
+            state.ClipIndex = stateData.value("ClipIndex", 0);
+            state.MotionAssetGuid = stateData.value("MotionGuid", "");
+            state.MotionPath = stateData.value("MotionPath", "");
+            state.Loop = stateData.value("Loop", true);
+            state.Speed = stateData.value("Speed", 1.0f);
+            state.ApplyRootMotion = stateData.value("ApplyRootMotion", false);
+            if (stateData.contains("BlendTree") && stateData["BlendTree"].is_object())
+            {
+                const auto& treeData = stateData["BlendTree"];
+                state.Tree.TreeType = static_cast<AnimatorComponent::State::BlendTree::Type>(treeData.value("Type", 0));
+                state.Tree.ParameterX = treeData.value("ParameterX", "");
+                state.Tree.ParameterY = treeData.value("ParameterY", "");
+                if (treeData.contains("Children") && treeData["Children"].is_array())
+                {
+                    for (const auto& childData : treeData["Children"])
+                    {
+                        AnimatorComponent::State::BlendTreeChild child;
+                        child.ClipIndex = childData.value("ClipIndex", 0);
+                        child.Threshold = childData.value("Threshold", 0.0f);
+                        if (childData.contains("Position"))
+                            child.Position = JsonToFloat2(childData["Position"]);
+                        child.Weight = childData.value("Weight", 1.0f);
+                        state.Tree.Children.push_back(child);
+                    }
+                }
+            }
+            if (stateData.contains("ImportSettings") && stateData["ImportSettings"].is_object())
+            {
+                const auto& importData = stateData["ImportSettings"];
+                state.ImportSettings.DisplayName = importData.value("DisplayName", "");
+                state.ImportSettings.UseCustomRange = importData.value("UseCustomRange", false);
+                state.ImportSettings.StartSeconds = importData.value("StartSeconds", 0.0f);
+                state.ImportSettings.EndSeconds = importData.value("EndSeconds", 0.0f);
+                state.ImportSettings.LoopPose = importData.value("LoopPose", false);
+                state.ImportSettings.BakeRootTransform = importData.value("BakeRootTransform", false);
+                state.ImportSettings.LockRootPositionXZ = importData.value("LockRootPositionXZ", false);
+                state.ImportSettings.LockRootPositionY = importData.value("LockRootPositionY", false);
+                state.ImportSettings.LockRootRotation = importData.value("LockRootRotation", false);
+            }
+            LoadAnimatorPropertyTracks(stateData, state);
+            if (stateData.contains("GraphPosition"))
+                state.GraphPosition = JsonToFloat2(stateData["GraphPosition"]);
+            state.WriteDefaults = stateData.value("WriteDefaults", true);
+            LoadAnimatorEvents(stateData, state);
+            return state;
+        }
+
+        nlohmann::json AnimatorTransitionToJson(const AnimatorComponent::Transition& transition)
+        {
+            nlohmann::json transitionData = {
+                { "FromStateIndex", transition.FromStateIndex },
+                { "ToStateIndex", transition.ToStateIndex },
+                { "HasExitTime", transition.HasExitTime },
+                { "ExitTime", transition.ExitTime },
+                { "BlendTime", transition.BlendTime },
+                { "CanInterrupt", transition.CanInterrupt },
+                { "Priority", transition.Priority },
+                { "ExitTargetStateIndex", transition.ExitTargetStateIndex },
+                { "Conditions", nlohmann::json::array() }
+            };
+            for (const auto& condition : transition.Conditions)
+            {
+                transitionData["Conditions"].push_back({
+                    { "ParameterName", condition.ParameterName },
+                    { "Mode", static_cast<int>(condition.Mode) },
+                    { "FloatValue", condition.FloatValue },
+                    { "BoolValue", condition.BoolValue }
+                    });
+            }
+            return transitionData;
+        }
+
+        AnimatorComponent::Transition JsonToAnimatorTransition(const nlohmann::json& transitionData)
+        {
+            AnimatorComponent::Transition transition;
+            transition.FromStateIndex = transitionData.value("FromStateIndex", -1);
+            transition.ToStateIndex = transitionData.value("ToStateIndex", -1);
+            transition.HasExitTime = transitionData.value("HasExitTime", false);
+            transition.ExitTime = transitionData.value("ExitTime", 1.0f);
+            transition.BlendTime = transitionData.value("BlendTime", 0.15f);
+            transition.CanInterrupt = transitionData.value("CanInterrupt", true);
+            transition.Priority = transitionData.value("Priority", 0);
+            transition.ExitTargetStateIndex = transitionData.value("ExitTargetStateIndex", -1);
+            if (transitionData.contains("Conditions") && transitionData["Conditions"].is_array())
+            {
+                for (const auto& conditionData : transitionData["Conditions"])
+                {
+                    AnimatorComponent::TransitionCondition condition;
+                    condition.ParameterName = conditionData.value("ParameterName", "");
+                    condition.Mode = static_cast<AnimatorComponent::TransitionCondition::CompareMode>(conditionData.value("Mode", 0));
+                    condition.FloatValue = conditionData.value("FloatValue", 0.0f);
+                    condition.BoolValue = conditionData.value("BoolValue", true);
+                    transition.Conditions.push_back(condition);
+                }
+            }
+            return transition;
         }
 
         std::shared_ptr<Mesh> CreateMeshForType(MeshComponent::MeshType type)
@@ -199,6 +433,19 @@ namespace CCEngine
                 entityData["CameraComponent"]["Primary"] = camera.Primary;
             }
 
+            if (entity.HasComponent<AudioComponent>())
+            {
+                auto& audio = entity.GetComponent<AudioComponent>();
+                auto& data = entityData["AudioComponent"];
+                data["AudioGuid"] = audio.AudioAssetGuid;
+                data["AudioPath"] = audio.AudioPath;
+                data["Volume"] = audio.Volume;
+                data["Pitch"] = audio.Pitch;
+                data["Loop"] = audio.Loop;
+                data["PlayOnStart"] = audio.PlayOnStart;
+                data["Enabled"] = audio.Enabled;
+            }
+
             if (entity.HasComponent<MeshComponent>())
             {
                 auto& mesh = entity.GetComponent<MeshComponent>();
@@ -341,6 +588,15 @@ namespace CCEngine
                 data["PreviewInEdit"] = animator.PreviewInEdit;
                 data["Loop"] = animator.Loop;
                 data["Speed"] = animator.Speed;
+                data["ApplyRootMotion"] = animator.ApplyRootMotion;
+                data["UpdateMode"] = static_cast<int>(animator.UpdateModeValue);
+                data["CullingMode"] = static_cast<int>(animator.CullingModeValue);
+                data["AvatarGuid"] = animator.AvatarGuid;
+                data["AvatarPath"] = animator.AvatarPath;
+                data["SourceAvatarGuid"] = animator.SourceAvatarGuid;
+                data["SourceAvatarPath"] = animator.SourceAvatarPath;
+                data["HumanoidRootBone"] = animator.HumanoidRootBone;
+                data["RetargetToHumanoid"] = animator.RetargetToHumanoid;
                 data["ActiveStateIndex"] = animator.ActiveStateIndex;
                 data["EntryStateIndex"] = animator.EntryStateIndex;
                 data["ActiveLayerIndex"] = animator.ActiveLayerIndex;
@@ -351,6 +607,7 @@ namespace CCEngine
                         { "Name", layer.Name },
                         { "Weight", layer.Weight },
                         { "MaskRootBone", layer.MaskRootBone },
+                        { "MaskBoneNames", layer.MaskBoneNames },
                         { "Blending", static_cast<int>(layer.Blending) },
                         { "Sync", layer.Sync },
                         { "IKPass", layer.IKPass },
@@ -364,51 +621,14 @@ namespace CCEngine
                     // 프리팹도 씬과 같은 Animator Layer 포맷을 쓴다.
                     // 그래야 여러 레이어를 가진 캐릭터 프리팹을 다시 불러와도 그래프 구조가 유지된다.
                     for (const auto& state : layer.States)
-                    {
-                        layerJson["States"].push_back({
-                            { "Name", state.Name },
-                            { "ClipIndex", state.ClipIndex },
-                            { "Loop", state.Loop },
-                            { "Speed", state.Speed },
-                            { "GraphPosition", Float2ToJson(state.GraphPosition) },
-                            { "WriteDefaults", state.WriteDefaults }
-                            });
-                    }
+                        layerJson["States"].push_back(AnimatorStateToJson(state));
                     for (const auto& transition : layer.Transitions)
-                    {
-                        nlohmann::json transitionData = {
-                            { "FromStateIndex", transition.FromStateIndex },
-                            { "ToStateIndex", transition.ToStateIndex },
-                            { "HasExitTime", transition.HasExitTime },
-                            { "ExitTime", transition.ExitTime },
-                            { "BlendTime", transition.BlendTime },
-                            { "Conditions", nlohmann::json::array() }
-                        };
-                        for (const auto& condition : transition.Conditions)
-                        {
-                            transitionData["Conditions"].push_back({
-                                { "ParameterName", condition.ParameterName },
-                                { "Mode", static_cast<int>(condition.Mode) },
-                                { "FloatValue", condition.FloatValue },
-                                { "BoolValue", condition.BoolValue }
-                                });
-                        }
-                        layerJson["Transitions"].push_back(transitionData);
-                    }
+                        layerJson["Transitions"].push_back(AnimatorTransitionToJson(transition));
                     data["Layers"].push_back(layerJson);
                 }
                 data["States"] = nlohmann::json::array();
                 for (const auto& state : animator.States)
-                {
-                    data["States"].push_back({
-                        { "Name", state.Name },
-                        { "ClipIndex", state.ClipIndex },
-                        { "Loop", state.Loop },
-                        { "Speed", state.Speed },
-                        { "GraphPosition", Float2ToJson(state.GraphPosition) },
-                        { "WriteDefaults", state.WriteDefaults }
-                        });
-                }
+                    data["States"].push_back(AnimatorStateToJson(state));
                 data["Parameters"] = nlohmann::json::array();
                 for (const auto& parameter : animator.Parameters)
                 {
@@ -421,26 +641,7 @@ namespace CCEngine
                 }
                 data["Transitions"] = nlohmann::json::array();
                 for (const auto& transition : animator.Transitions)
-                {
-                    nlohmann::json transitionData = {
-                        { "FromStateIndex", transition.FromStateIndex },
-                        { "ToStateIndex", transition.ToStateIndex },
-                        { "HasExitTime", transition.HasExitTime },
-                        { "ExitTime", transition.ExitTime },
-                        { "BlendTime", transition.BlendTime },
-                        { "Conditions", nlohmann::json::array() }
-                    };
-                    for (const auto& condition : transition.Conditions)
-                    {
-                        transitionData["Conditions"].push_back({
-                            { "ParameterName", condition.ParameterName },
-                            { "Mode", static_cast<int>(condition.Mode) },
-                            { "FloatValue", condition.FloatValue },
-                            { "BoolValue", condition.BoolValue }
-                            });
-                    }
-                    data["Transitions"].push_back(transitionData);
-                }
+                    data["Transitions"].push_back(AnimatorTransitionToJson(transition));
             }
 
             if (entity.HasComponent<ScriptComponent>())
@@ -496,6 +697,29 @@ namespace CCEngine
                 camera.NearClip = cameraData["NearClip"].get<float>();
                 camera.FarClip = cameraData["FarClip"].get<float>();
                 camera.Primary = cameraData["Primary"].get<bool>();
+            }
+
+            if (entityData.contains("AudioComponent"))
+            {
+                const auto& audioData = entityData["AudioComponent"];
+                auto& audio = entity.HasComponent<AudioComponent>() ? entity.GetComponent<AudioComponent>() : entity.AddComponent<AudioComponent>();
+                audio.AudioAssetGuid = audioData.value("AudioGuid", "");
+                audio.AudioPath = audioData.value("AudioPath", "");
+                if (!audio.AudioAssetGuid.empty())
+                {
+                    std::filesystem::path guidPath = AssetDatabase::GetPathFromGuid(audio.AudioAssetGuid);
+                    if (!guidPath.empty())
+                        audio.AudioPath = guidPath.string();
+                }
+                audio.Volume = std::clamp(audioData.value("Volume", 1.0f), 0.0f, 1.0f);
+                audio.Pitch = (std::max)(0.01f, audioData.value("Pitch", 1.0f));
+                audio.Loop = audioData.value("Loop", false);
+                audio.PlayOnStart = audioData.value("PlayOnStart", false);
+                audio.Enabled = audioData.value("Enabled", true);
+                audio.RuntimePlaying = false;
+                audio.RuntimePlayRequested = false;
+                audio.RuntimeStopRequested = false;
+                audio.RuntimeLastPlaySignal = 0.0f;
             }
 
             if (entityData.contains("MeshComponent"))
@@ -639,6 +863,15 @@ namespace CCEngine
                 animator.PreviewInEdit = data.value("PreviewInEdit", false);
                 animator.Loop = data.value("Loop", true);
                 animator.Speed = data.value("Speed", 1.0f);
+                animator.ApplyRootMotion = data.value("ApplyRootMotion", false);
+                animator.UpdateModeValue = static_cast<AnimatorComponent::UpdateMode>(data.value("UpdateMode", 0));
+                animator.CullingModeValue = static_cast<AnimatorComponent::CullingMode>(data.value("CullingMode", 1));
+                animator.AvatarGuid = data.value("AvatarGuid", "");
+                animator.AvatarPath = data.value("AvatarPath", "");
+                animator.SourceAvatarGuid = data.value("SourceAvatarGuid", "");
+                animator.SourceAvatarPath = data.value("SourceAvatarPath", "");
+                animator.HumanoidRootBone = data.value("HumanoidRootBone", "Hips");
+                animator.RetargetToHumanoid = data.value("RetargetToHumanoid", false);
                 animator.ActiveStateIndex = data.value("ActiveStateIndex", 0);
                 animator.EntryStateIndex = data.value("EntryStateIndex", animator.ActiveStateIndex);
                 animator.ActiveLayerIndex = data.value("ActiveLayerIndex", 0);
@@ -654,6 +887,7 @@ namespace CCEngine
                         layer.Name = layerData.value("Name", "Layer");
                         layer.Weight = layerData.value("Weight", 1.0f);
                         layer.MaskRootBone = layerData.value("MaskRootBone", "");
+                        layer.MaskBoneNames = layerData.value("MaskBoneNames", std::vector<std::string>{});
                         layer.Blending = static_cast<AnimatorComponent::Layer::BlendMode>(layerData.value("Blending", 0));
                         layer.Sync = layerData.value("Sync", false);
                         layer.IKPass = layerData.value("IKPass", false);
@@ -664,42 +898,12 @@ namespace CCEngine
                         if (layerData.contains("States") && layerData["States"].is_array())
                         {
                             for (const auto& stateData : layerData["States"])
-                            {
-                                AnimatorComponent::State state;
-                                state.Name = stateData.value("Name", "State");
-                                state.ClipIndex = stateData.value("ClipIndex", 0);
-                                state.Loop = stateData.value("Loop", true);
-                                state.Speed = stateData.value("Speed", 1.0f);
-                                if (stateData.contains("GraphPosition"))
-                                    state.GraphPosition = JsonToFloat2(stateData["GraphPosition"]);
-                                state.WriteDefaults = stateData.value("WriteDefaults", true);
-                                layer.States.push_back(state);
-                            }
+                                layer.States.push_back(JsonToAnimatorState(stateData));
                         }
                         if (layerData.contains("Transitions") && layerData["Transitions"].is_array())
                         {
                             for (const auto& transitionData : layerData["Transitions"])
-                            {
-                                AnimatorComponent::Transition transition;
-                                transition.FromStateIndex = transitionData.value("FromStateIndex", -1);
-                                transition.ToStateIndex = transitionData.value("ToStateIndex", -1);
-                                transition.HasExitTime = transitionData.value("HasExitTime", false);
-                                transition.ExitTime = transitionData.value("ExitTime", 1.0f);
-                                transition.BlendTime = transitionData.value("BlendTime", 0.15f);
-                                if (transitionData.contains("Conditions") && transitionData["Conditions"].is_array())
-                                {
-                                    for (const auto& conditionData : transitionData["Conditions"])
-                                    {
-                                        AnimatorComponent::TransitionCondition condition;
-                                        condition.ParameterName = conditionData.value("ParameterName", "");
-                                        condition.Mode = static_cast<AnimatorComponent::TransitionCondition::CompareMode>(conditionData.value("Mode", 0));
-                                        condition.FloatValue = conditionData.value("FloatValue", 0.0f);
-                                        condition.BoolValue = conditionData.value("BoolValue", true);
-                                        transition.Conditions.push_back(condition);
-                                    }
-                                }
-                                layer.Transitions.push_back(transition);
-                            }
+                                layer.Transitions.push_back(JsonToAnimatorTransition(transitionData));
                         }
                         animator.Layers.push_back(layer);
                     }
@@ -712,17 +916,7 @@ namespace CCEngine
                 if (data.contains("States") && data["States"].is_array())
                 {
                     for (const auto& stateData : data["States"])
-                    {
-                        AnimatorComponent::State state;
-                        state.Name = stateData.value("Name", "State");
-                        state.ClipIndex = stateData.value("ClipIndex", 0);
-                        state.Loop = stateData.value("Loop", true);
-                        state.Speed = stateData.value("Speed", 1.0f);
-                        if (stateData.contains("GraphPosition"))
-                            state.GraphPosition = JsonToFloat2(stateData["GraphPosition"]);
-                        state.WriteDefaults = stateData.value("WriteDefaults", true);
-                        animator.States.push_back(state);
-                    }
+                        animator.States.push_back(JsonToAnimatorState(stateData));
                 }
                 animator.Parameters.clear();
                 if (data.contains("Parameters") && data["Parameters"].is_array())
@@ -741,27 +935,7 @@ namespace CCEngine
                 if (data.contains("Transitions") && data["Transitions"].is_array())
                 {
                     for (const auto& transitionData : data["Transitions"])
-                    {
-                        AnimatorComponent::Transition transition;
-                        transition.FromStateIndex = transitionData.value("FromStateIndex", -1);
-                        transition.ToStateIndex = transitionData.value("ToStateIndex", -1);
-                        transition.HasExitTime = transitionData.value("HasExitTime", false);
-                        transition.ExitTime = transitionData.value("ExitTime", 1.0f);
-                        transition.BlendTime = transitionData.value("BlendTime", 0.15f);
-                        if (transitionData.contains("Conditions") && transitionData["Conditions"].is_array())
-                        {
-                            for (const auto& conditionData : transitionData["Conditions"])
-                            {
-                                AnimatorComponent::TransitionCondition condition;
-                                condition.ParameterName = conditionData.value("ParameterName", "");
-                                condition.Mode = static_cast<AnimatorComponent::TransitionCondition::CompareMode>(conditionData.value("Mode", 0));
-                                condition.FloatValue = conditionData.value("FloatValue", 0.0f);
-                                condition.BoolValue = conditionData.value("BoolValue", true);
-                                transition.Conditions.push_back(condition);
-                            }
-                        }
-                        animator.Transitions.push_back(transition);
-                    }
+                        animator.Transitions.push_back(JsonToAnimatorTransition(transitionData));
                 }
                 if (animator.States.empty())
                 {
@@ -777,11 +951,18 @@ namespace CCEngine
                     animator.Transitions.erase(
                         std::remove_if(animator.Transitions.begin(), animator.Transitions.end(), [&animator](const AnimatorComponent::Transition& transition)
                         {
-                            return transition.FromStateIndex < 0 || transition.ToStateIndex < 0 ||
-                                transition.FromStateIndex >= static_cast<int>(animator.States.size()) ||
-                                transition.ToStateIndex >= static_cast<int>(animator.States.size());
+                            const bool validFrom = transition.FromStateIndex == AnimatorComponent::Transition::AnyStateIndex ||
+                                (transition.FromStateIndex >= 0 && transition.FromStateIndex < static_cast<int>(animator.States.size()));
+                            const bool validTo = transition.ToStateIndex == AnimatorComponent::Transition::ExitStateIndex ||
+                                (transition.ToStateIndex >= 0 && transition.ToStateIndex < static_cast<int>(animator.States.size()));
+                            return !validFrom || !validTo;
                         }),
                         animator.Transitions.end());
+                    for (auto& transition : animator.Transitions)
+                    {
+                        if (transition.ExitTargetStateIndex >= static_cast<int>(animator.States.size()))
+                            transition.ExitTargetStateIndex = -1;
+                    }
                     animator.SelectedTransitionIndex = std::clamp(animator.SelectedTransitionIndex, -1, static_cast<int>(animator.Transitions.size() - 1));
                 }
                 if (!animator.Layers.empty() && animator.Layers[0].States.empty() && !animator.States.empty())
@@ -809,11 +990,18 @@ namespace CCEngine
                     layer.Transitions.erase(
                         std::remove_if(layer.Transitions.begin(), layer.Transitions.end(), [&layer](const AnimatorComponent::Transition& transition)
                         {
-                            return transition.FromStateIndex < 0 || transition.ToStateIndex < 0 ||
-                                transition.FromStateIndex >= static_cast<int>(layer.States.size()) ||
-                                transition.ToStateIndex >= static_cast<int>(layer.States.size());
+                            const bool validFrom = transition.FromStateIndex == AnimatorComponent::Transition::AnyStateIndex ||
+                                (transition.FromStateIndex >= 0 && transition.FromStateIndex < static_cast<int>(layer.States.size()));
+                            const bool validTo = transition.ToStateIndex == AnimatorComponent::Transition::ExitStateIndex ||
+                                (transition.ToStateIndex >= 0 && transition.ToStateIndex < static_cast<int>(layer.States.size()));
+                            return !validFrom || !validTo;
                         }),
                         layer.Transitions.end());
+                    for (auto& transition : layer.Transitions)
+                    {
+                        if (transition.ExitTargetStateIndex >= static_cast<int>(layer.States.size()))
+                            transition.ExitTargetStateIndex = -1;
+                    }
                     layer.SelectedTransitionIndex = std::clamp(layer.SelectedTransitionIndex, -1, static_cast<int>(layer.Transitions.size() - 1));
                 }
                 if (!animator.Layers.empty())
@@ -823,6 +1011,20 @@ namespace CCEngine
                     animator.ActiveStateIndex = animator.Layers[0].ActiveStateIndex;
                     animator.EntryStateIndex = animator.Layers[0].EntryStateIndex;
                     animator.SelectedTransitionIndex = animator.Layers[0].SelectedTransitionIndex;
+                }
+
+                std::filesystem::path controllerPath = animator.ControllerPath;
+                if (!animator.ControllerAssetGuid.empty())
+                {
+                    std::filesystem::path guidPath = AssetDatabase::GetPathFromGuid(animator.ControllerAssetGuid);
+                    if (!guidPath.empty())
+                        controllerPath = guidPath;
+                }
+                if (!controllerPath.empty())
+                {
+                    // 프리팹도 Controller 파일을 공유할 수 있어야 한다.
+                    // 저장된 복사본보다 Controller 에셋을 우선 적용하면 여러 인스턴스가 같은 상태머신을 바라본다.
+                    AnimatorControllerAsset::LoadFromFile(controllerPath, animator);
                 }
             }
 

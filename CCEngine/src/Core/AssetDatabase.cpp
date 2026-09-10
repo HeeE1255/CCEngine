@@ -116,6 +116,8 @@ namespace CCEngine
                 case AssetKind::Material: return "MaterialImporter";
                 case AssetKind::Shader: return "ShaderImporter";
                 case AssetKind::VisualShader: return "VisualShaderImporter";
+                case AssetKind::AnimatorController: return "AnimatorControllerImporter";
+                case AssetKind::Avatar: return "AvatarImporter";
                 case AssetKind::Model: return "ModelImporter";
                 case AssetKind::Texture: return "TextureImporter";
                 case AssetKind::Script: return "ScriptImporter";
@@ -132,6 +134,8 @@ namespace CCEngine
                 case AssetKind::Material:
                 case AssetKind::Shader:
                 case AssetKind::VisualShader:
+                case AssetKind::AnimatorController:
+                case AssetKind::Avatar:
                 case AssetKind::Model:
                 case AssetKind::Texture:
                 case AssetKind::Script:
@@ -695,6 +699,53 @@ namespace CCEngine
                     report);
             }
 
+            if (object.contains("AnimatorComponent") && object["AnimatorComponent"].is_object())
+            {
+                ValidateGuidPathPair(
+                    object["AnimatorComponent"],
+                    "ControllerGuid",
+                    "ControllerPath",
+                    AssetKind::AnimatorController,
+                    sourceFile,
+                    jsonLocation + "/AnimatorComponent",
+                    "Animator Controller",
+                    repairFiles,
+                    report);
+
+                ValidateGuidPathPair(
+                    object["AnimatorComponent"],
+                    "SourceGuid",
+                    "SourcePath",
+                    AssetKind::Model,
+                    sourceFile,
+                    jsonLocation + "/AnimatorComponent",
+                    "Animator Source",
+                    repairFiles,
+                    report);
+
+                ValidateGuidPathPair(
+                    object["AnimatorComponent"],
+                    "AvatarGuid",
+                    "AvatarPath",
+                    AssetKind::Avatar,
+                    sourceFile,
+                    jsonLocation + "/AnimatorComponent",
+                    "Animator Avatar",
+                    repairFiles,
+                    report);
+
+                ValidateGuidPathPair(
+                    object["AnimatorComponent"],
+                    "SourceAvatarGuid",
+                    "SourceAvatarPath",
+                    AssetKind::Avatar,
+                    sourceFile,
+                    jsonLocation + "/AnimatorComponent",
+                    "Animator Source Avatar",
+                    repairFiles,
+                    report);
+            }
+
             if (object.contains("Material") && object["Material"].is_object())
             {
                 ValidateGuidPathPair(
@@ -756,7 +807,9 @@ namespace CCEngine
             ++report.FilesScanned;
             size_t previousIssues = report.Issues.size();
 
-            const std::string extension = filePath.extension().string();
+            std::string extension = filePath.extension().string();
+            std::transform(extension.begin(), extension.end(), extension.begin(),
+                [](unsigned char c) { return (char)std::tolower(c); });
             if (extension == ".ccproject")
             {
                 ValidateGuidPathPair(
@@ -767,6 +820,56 @@ namespace CCEngine
                     filePath,
                     "/ProjectSettings",
                     "StartScene",
+                    repairFiles,
+                    report);
+            }
+            else if (extension == ".ccanimcontroller")
+            {
+                ValidateGuidPathPair(
+                    data,
+                    "SourceGuid",
+                    "SourcePath",
+                    AssetKind::Model,
+                    filePath,
+                    "/AnimatorController",
+                    "Animator Source",
+                    repairFiles,
+                    report);
+
+                ValidateGuidPathPair(
+                    data,
+                    "AvatarGuid",
+                    "AvatarPath",
+                    AssetKind::Avatar,
+                    filePath,
+                    "/AnimatorController",
+                    "Animator Avatar",
+                    repairFiles,
+                    report);
+
+                ValidateGuidPathPair(
+                    data,
+                    "SourceAvatarGuid",
+                    "SourceAvatarPath",
+                    AssetKind::Avatar,
+                    filePath,
+                    "/AnimatorController",
+                    "Animator Source Avatar",
+                    repairFiles,
+                    report);
+
+                ValidateSceneOrPrefabObject(data, filePath, "", repairFiles, report);
+            }
+            else if (extension == ".ccavatar")
+            {
+                ValidateGuidPathPair(
+                    data,
+                    "SourceModelGuid",
+                    "SourceModelPath",
+                    AssetKind::Model,
+                    filePath,
+                    "/Avatar",
+                    "Avatar Source Model",
                     repairFiles,
                     report);
             }
@@ -1037,6 +1140,8 @@ namespace CCEngine
         if (extension == ".ccmat") return AssetKind::Material;
         if (extension == ".hlsl" || extension == ".ccshader") return AssetKind::Shader;
         if (extension == ".ccvshader") return AssetKind::VisualShader;
+        if (extension == ".ccanimcontroller") return AssetKind::AnimatorController;
+        if (extension == ".ccavatar") return AssetKind::Avatar;
         if (extension == ".fbx" || extension == ".obj" || extension == ".gltf" || extension == ".glb") return AssetKind::Model;
         if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".tga") return AssetKind::Texture;
         if (extension == ".cs") return AssetKind::Script;
@@ -1415,7 +1520,7 @@ namespace CCEngine
                 std::transform(extension.begin(), extension.end(), extension.begin(),
                     [](unsigned char c) { return (char)std::tolower(c); });
 
-                if (extension == ".ccscene" || extension == ".ccprefab" || extension == ".ccmat" || extension == ".hlsl" || extension == ".ccshader" || extension == ".ccvshader")
+                if (extension == ".ccscene" || extension == ".ccprefab" || extension == ".ccmat" || extension == ".hlsl" || extension == ".ccshader" || extension == ".ccvshader" || extension == ".ccanimcontroller" || extension == ".ccavatar")
                     filesToValidate.push_back(entry.path());
             }
         }
@@ -1467,7 +1572,7 @@ namespace CCEngine
 
         for (const auto& [guid, metadata] : s_GuidToMetadata)
         {
-            if (metadata.Type == AssetKind::Scene || metadata.Type == AssetKind::Prefab)
+            if (metadata.Type == AssetKind::Scene || metadata.Type == AssetKind::Prefab || metadata.Type == AssetKind::AnimatorController || metadata.Type == AssetKind::Avatar)
                 addFile(metadata.SourcePath);
         }
 
@@ -1494,6 +1599,8 @@ namespace CCEngine
             case AssetKind::Material: return "Material";
             case AssetKind::Shader: return "Shader";
             case AssetKind::VisualShader: return "VisualShader";
+            case AssetKind::AnimatorController: return "AnimatorController";
+            case AssetKind::Avatar: return "Avatar";
             case AssetKind::Model: return "Model";
             case AssetKind::Texture: return "Texture";
             case AssetKind::Script: return "Script";
@@ -1508,6 +1615,8 @@ namespace CCEngine
         if (text == "Material") return AssetKind::Material;
         if (text == "Shader") return AssetKind::Shader;
         if (text == "VisualShader") return AssetKind::VisualShader;
+        if (text == "AnimatorController") return AssetKind::AnimatorController;
+        if (text == "Avatar") return AssetKind::Avatar;
         if (text == "Model") return AssetKind::Model;
         if (text == "Texture") return AssetKind::Texture;
         if (text == "Script") return AssetKind::Script;

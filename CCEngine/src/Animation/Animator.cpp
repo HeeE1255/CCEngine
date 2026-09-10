@@ -33,6 +33,28 @@ namespace CCEngine
                 DirectX::XMMatrixTranslation(parts.Translation.x, parts.Translation.y, parts.Translation.z);
         }
 
+        LocalTransformParts LerpLocalTransform(const LocalTransformParts& from, const LocalTransformParts& to, float alpha)
+        {
+            alpha = std::clamp(alpha, 0.0f, 1.0f);
+
+            LocalTransformParts result;
+            result.Translation = {
+                from.Translation.x + (to.Translation.x - from.Translation.x) * alpha,
+                from.Translation.y + (to.Translation.y - from.Translation.y) * alpha,
+                from.Translation.z + (to.Translation.z - from.Translation.z) * alpha
+            };
+            result.Scale = {
+                from.Scale.x + (to.Scale.x - from.Scale.x) * alpha,
+                from.Scale.y + (to.Scale.y - from.Scale.y) * alpha,
+                from.Scale.z + (to.Scale.z - from.Scale.z) * alpha
+            };
+
+            DirectX::XMVECTOR fromRot = DirectX::XMLoadFloat4(&from.Rotation);
+            DirectX::XMVECTOR toRot = DirectX::XMLoadFloat4(&to.Rotation);
+            DirectX::XMStoreFloat4(&result.Rotation, DirectX::XMQuaternionSlerp(fromRot, toRot, alpha));
+            return result;
+        }
+
         LocalTransformParts DecomposeLocalTransform(DirectX::XMMATRIX matrix)
         {
             LocalTransformParts parts;
@@ -162,7 +184,7 @@ namespace CCEngine
     // =========================================================
     // 1. BoneAnimChannel (현재 시간에 맞는 프레임 찾기)
     // =========================================================
-    void BoneAnimChannel::UpdateLocalTransform(float currentTime, DirectX::XMFLOAT3& outPos, DirectX::XMFLOAT4& outRot, DirectX::XMFLOAT3& outScale)
+    void BoneAnimChannel::UpdateLocalTransform(float currentTime, DirectX::XMFLOAT3& outPos, DirectX::XMFLOAT4& outRot, DirectX::XMFLOAT3& outScale) const
     {
         if (!PositionKeys.empty())
         {
@@ -298,10 +320,30 @@ namespace CCEngine
     void Animator::StopAnimation()
     {
         m_CurrentClip.reset();
+        m_BlendSourceClip.reset();
         m_LegacyCurrentClip = nullptr;
         m_CurrentTime = 0.0f;
+        m_BlendSourceTime = 0.0f;
+        m_BlendAlpha = 1.0f;
         m_Playing = false;
+        m_HasBlendSource = false;
         m_StaticPoseInitialized = false;
+    }
+
+    void Animator::SetBlendSource(const std::shared_ptr<AnimationClip>& clip, float time, float alpha)
+    {
+        m_BlendSourceClip = clip;
+        m_BlendSourceTime = time;
+        m_BlendAlpha = std::clamp(alpha, 0.0f, 1.0f);
+        m_HasBlendSource = m_BlendSourceClip && m_BlendAlpha < 1.0f;
+    }
+
+    void Animator::ClearBlendSource()
+    {
+        m_BlendSourceClip.reset();
+        m_BlendSourceTime = 0.0f;
+        m_BlendAlpha = 1.0f;
+        m_HasBlendSource = false;
     }
 
     void Animator::SetWriteDefaults(bool writeDefaults)
@@ -317,6 +359,36 @@ namespace CCEngine
         }
     }
 
+    void Animator::SetCurrentTime(float timeTicks)
+    {
+        AnimationClip* currentClip = m_CurrentClip ? m_CurrentClip.get() : m_LegacyCurrentClip;
+        if (currentClip && currentClip->GetDuration() > 0.0f)
+            m_CurrentTime = std::clamp(timeTicks, 0.0f, currentClip->GetDuration());
+        else
+            m_CurrentTime = (std::max)(0.0f, timeTicks);
+
+        // 시간만 바꾸고 포즈 캐시를 그대로 두면 스크럽 직후 이전 프레임 포즈가 남을 수 있다.
+        m_StaticPoseInitialized = false;
+    }
+
+    void Animator::SetPoseOverride(const std::unordered_map<std::string, BonePose>& pose)
+    {
+        // State Machine이 여러 클립을 섞은 뒤 만든 최종 포즈다.
+        // 기존 단일 클립 재생기는 그대로 두고, 계산된 포즈만 이 경로로 밀어 넣는다.
+        m_PoseOverride = pose;
+        m_Playing = false;
+        m_CurrentClip.reset();
+        m_BlendSourceClip.reset();
+        m_LegacyCurrentClip = nullptr;
+        m_HasBlendSource = false;
+        m_StaticPoseInitialized = false;
+    }
+
+    void Animator::ClearPoseOverride()
+    {
+        m_PoseOverride.clear();
+    }
+
     void Animator::Update(float deltaTime, Model* model, Scene* scene)
     {
         Update(deltaTime, model, scene, nullptr);
@@ -325,6 +397,12 @@ namespace CCEngine
     void Animator::Update(float deltaTime, Model* model, Scene* scene, const std::unordered_map<std::string, entt::entity>* nodeEntityMap)
     {
         AnimationClip* currentClip = m_CurrentClip ? m_CurrentClip.get() : m_LegacyCurrentClip;
+        if (!m_PoseOverride.empty())
+        {
+            CalculateBoneTransform(model->GetRootNode(), DirectX::XMMatrixIdentity(), model, scene, nodeEntityMap);
+            return;
+        }
+
         if (currentClip && m_Playing)
         {
             // 클립 시간은 초가 아니라 FBX 내부 tick 단위다.
@@ -438,15 +516,39 @@ namespace CCEngine
             basePose = DecomposeLocalTransform(previousLocal->second);
         }
 
-        if (channel)
-        {
-            // 애니메이션 재생 중에는 키프레임 데이터를 사용합니다.
-            DirectX::XMFLOAT3 pos = basePose.Translation;
-            DirectX::XMFLOAT4 rot = basePose.Rotation;
-            DirectX::XMFLOAT3 scale = basePose.Scale;
-            channel->UpdateLocalTransform(m_CurrentTime, pos, rot, scale);
+        BoneAnimChannel* blendSourceChannel = (m_HasBlendSource && m_BlendSourceClip)
+            ? m_BlendSourceClip->GetBoneChannel(nodeName)
+            : nullptr;
 
-            nodeTransform = DirectX::XMMatrixScaling(scale.x, scale.y, scale.z) * DirectX::XMMatrixRotationQuaternion(DirectX::XMLoadFloat4(&rot)) * DirectX::XMMatrixTranslation(pos.x, pos.y, pos.z);
+        auto poseOverride = m_PoseOverride.find(nodeName);
+        if (poseOverride != m_PoseOverride.end())
+        {
+            LocalTransformParts currentPose = basePose;
+            if (poseOverride->second.HasTranslation)
+                currentPose.Translation = poseOverride->second.Translation;
+            if (poseOverride->second.HasRotation)
+                currentPose.Rotation = poseOverride->second.Rotation;
+            if (poseOverride->second.HasScale)
+                currentPose.Scale = poseOverride->second.Scale;
+            nodeTransform = ComposeLocalTransform(currentPose);
+        }
+        else if (channel || blendSourceChannel)
+        {
+            LocalTransformParts currentPose = basePose;
+            if (channel)
+                channel->UpdateLocalTransform(m_CurrentTime, currentPose.Translation, currentPose.Rotation, currentPose.Scale);
+
+            if (blendSourceChannel)
+            {
+                LocalTransformParts sourcePose = basePose;
+                blendSourceChannel->UpdateLocalTransform(m_BlendSourceTime, sourcePose.Translation, sourcePose.Rotation, sourcePose.Scale);
+
+                // Cross Fade는 이전 클립과 다음 클립을 같은 본 이름으로 샘플링한 뒤 섞는다.
+                // 새 클립에 없는 본도 이전 클립에서 기본/직전 포즈로 빠져나와야 전환 순간에 관절이 튀지 않는다.
+                currentPose = LerpLocalTransform(sourcePose, currentPose, m_BlendAlpha);
+            }
+
+            nodeTransform = ComposeLocalTransform(currentPose);
         }
         else
         {

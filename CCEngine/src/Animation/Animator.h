@@ -34,7 +34,17 @@ namespace CCEngine
         std::vector<std::pair<float, DirectX::XMFLOAT4>> RotationKeys;
         std::vector<std::pair<float, DirectX::XMFLOAT3>> ScaleKeys;
 
-        void UpdateLocalTransform(float currentTime, DirectX::XMFLOAT3& outPos, DirectX::XMFLOAT4& outRot, DirectX::XMFLOAT3& outScale);
+        void UpdateLocalTransform(float currentTime, DirectX::XMFLOAT3& outPos, DirectX::XMFLOAT4& outRot, DirectX::XMFLOAT3& outScale) const;
+    };
+
+    struct BonePose
+    {
+        DirectX::XMFLOAT3 Translation = { 0.0f, 0.0f, 0.0f };
+        DirectX::XMFLOAT4 Rotation = { 0.0f, 0.0f, 0.0f, 1.0f };
+        DirectX::XMFLOAT3 Scale = { 1.0f, 1.0f, 1.0f };
+        bool HasTranslation = false;
+        bool HasRotation = false;
+        bool HasScale = false;
     };
 
     // 2. 애니메이션 클립 (예: 달리기, 걷기)
@@ -55,6 +65,7 @@ namespace CCEngine
         float GetDuration() const { return m_Duration; }
         float GetDurationSeconds() const { return m_TicksPerSecond > 0.0f ? m_Duration / m_TicksPerSecond : 0.0f; }
         BoneAnimChannel* GetBoneChannel(const std::string& nodeName);
+        const std::map<std::string, BoneAnimChannel>& GetChannels() const { return m_Channels; }
 
     private:
         AnimationClip() = default;
@@ -80,8 +91,14 @@ namespace CCEngine
         void SetLoop(bool loop) { m_Loop = loop; }
         void SetSpeed(float speed) { m_Speed = speed; }
         void SetWriteDefaults(bool writeDefaults);
+        void SetBlendSource(const std::shared_ptr<AnimationClip>& clip, float time, float alpha);
+        void ClearBlendSource();
         bool IsPlaying() const { return m_Playing; }
         AnimationClip* GetCurrentClip() const { return m_CurrentClip.get(); }
+        float GetCurrentTime() const { return m_CurrentTime; }
+        void SetCurrentTime(float timeTicks);
+        void SetPoseOverride(const std::unordered_map<std::string, BonePose>& pose);
+        void ClearPoseOverride();
         void Update(float deltaTime, Model* model, Scene* scene);
         void Update(float deltaTime, Model* model, Scene* scene, const std::unordered_map<std::string, entt::entity>* nodeEntityMap);
 
@@ -106,15 +123,20 @@ namespace CCEngine
 
         std::unordered_map<std::string, DirectX::XMMATRIX> m_GlobalBoneMatrices;
         std::unordered_map<std::string, DirectX::XMMATRIX> m_LastLocalNodeTransforms;
+        std::unordered_map<std::string, BonePose> m_PoseOverride;
         std::unordered_map<entt::entity, TransformSnapshot> m_LastStaticPose;
         std::vector<DirectX::XMMATRIX> m_FinalBoneMatrices;
         std::shared_ptr<AnimationClip> m_CurrentClip;
+        std::shared_ptr<AnimationClip> m_BlendSourceClip;
         AnimationClip* m_LegacyCurrentClip = nullptr;
         float m_CurrentTime = 0.0f;
+        float m_BlendSourceTime = 0.0f;
+        float m_BlendAlpha = 1.0f;
         float m_Speed = 1.0f;
         bool m_Loop = true;
         bool m_WriteDefaults = true;
         bool m_Playing = false;
+        bool m_HasBlendSource = false;
         bool m_StaticPoseInitialized = false;
     };
 }

@@ -2,6 +2,7 @@
 #include <DirectXMath.h>
 #include <string>
 #include <unordered_map>
+#include <vector>
 #include <box2d/id.h>
 #include "entt.hpp"
 #include "Renderer/Mesh.h"
@@ -264,6 +265,32 @@ namespace CCEngine
         }
     };
 
+    struct AudioComponent
+    {
+        // 실제 소리 출력 장치는 후속 Audio Backend가 담당한다.
+        // 이 컴포넌트는 Unity AudioSource처럼 "어떤 클립을 어떤 볼륨/피치로 재생할지"라는 씬 데이터를 먼저 소유한다.
+        std::string AudioAssetGuid;
+        std::string AudioPath;
+        float Volume = 1.0f;
+        float Pitch = 1.0f;
+        bool Loop = false;
+        bool PlayOnStart = false;
+        bool Enabled = true;
+
+        // 아래 Runtime 값은 저장하지 않는다. 애니메이션 Play Trigger가 0->1로 바뀌는 순간만 재생 요청을 만들기 위한 실행 상태다.
+        bool RuntimePlaying = false;
+        bool RuntimePlayRequested = false;
+        bool RuntimeStopRequested = false;
+        float RuntimeLastPlaySignal = 0.0f;
+
+        AudioComponent() = default;
+        AudioComponent(const AudioComponent& other)
+            : AudioAssetGuid(other.AudioAssetGuid), AudioPath(other.AudioPath), Volume(other.Volume), Pitch(other.Pitch),
+              Loop(other.Loop), PlayOnStart(other.PlayOnStart), Enabled(other.Enabled)
+        {
+        }
+    };
+
     struct ModelComponent
     {
         std::shared_ptr<Model> TargetModel;
@@ -288,17 +315,107 @@ namespace CCEngine
 
     struct AnimatorComponent
     {
+        enum class UpdateMode
+        {
+            Normal = 0,
+            AnimatePhysics,
+            UnscaledTime
+        };
+
+        enum class CullingMode
+        {
+            AlwaysAnimate = 0,
+            CullUpdateTransforms,
+            CullCompletely
+        };
+
         struct State
         {
+            enum class MotionType { Clip = 0, BlendTree, PropertyClip };
+
+            struct AnimationEvent
+            {
+                float TimeSeconds = 0.0f;
+                std::string FunctionName = "OnAnimationEvent";
+                std::string StringArgument;
+            };
+
+            struct BlendTreeChild
+            {
+                int ClipIndex = 0;
+                float Threshold = 0.0f;
+                DirectX::XMFLOAT2 Position = { 0.0f, 0.0f };
+                float Weight = 1.0f;
+            };
+
+            struct BlendTree
+            {
+                enum class Type { Direct = 0, OneD, TwoD, TwoDFreeform };
+                Type TreeType = Type::Direct;
+                std::string ParameterX;
+                std::string ParameterY;
+                std::vector<BlendTreeChild> Children;
+            };
+
+            struct ClipImportSettings
+            {
+                std::string DisplayName;
+                // FBX 파일 안의 긴 원본 클립 이름 대신 에디터에서 보여줄 이름이다.
+                bool UseCustomRange = false;
+                // 한 클립 전체가 아니라 시작/끝 구간만 State에서 쓰고 싶을 때 켠다.
+                float StartSeconds = 0.0f;
+                float EndSeconds = 0.0f;
+                bool LoopPose = false;
+                bool BakeRootTransform = false;
+                bool LockRootPositionXZ = false;
+                bool LockRootPositionY = false;
+                bool LockRootRotation = false;
+            };
+
+            struct PropertyKey
+            {
+                enum class Interpolation { Constant = 0, Linear, EaseInOut };
+
+                float TimeSeconds = 0.0f;
+                DirectX::XMFLOAT4 Value = { 0.0f, 0.0f, 0.0f, 0.0f };
+                Interpolation Interp = Interpolation::Linear;
+                bool Selected = false;
+            };
+
+            struct PropertyTrack
+            {
+                enum class ValueType { Float = 0, Bool, Float3, Float4 };
+
+                // 본 애니메이션이 아닌 일반 컴포넌트 값을 시간에 따라 바꾸는 경로다.
+                // 예: Transform.Position, Light.Intensity, Camera.FOV.
+                std::string EntityPath;
+                std::string ComponentName;
+                std::string PropertyName;
+                ValueType Type = ValueType::Float;
+                std::vector<PropertyKey> Keys;
+            };
+
             std::string Name = "State";
+            // State는 Motion 하나를 가진다. Clip, Blend Tree, Property Clip을 같은 슬롯에서 다루기 위한 기준값이다.
+            MotionType Motion = MotionType::Clip;
             int ClipIndex = 0;
+            std::string MotionAssetGuid;
+            std::string MotionPath;
             bool Loop = true;
             float Speed = 1.0f;
+            bool ApplyRootMotion = false;
+            BlendTree Tree;
+            ClipImportSettings ImportSettings;
+            std::vector<PropertyTrack> PropertyTracks;
             // 그래프 에디터에서 보이는 노드 위치다. 애니메이션 재생값과 분리해 UI 배치만 저장한다.
             DirectX::XMFLOAT2 GraphPosition = { 260.0f, 180.0f };
             // true면 클립에 없는 본/값을 원본 기본 포즈로 되돌린다.
             // false면 클립이 건드리는 값만 쓰고 나머지는 직전 포즈를 유지한다.
             bool WriteDefaults = true;
+            // 이벤트는 클립 시간 위에 찍는 마커다.
+            // 런타임은 재생 시간이 이 지점을 지나갈 때 한 번만 처리하고, 저장 파일에는 마커 정보만 남긴다.
+            std::vector<AnimationEvent> Events;
+            int SelectedEventIndex = -1;
         };
 
         struct Parameter
@@ -321,13 +438,21 @@ namespace CCEngine
 
         struct Transition
         {
+            static constexpr int AnyStateIndex = -2;
+            static constexpr int ExitStateIndex = -3;
+
             int FromStateIndex = -1;
             int ToStateIndex = -1;
             bool HasExitTime = false;
             float ExitTime = 1.0f;
             float BlendTime = 0.15f;
+            bool CanInterrupt = true;
+            int Priority = 0;
+            int ExitTargetStateIndex = -1;
             // 전이는 상태 인덱스와 파라미터 이름을 같이 저장한다.
             // 상태 이름은 바뀔 수 있고, 파라미터 이름은 Rename 시 조건도 같이 갱신해야 한다.
+            // ExitTargetStateIndex는 하위 상태머신이 생겼을 때 Exit가 부모 그래프의 어느 State로 나갈지 남겨두는 값이다.
+            // 값이 -1이면 지금처럼 레이어를 종료하고, 유효한 State 인덱스면 그 State로 이어서 전환한다.
             std::vector<TransitionCondition> Conditions;
         };
 
@@ -338,13 +463,30 @@ namespace CCEngine
             std::string Name = "Base Layer";
             float Weight = 1.0f;
             std::string MaskRootBone;
+            // MaskRootBone 하나로 부족할 때 특정 본 이름이나 본 경로를 직접 넣는 목록이다.
+            std::vector<std::string> MaskBoneNames;
             BlendMode Blending = BlendMode::Override;
             bool Sync = false;
             bool IKPass = false;
+            // MaskRootBone이 비어 있으면 전체 본을 대상으로 한다.
+            // 값이 있으면 그 본 아래만 레이어 포즈가 영향을 준다.
             bool Visible = true;
             int ActiveStateIndex = -1;
             int EntryStateIndex = -1;
             int SelectedTransitionIndex = -1;
+            bool Exited = false;
+            // 아래 값들은 저장용 설정이 아니라 재생 중에만 쓰는 상태다.
+            // State 전환과 Cross Fade는 이전 State 시간과 새 State 시간을 따로 들고 있어야 자연스럽게 섞을 수 있다.
+            int PreviousStateIndex = -1;
+            float StateTime = 0.0f;
+            float PreviousLoopTime = 0.0f;
+            float PreviousStateTime = 0.0f;
+            float BlendElapsed = 0.0f;
+            float BlendDuration = 0.0f;
+            std::vector<int> FiredEventIndices;
+            // 전환이 시작된 순간의 이전 클립을 붙잡아 둔다.
+            // 매 프레임 파일에서 다시 찾지 않아야 Blend 중 프레임 끊김과 클립 교체 흔들림을 막을 수 있다.
+            std::shared_ptr<AnimationClip> PreviousRuntimeClip;
             // 레이어마다 별도 상태 그래프를 가진다.
             // 이렇게 해야 새 레이어를 눌렀을 때 기존 레이어의 노드를 공유하지 않고 독립적으로 편집할 수 있다.
             std::vector<State> States;
@@ -362,13 +504,28 @@ namespace CCEngine
         bool PreviewInEdit = false;
         bool Loop = true;
         float Speed = 1.0f;
+        bool ApplyRootMotion = false;
+        UpdateMode UpdateModeValue = UpdateMode::Normal;
+        CullingMode CullingModeValue = CullingMode::CullUpdateTransforms;
+        std::string AvatarGuid;
+        std::string AvatarPath;
+        // Source Avatar는 애니메이션 클립이 만들어진 원본 리그를 설명한다.
+        // Target Avatar(AvatarGuid)는 현재 오브젝트 리그이고, 둘을 Humanoid 이름으로 이어서 Retarget한다.
+        std::string SourceAvatarGuid;
+        std::string SourceAvatarPath;
+        // Root Motion을 계산할 때 기준으로 삼는 본 이름이다.
+        // 보통 Humanoid 캐릭터는 Hips를 루트 이동 기준으로 쓴다.
+        std::string HumanoidRootBone = "Hips";
+        // 다른 캐릭터 골격에 애니메이션을 재사용할 때 켠다.
+        // Avatar 에셋이 표준 Humanoid 본 이름과 실제 FBX 본 이름을 이어 준다.
+        bool RetargetToHumanoid = false;
         bool IsPlaying = false;
         int ActiveStateIndex = -1;
         int EntryStateIndex = -1;
         int ActiveLayerIndex = 0;
         std::vector<State> States;
         // 레이어는 같은 Animator 안에서 여러 애니메이션 흐름을 겹치기 위한 단위다.
-        // 현재 단계에서는 편집/저장 기반을 먼저 만들고, 실제 포즈 블렌딩은 이 값을 기준으로 확장한다.
+        // 아래쪽 레이어가 더 높은 우선순위를 가지며, Weight와 Mask 설정에 따라 최종 포즈에 섞인다.
         std::vector<Layer> Layers = { Layer{} };
         std::vector<Parameter> Parameters;
         std::vector<Transition> Transitions;
@@ -381,6 +538,23 @@ namespace CCEngine
         // 씬 파일에는 경로/GUID와 ClipIndex만 저장하고, 실제 클립 데이터는 필요할 때 다시 읽는다.
         std::shared_ptr<AnimationClip> RuntimeClip;
         std::string RuntimeClipKey;
+        int RuntimePlaybackLayerIndex = -1;
+        DirectX::XMFLOAT3 RuntimeRootMotionDelta = { 0.0f, 0.0f, 0.0f };
+        DirectX::XMFLOAT4 RuntimeRootMotionRotationDelta = { 0.0f, 0.0f, 0.0f, 1.0f };
+        DirectX::XMFLOAT3 RuntimeRootMotionRootWorld = { 0.0f, 0.0f, 0.0f };
+        // 아래 값들은 Root Motion을 적용한 결과가 아니라, 에디터가 현재 프레임을 설명하기 위한 표시용 상태다.
+        // 런타임 로직과 디버그 표시를 분리해 두면 잠금 옵션을 켜도 화면에서 이유를 분명히 보여줄 수 있다.
+        bool RuntimeRootMotionRootMissing = false;
+        bool RuntimeRootMotionWrappedLoop = false;
+        bool RuntimeRootMotionLockXZ = false;
+        bool RuntimeRootMotionLockY = false;
+        bool RuntimeRootMotionLockRotation = false;
+        bool RuntimeRootMotionBaked = false;
+        float RuntimeRootMotionRotationDegrees = 0.0f;
+        size_t RuntimeRootMotionMaxPathPoints = 128;
+        // Root Motion 디버그 경로는 실행 중에만 쓰는 짧은 기록이다.
+        // 씬 저장 데이터가 아니라, 에디터가 이동 궤적을 그리기 위한 임시 값이다.
+        std::vector<DirectX::XMFLOAT3> RuntimeRootMotionPath;
 
         AnimatorComponent() = default;
         AnimatorComponent(const AnimatorComponent& other)
@@ -394,6 +568,15 @@ namespace CCEngine
             PreviewInEdit(other.PreviewInEdit),
             Loop(other.Loop),
             Speed(other.Speed),
+            ApplyRootMotion(other.ApplyRootMotion),
+            UpdateModeValue(other.UpdateModeValue),
+            CullingModeValue(other.CullingModeValue),
+            AvatarGuid(other.AvatarGuid),
+            AvatarPath(other.AvatarPath),
+            SourceAvatarGuid(other.SourceAvatarGuid),
+            SourceAvatarPath(other.SourceAvatarPath),
+            HumanoidRootBone(other.HumanoidRootBone),
+            RetargetToHumanoid(other.RetargetToHumanoid),
             IsPlaying(false),
             ActiveStateIndex(other.ActiveStateIndex),
             EntryStateIndex(other.EntryStateIndex),
@@ -406,6 +589,31 @@ namespace CCEngine
         {
             // Animator와 RuntimeClip은 현재 재생 위치를 들고 있는 실행 상태다.
             // 복제/Play Scene 생성 시에는 설정만 복사하고, 실제 클립은 새 씬에서 다시 로드한다.
+            for (auto& layer : Layers)
+            {
+                layer.PreviousStateIndex = -1;
+                layer.StateTime = 0.0f;
+                layer.PreviousLoopTime = 0.0f;
+                layer.PreviousStateTime = 0.0f;
+                layer.BlendElapsed = 0.0f;
+                layer.BlendDuration = 0.0f;
+                layer.FiredEventIndices.clear();
+                layer.PreviousRuntimeClip.reset();
+                layer.Exited = false;
+            }
+            RuntimePlaybackLayerIndex = -1;
+            RuntimeRootMotionDelta = { 0.0f, 0.0f, 0.0f };
+            RuntimeRootMotionRotationDelta = { 0.0f, 0.0f, 0.0f, 1.0f };
+            RuntimeRootMotionRootWorld = { 0.0f, 0.0f, 0.0f };
+            RuntimeRootMotionRootMissing = false;
+            RuntimeRootMotionWrappedLoop = false;
+            RuntimeRootMotionLockXZ = false;
+            RuntimeRootMotionLockY = false;
+            RuntimeRootMotionLockRotation = false;
+            RuntimeRootMotionBaked = false;
+            RuntimeRootMotionRotationDegrees = 0.0f;
+            RuntimeRootMotionMaxPathPoints = other.RuntimeRootMotionMaxPathPoints;
+            RuntimeRootMotionPath.clear();
         }
     };
 

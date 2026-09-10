@@ -3,6 +3,7 @@
 #include "Renderer/RendererHandle.h"
 #include <DirectXMath.h>
 #include <string>
+#include <vector>
 
 namespace CCEngine
 {
@@ -19,6 +20,8 @@ namespace CCEngine
 
         // ★ 클리핑 제어
         static void SetClipRect(float x, float y, float w, float h);
+        static void PushClipRect(float x, float y, float w, float h);
+        static void PopClipRect();
         static void ClearClipRect();
 
         // 사각형 그리기
@@ -44,5 +47,8 @@ namespace CCEngine
         static float s_ClipY;
         static float s_ClipW;
         static float s_ClipH;
+        // 내부 영역을 그릴 때 부모 영역의 잘림 상태를 잃지 않도록 클립을 스택으로 저장한다.
+        // 그래프, 팝업, 리스트처럼 겹쳐 그리는 UI는 Push/Pop으로 자기 영역만 임시 적용한다.
+        static std::vector<DirectX::XMFLOAT4> s_ClipStack;
     };
 }

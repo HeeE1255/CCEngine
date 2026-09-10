@@ -5,6 +5,7 @@
 #include "Renderer/Renderer.h"
 #include "Renderer/Renderer3D.h"
 #include "Renderer/MaterialPreviewRenderer.h"
+#include "Animation/AvatarAsset.h"
 #include "Renderer/RuntimeShaderLibrary.h"
 #include "Renderer/ShaderAsset.h"
 #include "Renderer/ShaderCompiler.h"
@@ -22,6 +23,7 @@
 #include "Scene/Components.h"
 #include "Renderer/MeshFactory.h"
 #include "Core/AssetDatabase.h"
+#include "Utils/PlatformUtils.h"
 #include "Core/ConsoleLog.h"
 #include "Events/KeyEvent.h"
 #include "Scripting/ScriptCompiler.h"
@@ -58,6 +60,24 @@ namespace CCEngine
                     (std::clamp)(color.z * scale, 0.0f, 1.0f),
                     color.w
                 };
+            }
+
+            std::string FormatAvatarPoseOffset(const HumanoidRetargetPoseOffset& offset)
+            {
+                std::ostringstream stream;
+                stream << std::fixed << std::setprecision(1)
+                    << offset.RotationOffsetX << ", "
+                    << offset.RotationOffsetY << ", "
+                    << offset.RotationOffsetZ;
+                return stream.str();
+            }
+
+            bool ParseAvatarPoseOffset(const std::string& text, float& outX, float& outY, float& outZ)
+            {
+                std::string normalized = text;
+                std::replace(normalized.begin(), normalized.end(), ',', ' ');
+                std::stringstream stream(normalized);
+                return (stream >> outX >> outY >> outZ) ? true : false;
             }
 
             void DrawLowVertexMaterialSphere(float x, float y, float size, const DirectX::XMFLOAT4& albedo)
@@ -517,6 +537,8 @@ namespace CCEngine
                     BuildMaterialInspector();
                 else if (m_SelectedAssetType == "shader" || m_SelectedAssetType == "visualshader")
                     BuildShaderInspector();
+                else if (m_SelectedAssetType == "avatar")
+                    BuildAvatarInspector();
                 else
                     BuildGenericAssetInspector();
                 return;
@@ -1143,6 +1165,304 @@ namespace CCEngine
             UpdateLayout({ 0.0f, 0.0f }, { (float)window.GetWidth(), (float)window.GetHeight() });
         }
 
+        void InspectorPanel::BuildAvatarInspector()
+        {
+            m_SelectedMaterial = MaterialAsset{};
+            m_MaterialSavePending = false;
+            m_MaterialSaveCountdown = 0.0f;
+            m_MaterialPreviewDirty = true;
+
+            AvatarAsset avatar;
+            if (!AvatarAsset::LoadFromFile(m_SelectedAssetPath, avatar))
+                avatar = AvatarAsset::CreateDefault(m_SelectedAssetPath.stem().string());
+
+            auto loadAvatar = [this]()
+                {
+                    AvatarAsset current;
+                    if (!AvatarAsset::LoadFromFile(m_SelectedAssetPath, current))
+                        current = AvatarAsset::CreateDefault(m_SelectedAssetPath.stem().string());
+                    return current;
+                };
+
+            auto saveAvatar = [this](const AvatarAsset& value)
+                {
+                    value.SaveToFile(m_SelectedAssetPath);
+                    AssetDatabase::EnsureMetaFile(m_SelectedAssetPath);
+                    AssetDatabase::MarkDirty();
+                    if (m_OnAssetChanged)
+                        m_OnAssetChanged(m_SelectedAssetPath, m_SelectedAssetType);
+                };
+
+            auto infoItem = new UI::InspectorItem("AvatarInfoItem", "Avatar Asset");
+            infoItem->SetAnchorMin(0.0f, 0.0f);
+            infoItem->SetAnchorMax(1.0f, 0.0f);
+            AddChild(infoItem);
+
+            auto nameInput = new UI::TextInput("AvatarNameInput", "Avatar Name");
+            nameInput->SetText(avatar.Name, false);
+            nameInput->SetOnTextChanged([loadAvatar, saveAvatar](const std::string& text) mutable
+                {
+                    AvatarAsset current = loadAvatar();
+                    current.Name = text.empty() ? "Avatar" : text;
+                    saveAvatar(current);
+                });
+            infoItem->AddChild(nameInput);
+
+            std::filesystem::path sourcePath = avatar.SourceModelPath;
+            if (!avatar.SourceModelGuid.empty())
+            {
+                std::filesystem::path guidPath = AssetDatabase::GetPathFromGuid(avatar.SourceModelGuid);
+                if (!guidPath.empty())
+                    sourcePath = guidPath;
+            }
+
+            auto sourceButton = new UI::Button("AvatarSourceModel",
+                sourcePath.empty() ? "Source Model: None" : "Source Model: " + sourcePath.filename().string());
+            sourceButton->SetOnClick([loadAvatar, saveAvatar, sourceButton]() mutable
+                {
+                    std::string filepath = PlatformUtils::OpenFile("Model (*.fbx;*.obj;*.gltf;*.glb)\0*.fbx;*.obj;*.gltf;*.glb\0");
+                    if (filepath.empty() || AssetDatabase::GetAssetKind(filepath) != AssetKind::Model)
+                        return;
+
+                    AvatarAsset current = loadAvatar();
+                    current.SourceModelPath = filepath;
+                    current.SourceModelGuid = AssetDatabase::GetGuidFromPath(filepath);
+                    sourceButton->SetText("Source Model: " + std::filesystem::path(filepath).filename().string());
+                    saveAvatar(current);
+                });
+            infoItem->AddChild(sourceButton);
+
+            auto autoMapButton = new UI::Button("AvatarAutoMap", "Auto Map From Source Model");
+            autoMapButton->SetOnClick([loadAvatar, saveAvatar]() mutable
+                {
+                    AvatarAsset current = loadAvatar();
+                    std::filesystem::path modelPath = current.SourceModelPath;
+                    if (!current.SourceModelGuid.empty())
+                    {
+                        std::filesystem::path guidPath = AssetDatabase::GetPathFromGuid(current.SourceModelGuid);
+                        if (!guidPath.empty())
+                            modelPath = guidPath;
+                    }
+
+                    if (modelPath.empty() || !std::filesystem::exists(modelPath))
+                    {
+                        ConsoleLog::Warning("Avatar auto map failed: source model is missing.");
+                        return;
+                    }
+
+                    ModelComponent model;
+                    model.TargetModel = std::make_shared<Model>(modelPath.string());
+                    if (AvatarAsset::AutoMapAgainstModel(current, model))
+                    {
+                        // 자동 매핑 결과를 파일에 저장해 두면 다음 검증/Retarget 때 매번 별칭을 다시 찾지 않아도 된다.
+                        saveAvatar(current);
+                        ConsoleLog::Info("Avatar auto map updated: " + current.Name);
+                    }
+                    else
+                    {
+                        ConsoleLog::Info("Avatar auto map found no changes: " + current.Name);
+                    }
+                });
+            infoItem->AddChild(autoMapButton);
+
+            std::filesystem::path validationModelPath = sourcePath;
+            if (!avatar.SourceModelGuid.empty())
+            {
+                std::filesystem::path guidPath = AssetDatabase::GetPathFromGuid(avatar.SourceModelGuid);
+                if (!guidPath.empty())
+                    validationModelPath = guidPath;
+            }
+
+            if (!validationModelPath.empty() && std::filesystem::exists(validationModelPath))
+            {
+                ModelComponent validationModel;
+                validationModel.TargetModel = std::make_shared<Model>(validationModelPath.string());
+                const AvatarValidationResult validation = AvatarAsset::ValidateAgainstModel(avatar, validationModel);
+
+                auto validationItem = new UI::InspectorItem("AvatarValidationItem", "Validation");
+                validationItem->SetAnchorMin(0.0f, 0.0f);
+                validationItem->SetAnchorMax(1.0f, 0.0f);
+                AddChild(validationItem);
+
+                auto summaryButton = new UI::Button("AvatarValidationSummary",
+                    validation.Valid
+                        ? "Valid: required bones mapped"
+                        : "Missing required bones: " + std::to_string(validation.RequiredMissing));
+                const DirectX::XMFLOAT4 summaryColor = validation.Valid
+                    ? DirectX::XMFLOAT4{ 0.08f, 0.18f, 0.10f, 1.0f }
+                    : DirectX::XMFLOAT4{ 0.22f, 0.11f, 0.06f, 1.0f };
+                summaryButton->SetNormalColor(summaryColor);
+                summaryButton->SetHoverColor(summaryColor);
+                validationItem->AddChild(summaryButton);
+
+                auto mappedButton = new UI::Button("AvatarValidationMapped",
+                    "Mapped: required " + std::to_string(validation.RequiredMapped) +
+                    ", optional " + std::to_string(validation.OptionalMapped));
+                mappedButton->SetNormalColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+                mappedButton->SetHoverColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+                validationItem->AddChild(mappedButton);
+
+                size_t shownIssues = 0;
+                for (const AvatarValidationIssue& issue : validation.Issues)
+                {
+                    if (shownIssues >= 6)
+                        break;
+
+                    // 검증 목록은 저장된 Avatar와 실제 모델 본 목록을 비교한 결과다.
+                    // 여기서 누락된 Required 본이 있으면 Retarget 때 해당 부위 애니메이션이 넘어가지 않는다.
+                    auto issueButton = new UI::Button("AvatarValidationIssue_" + std::to_string(shownIssues),
+                        issue.HumanBone + ": " + issue.Message);
+                    const DirectX::XMFLOAT4 issueColor = issue.Error
+                        ? DirectX::XMFLOAT4{ 0.22f, 0.08f, 0.08f, 1.0f }
+                        : DirectX::XMFLOAT4{ 0.16f, 0.13f, 0.06f, 1.0f };
+                    issueButton->SetNormalColor(issueColor);
+                    issueButton->SetHoverColor(issueColor);
+                    validationItem->AddChild(issueButton);
+                    ++shownIssues;
+                }
+            }
+            else
+            {
+                auto validationItem = new UI::InspectorItem("AvatarValidationItem", "Validation");
+                validationItem->SetAnchorMin(0.0f, 0.0f);
+                validationItem->SetAnchorMax(1.0f, 0.0f);
+                AddChild(validationItem);
+
+                auto missingModelButton = new UI::Button("AvatarValidationMissingModel", "Source model is not assigned.");
+                missingModelButton->SetNormalColor({ 0.16f, 0.13f, 0.06f, 1.0f });
+                missingModelButton->SetHoverColor({ 0.16f, 0.13f, 0.06f, 1.0f });
+                validationItem->AddChild(missingModelButton);
+            }
+
+            auto rootInput = new UI::TextInput("AvatarRootBoneInput", "Root Bone");
+            rootInput->SetText(avatar.RootBone, false);
+            rootInput->SetOnTextChanged([loadAvatar, saveAvatar](const std::string& text) mutable
+                {
+                    AvatarAsset current = loadAvatar();
+                    current.RootBone = text.empty() ? "Hips" : text;
+                    saveAvatar(current);
+                });
+            infoItem->AddChild(rootInput);
+
+            auto optimizeButton = new UI::Button("AvatarOptimizeHierarchy",
+                avatar.OptimizeTransformHierarchy ? "Optimize Transform Hierarchy: On" : "Optimize Transform Hierarchy: Off");
+            optimizeButton->SetActive(avatar.OptimizeTransformHierarchy);
+            optimizeButton->SetOnClick([loadAvatar, saveAvatar, optimizeButton]() mutable
+                {
+                    AvatarAsset current = loadAvatar();
+                    current.OptimizeTransformHierarchy = !current.OptimizeTransformHierarchy;
+                    optimizeButton->SetActive(current.OptimizeTransformHierarchy);
+                    optimizeButton->SetText(current.OptimizeTransformHierarchy ? "Optimize Transform Hierarchy: On" : "Optimize Transform Hierarchy: Off");
+                    saveAvatar(current);
+                });
+            infoItem->AddChild(optimizeButton);
+
+            auto poseItem = new UI::InspectorItem("AvatarRetargetPoseItem", "Retarget Pose");
+            poseItem->SetAnchorMin(0.0f, 0.0f);
+            poseItem->SetAnchorMax(1.0f, 0.0f);
+            AddChild(poseItem);
+
+            auto resetPoseButton = new UI::Button("AvatarPoseReset", "Reset Pose Offsets");
+            resetPoseButton->SetOnClick([loadAvatar, saveAvatar]() mutable
+                {
+                    AvatarAsset current = loadAvatar();
+                    for (auto& offset : current.PoseOffsets)
+                    {
+                        offset.RotationOffsetX = 0.0f;
+                        offset.RotationOffsetY = 0.0f;
+                        offset.RotationOffsetZ = 0.0f;
+                    }
+                    saveAvatar(current);
+                    ConsoleLog::Info("Avatar retarget pose offsets reset.");
+                });
+            poseItem->AddChild(resetPoseButton);
+
+            auto aPosePresetButton = new UI::Button("AvatarPoseAPosePreset", "A-Pose Arm Assist");
+            aPosePresetButton->SetOnClick([loadAvatar, saveAvatar]() mutable
+                {
+                    AvatarAsset current = loadAvatar();
+                    auto setOffset = [&current](const std::string& humanBone, float x, float y, float z)
+                        {
+                            auto it = std::find_if(current.PoseOffsets.begin(), current.PoseOffsets.end(), [&humanBone](const HumanoidRetargetPoseOffset& offset)
+                                {
+                                    return offset.HumanBone == humanBone;
+                                });
+                            if (it == current.PoseOffsets.end())
+                                current.PoseOffsets.push_back({ humanBone, x, y, z });
+                            else
+                            {
+                                it->RotationOffsetX = x;
+                                it->RotationOffsetY = y;
+                                it->RotationOffsetZ = z;
+                            }
+                        };
+
+                    // A-Pose와 T-Pose는 팔의 기준 각도가 달라서 같은 클립을 Retarget하면 어깨가 벌어지거나 접힌다.
+                    // 이 프리셋은 시작점이고, 실제 리그 축이 다르면 아래 XYZ 값을 직접 조정한다.
+                    setOffset("LeftUpperArm", 0.0f, 0.0f, -35.0f);
+                    setOffset("RightUpperArm", 0.0f, 0.0f, 35.0f);
+                    setOffset("LeftLowerArm", 0.0f, 0.0f, -8.0f);
+                    setOffset("RightLowerArm", 0.0f, 0.0f, 8.0f);
+                    saveAvatar(current);
+                    ConsoleLog::Info("Avatar A-Pose arm assist applied.");
+                });
+            poseItem->AddChild(aPosePresetButton);
+
+            for (size_t i = 0; i < avatar.PoseOffsets.size(); ++i)
+            {
+                const HumanoidRetargetPoseOffset offset = avatar.PoseOffsets[i];
+                auto input = new UI::TextInput("AvatarPoseOffset_" + std::to_string(i), offset.HumanBone + " XYZ deg");
+                input->SetText(FormatAvatarPoseOffset(offset), false);
+                input->SetOnTextChanged([loadAvatar, saveAvatar, i](const std::string& text) mutable
+                    {
+                        AvatarAsset current = loadAvatar();
+                        if (i >= current.PoseOffsets.size())
+                            return;
+
+                        float x = 0.0f;
+                        float y = 0.0f;
+                        float z = 0.0f;
+                        if (!ParseAvatarPoseOffset(text, x, y, z))
+                            return;
+
+                        // XYZ deg는 각 축 회전 보정값을 도(degree) 단위로 저장한다.
+                        // 라디안보다 사람이 Inspector에서 손으로 맞추기 쉬워서 에셋 파일에는 degree를 사용한다.
+                        current.PoseOffsets[i].RotationOffsetX = x;
+                        current.PoseOffsets[i].RotationOffsetY = y;
+                        current.PoseOffsets[i].RotationOffsetZ = z;
+                        saveAvatar(current);
+                    });
+                poseItem->AddChild(input);
+            }
+
+            auto mappingItem = new UI::InspectorItem("AvatarMappingItem", "Humanoid Mapping");
+            mappingItem->SetAnchorMin(0.0f, 0.0f);
+            mappingItem->SetAnchorMax(1.0f, 0.0f);
+            AddChild(mappingItem);
+
+            for (size_t i = 0; i < avatar.BoneMappings.size(); ++i)
+            {
+                const HumanoidBoneMapping mapping = avatar.BoneMappings[i];
+                auto input = new UI::TextInput("AvatarBoneMapping_" + std::to_string(i), mapping.HumanBone + (mapping.Required ? " *" : ""));
+                input->SetText(mapping.SourceBone, false);
+                input->SetOnTextChanged([loadAvatar, saveAvatar, i](const std::string& text) mutable
+                    {
+                        AvatarAsset current = loadAvatar();
+                        if (i >= current.BoneMappings.size())
+                            return;
+
+                        // SourceBone은 FBX 안 실제 본 이름이다.
+                        // 빈 값이면 검증 단계에서 자주 쓰는 별칭을 찾아 자동 매칭을 시도한다.
+                        current.BoneMappings[i].SourceBone = text;
+                        saveAvatar(current);
+                    });
+                mappingItem->AddChild(input);
+            }
+
+            auto& window = CCEngine::Application::Get()->GetWindow();
+            UpdateLayout({ 0.0f, 0.0f }, { (float)window.GetWidth(), (float)window.GetHeight() });
+        }
+
         void InspectorPanel::MarkSelectedMaterialDirty()
         {
             if (m_SelectedAssetPath.empty() || m_SelectedAssetType != "material")
@@ -1401,6 +1721,7 @@ namespace CCEngine
             addCandidate("Sphere Collider 3D", AddComponentType::SphereCollider3D, m_SelectedEntity.HasComponent<SphereCollider3DComponent>());
             addCandidate("Cylinder Collider 3D", AddComponentType::CylinderCollider3D, m_SelectedEntity.HasComponent<CylinderCollider3DComponent>());
             addCandidate("Mesh Collider 3D", AddComponentType::MeshCollider3D, m_SelectedEntity.HasComponent<MeshCollider3DComponent>());
+            addCandidate("Audio", AddComponentType::Audio, m_SelectedEntity.HasComponent<AudioComponent>());
             addCandidate("Animator", AddComponentType::Animator, m_SelectedEntity.HasComponent<AnimatorComponent>());
             addCandidate("New C# Script...", AddComponentType::Script, m_SelectedEntity.HasComponent<ScriptComponent>());
 
@@ -1446,6 +1767,7 @@ namespace CCEngine
                     case AddComponentType::SphereCollider3D: return "Sphere Collider 3D";
                     case AddComponentType::CylinderCollider3D: return "Cylinder Collider 3D";
                     case AddComponentType::MeshCollider3D: return "Mesh Collider 3D";
+                    case AddComponentType::Audio: return "Audio";
                     case AddComponentType::Animator: return "Animator";
                     case AddComponentType::Script: return "C# Script";
                     default: return "Component";
@@ -1497,6 +1819,7 @@ namespace CCEngine
                 case AddComponentType::SphereCollider3D: m_SelectedEntity.AddComponent<SphereCollider3DComponent>(); break;
                 case AddComponentType::CylinderCollider3D: m_SelectedEntity.AddComponent<CylinderCollider3DComponent>(); break;
                 case AddComponentType::MeshCollider3D: m_SelectedEntity.AddComponent<MeshCollider3DComponent>(); break;
+                case AddComponentType::Audio: m_SelectedEntity.AddComponent<AudioComponent>(); break;
                 case AddComponentType::Animator:
                 {
                     // Animator는 모델이 없는 빈 오브젝트에도 붙일 수 있다.
@@ -1583,6 +1906,10 @@ namespace CCEngine
                 "        protected override void Update(float deltaTime)\n"
                 "        {\n"
                 "            // Play 중 매 프레임 호출되며 deltaTime은 이전 프레임부터 흐른 시간입니다.\n"
+                "        }\n\n"
+                "        protected override void OnAnimationEvent(string eventName, string argument)\n"
+                "        {\n"
+                "            // Animator Graph의 Timeline 마커가 지나가면 호출됩니다.\n"
                 "        }\n\n"
                 "        protected override void OnDestroy()\n"
                 "        {\n"
