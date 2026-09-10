@@ -4791,6 +4791,15 @@ namespace CCEngine {
                 });
         }
 
+        m_AnimatorGraphPanel->SetOnStateSelected([this](Entity entity, int layerIndex, int stateIndex)
+            {
+                for (UI::InspectorPanel* inspector : m_InspectorPanels)
+                {
+                    if (inspector && inspector->IsVisible())
+                        inspector->SetSelectedAnimatorState(entity, layerIndex, stateIndex);
+                }
+            });
+
         if (m_AnimatorGraphPanel->GetOwnerWindow() && !m_AnimatorGraphPanel->GetOwnerWindow()->ShouldClose())
         {
             // 멀티 윈도우에 이미 떠 있는 그래프는 정상 상태다.

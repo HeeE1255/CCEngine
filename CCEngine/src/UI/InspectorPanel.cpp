@@ -6,6 +6,8 @@
 #include "Renderer/Renderer3D.h"
 #include "Renderer/MaterialPreviewRenderer.h"
 #include "Animation/AvatarAsset.h"
+#include "Animation/Animator.h"
+#include "Animation/AnimatorControllerAsset.h"
 #include "Renderer/RuntimeShaderLibrary.h"
 #include "Renderer/ShaderAsset.h"
 #include "Renderer/ShaderCompiler.h"
@@ -18,6 +20,7 @@
 #include "Application.h"
 #include "UI/Button.h"
 #include "UI/ImageWidget.h"
+#include "UI/InspectorItem.h"
 #include "UI/Panel.h"
 #include "UI/TextInput.h"
 #include "Scene/Components.h"
@@ -442,6 +445,113 @@ namespace CCEngine
                     it->second.TexturePath = material.NormalTexturePath;
                 }
             }
+
+            AnimatorComponent::Layer* GetInspectorAnimatorLayer(AnimatorComponent& animator, int layerIndex)
+            {
+                if (animator.Layers.empty())
+                    animator.Layers.push_back(AnimatorComponent::Layer{});
+                layerIndex = std::clamp(layerIndex, 0, (int)animator.Layers.size() - 1);
+                animator.ActiveLayerIndex = layerIndex;
+                return &animator.Layers[layerIndex];
+            }
+
+            void SyncInspectorBaseLayerToRuntimeFields(AnimatorComponent& animator)
+            {
+                if (animator.Layers.empty())
+                    return;
+
+                const auto& baseLayer = animator.Layers[0];
+                // 런타임 호환 필드는 아직 Base Layer를 읽는 코드가 남아 있다.
+                // Inspector에서 State를 수정할 때도 이 복사본을 맞춰야 그래프와 재생 결과가 엇갈리지 않는다.
+                animator.States = baseLayer.States;
+                animator.Transitions = baseLayer.Transitions;
+                animator.ActiveStateIndex = baseLayer.ActiveStateIndex;
+                animator.EntryStateIndex = baseLayer.EntryStateIndex;
+                animator.SelectedTransitionIndex = baseLayer.SelectedTransitionIndex;
+            }
+
+            std::filesystem::path ResolveInspectorControllerPath(const AnimatorComponent& animator)
+            {
+                if (!animator.ControllerAssetGuid.empty())
+                {
+                    std::filesystem::path guidPath = AssetDatabase::GetPathFromGuid(animator.ControllerAssetGuid);
+                    if (!guidPath.empty())
+                        return guidPath;
+                }
+                return animator.ControllerPath;
+            }
+
+            void ResetInspectorAnimatorRuntime(AnimatorComponent& animator)
+            {
+                animator.RuntimeClip.reset();
+                animator.RuntimeClipKey.clear();
+                animator.AnimPlayer.StopAnimation();
+                animator.IsPlaying = false;
+                for (auto& layer : animator.Layers)
+                {
+                    layer.PreviousRuntimeClip.reset();
+                    layer.PreviousStateIndex = -1;
+                    layer.BlendElapsed = 0.0f;
+                    layer.BlendDuration = 0.0f;
+                    layer.FiredEventIndices.clear();
+                }
+            }
+
+            bool SaveInspectorAnimatorController(AnimatorComponent& animator)
+            {
+                SyncInspectorBaseLayerToRuntimeFields(animator);
+                std::filesystem::path controllerPath = ResolveInspectorControllerPath(animator);
+                if (controllerPath.empty())
+                    return false;
+
+                AnimatorControllerAsset::Normalize(animator);
+                const bool saved = AnimatorControllerAsset::SaveToFile(controllerPath, animator);
+                if (saved)
+                    AssetDatabase::EnsureMetaFile(controllerPath);
+                return saved;
+            }
+
+            std::filesystem::path ResolveInspectorAnimationSourcePath(const AnimatorComponent& animator, const AnimatorComponent::State* state)
+            {
+                std::filesystem::path sourcePath = animator.SourcePath;
+                if (!animator.SourceAssetGuid.empty())
+                {
+                    std::filesystem::path guidPath = AssetDatabase::GetPathFromGuid(animator.SourceAssetGuid);
+                    if (!guidPath.empty())
+                        sourcePath = guidPath;
+                }
+
+                if (sourcePath.empty() && state)
+                {
+                    sourcePath = state->MotionPath;
+                    if (!state->MotionAssetGuid.empty())
+                    {
+                        std::filesystem::path guidPath = AssetDatabase::GetPathFromGuid(state->MotionAssetGuid);
+                        if (!guidPath.empty())
+                            sourcePath = guidPath;
+                    }
+                }
+
+                return sourcePath;
+            }
+
+            const char* InspectorMotionTypeName(AnimatorComponent::State::MotionType type)
+            {
+                switch (type)
+                {
+                    case AnimatorComponent::State::MotionType::BlendTree: return "Blend Tree";
+                    case AnimatorComponent::State::MotionType::PropertyClip: return "Property Clip";
+                    default: return "Animation Clip";
+                }
+            }
+
+            std::string FitInspectorValue(std::string text, float availableWidth)
+            {
+                const int maxChars = (std::max)(4, (int)(availableWidth / 7.5f));
+                if ((int)text.size() <= maxChars)
+                    return text;
+                return text.substr(0, (size_t)maxChars - 3) + "...";
+            }
         }
 
         InspectorPanel::InspectorPanel(const std::string& name, const std::string& title)
@@ -464,12 +574,40 @@ namespace CCEngine
 
         void InspectorPanel::SetSelectedEntity(Entity entity)
         {
-            if (m_SelectedEntity == entity) return;
+            if (m_SelectedEntity == entity && !m_HasSelectedAnimatorState) return;
 
             FlushSelectedMaterialSave();
             m_SelectedEntity = entity;
             m_SelectedAssetPath.clear();
             m_SelectedAssetType.clear();
+            m_HasSelectedAnimatorState = false;
+            m_SelectedAnimatorLayerIndex = -1;
+            m_SelectedAnimatorStateIndex = -1;
+            m_MaterialPreviewImage = nullptr;
+            RebuildInspector();
+        }
+
+        void InspectorPanel::SetSelectedAnimatorState(Entity entity, int layerIndex, int stateIndex)
+        {
+            if (!entity || !entity.HasComponent<AnimatorComponent>() || layerIndex < 0 || stateIndex < 0)
+            {
+                if (m_HasSelectedAnimatorState)
+                {
+                    m_HasSelectedAnimatorState = false;
+                    m_SelectedAnimatorLayerIndex = -1;
+                    m_SelectedAnimatorStateIndex = -1;
+                    RebuildInspector();
+                }
+                return;
+            }
+
+            FlushSelectedMaterialSave();
+            m_SelectedEntity = entity;
+            m_SelectedAssetPath.clear();
+            m_SelectedAssetType.clear();
+            m_HasSelectedAnimatorState = true;
+            m_SelectedAnimatorLayerIndex = layerIndex;
+            m_SelectedAnimatorStateIndex = stateIndex;
             m_MaterialPreviewImage = nullptr;
             RebuildInspector();
         }
@@ -483,6 +621,9 @@ namespace CCEngine
             m_SelectedEntity = {};
             m_SelectedAssetPath = assetPath;
             m_SelectedAssetType = assetType;
+            m_HasSelectedAnimatorState = false;
+            m_SelectedAnimatorLayerIndex = -1;
+            m_SelectedAnimatorStateIndex = -1;
             if (m_SelectedAssetType != "material")
             {
                 m_SelectedMaterial = MaterialAsset{};
@@ -546,6 +687,12 @@ namespace CCEngine
 
             if (!m_SelectedEntity) return;
 
+            if (m_HasSelectedAnimatorState)
+            {
+                BuildAnimatorStateInspector();
+                return;
+            }
+
             InspectorRegistry::DrawAllComponents(this, m_SelectedEntity);
 
             m_AddComponentButton = new UI::Button("BtnAddComponent", "Add Component");
@@ -560,6 +707,263 @@ namespace CCEngine
                 });
             AddChild(m_AddComponentButton);
             BuildAddComponentMenu();
+
+            auto& window = CCEngine::Application::Get()->GetWindow();
+            UpdateLayout({ 0.0f, 0.0f }, { (float)window.GetWidth(), (float)window.GetHeight() });
+        }
+
+        void InspectorPanel::BuildAnimatorStateInspector()
+        {
+            auto invalid = [this](const std::string& message)
+            {
+                auto* item = new UI::InspectorItem("AnimatorStateInvalid", "Animator State");
+                AddChild(item);
+                auto* text = new UI::Button("AnimatorStateInvalidText", message);
+                text->SetNormalColor({ 0.22f, 0.10f, 0.10f, 1.0f });
+                text->SetHoverColor({ 0.22f, 0.10f, 0.10f, 1.0f });
+                item->AddChild(text);
+                auto* back = new UI::Button("AnimatorStateBack", "Back To Object Inspector");
+                back->SetOnClick([this]()
+                    {
+                        m_HasSelectedAnimatorState = false;
+                        m_SelectedAnimatorLayerIndex = -1;
+                        m_SelectedAnimatorStateIndex = -1;
+                        RebuildInspector();
+                    });
+                item->AddChild(back);
+            };
+
+            if (!m_SelectedEntity || !m_SelectedEntity.HasComponent<AnimatorComponent>())
+            {
+                invalid("Animator component missing.");
+                return;
+            }
+
+            auto& animator = m_SelectedEntity.GetComponent<AnimatorComponent>();
+            AnimatorComponent::Layer* layer = GetInspectorAnimatorLayer(animator, m_SelectedAnimatorLayerIndex);
+            if (!layer || m_SelectedAnimatorStateIndex < 0 || m_SelectedAnimatorStateIndex >= (int)layer->States.size())
+            {
+                invalid("Selected State is missing.");
+                return;
+            }
+
+            auto& state = layer->States[m_SelectedAnimatorStateIndex];
+            layer->ActiveStateIndex = m_SelectedAnimatorStateIndex;
+            animator.ActiveLayerIndex = std::clamp(m_SelectedAnimatorLayerIndex, 0, (int)animator.Layers.size() - 1);
+
+            const Entity entity = m_SelectedEntity;
+            const int layerIndex = m_SelectedAnimatorLayerIndex;
+            const int stateIndex = m_SelectedAnimatorStateIndex;
+            std::function<void(const std::function<void(AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::State&)>&)> commitStateEdit;
+            commitStateEdit = [this, entity, layerIndex, stateIndex](const std::function<void(AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::State&)>& edit) mutable
+                {
+                    Entity editableEntity = entity;
+                    if (!editableEntity || !editableEntity.HasComponent<AnimatorComponent>())
+                        return;
+
+                    auto& currentAnimator = editableEntity.GetComponent<AnimatorComponent>();
+                    AnimatorComponent::Layer* currentLayer = GetInspectorAnimatorLayer(currentAnimator, layerIndex);
+                    if (!currentLayer || stateIndex < 0 || stateIndex >= (int)currentLayer->States.size())
+                        return;
+
+                    edit(currentAnimator, *currentLayer, currentLayer->States[stateIndex]);
+                    currentLayer->ActiveStateIndex = stateIndex;
+                    currentAnimator.ActiveLayerIndex = std::clamp(layerIndex, 0, (int)currentAnimator.Layers.size() - 1);
+                    ResetInspectorAnimatorRuntime(currentAnimator);
+                    const bool saved = SaveInspectorAnimatorController(currentAnimator);
+                    if (saved && m_OnAssetChanged)
+                        m_OnAssetChanged(ResolveInspectorControllerPath(currentAnimator), "animatorcontroller");
+                    RequestRebuild();
+                };
+
+            auto* item = new UI::InspectorItem("AnimatorStateItem", "Animator State");
+            item->SetAnchorMin(0.0f, 0.0f);
+            item->SetAnchorMax(1.0f, 0.0f);
+            AddChild(item);
+
+            const std::string objectName = m_SelectedEntity.HasComponent<TagComponent>()
+                ? m_SelectedEntity.GetComponent<TagComponent>().Tag
+                : std::string("Object");
+            auto* owner = new UI::Button("AnimatorStateOwner", "Object: " + FitInspectorValue(objectName, 230.0f));
+            owner->SetNormalColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+            owner->SetHoverColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+            item->AddChild(owner);
+
+            auto* layerButton = new UI::Button("AnimatorStateLayer", "Layer: " + FitInspectorValue(layer->Name, 230.0f));
+            layerButton->SetNormalColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+            layerButton->SetHoverColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+            item->AddChild(layerButton);
+
+            auto* nameInput = new UI::TextInput("AnimatorStateName", "State Name");
+            nameInput->SetText(state.Name, false);
+            nameInput->SetOnTextChanged([commitStateEdit](const std::string& text)
+                {
+                    commitStateEdit([&](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::State& editableState)
+                        {
+                            editableState.Name = text.empty() ? "State" : text;
+                            if (editableState.ImportSettings.DisplayName.empty())
+                                editableState.ImportSettings.DisplayName = editableState.Name;
+                        });
+                });
+            item->AddChild(nameInput);
+
+            const std::filesystem::path sourcePath = ResolveInspectorAnimationSourcePath(animator, &state);
+            const std::vector<AnimationClipInfo> clips = sourcePath.empty()
+                ? std::vector<AnimationClipInfo>{}
+                : AnimationClip::InspectClips(sourcePath.string());
+
+            std::string clipName = "None";
+            if (state.Motion == AnimatorComponent::State::MotionType::Clip && state.ClipIndex >= 0)
+            {
+                clipName = "Clip " + std::to_string(state.ClipIndex);
+                for (const auto& clip : clips)
+                {
+                    if ((int)clip.Index == state.ClipIndex)
+                    {
+                        clipName = clip.Name;
+                        break;
+                    }
+                }
+            }
+
+            auto* motion = new UI::Button("AnimatorStateMotion", std::string("Motion: ") + InspectorMotionTypeName(state.Motion));
+            motion->SetNormalColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+            motion->SetHoverColor({ 0.16f, 0.16f, 0.18f, 1.0f });
+            item->AddChild(motion);
+
+            auto* clipSlot = new UI::Button("AnimatorStateClipSlot", "Clip: " + FitInspectorValue(clipName, 230.0f));
+            clipSlot->SetNormalColor(state.ClipIndex < 0 ? DirectX::XMFLOAT4{ 0.18f, 0.13f, 0.10f, 1.0f } : DirectX::XMFLOAT4{ 0.13f, 0.16f, 0.19f, 1.0f });
+            clipSlot->SetHoverColor({ 0.20f, 0.24f, 0.28f, 1.0f });
+            if (!clips.empty())
+            {
+                clipSlot->SetOnClick([commitStateEdit, clips, sourcePath]()
+                    {
+                        commitStateEdit([&](AnimatorComponent& editableAnimator, AnimatorComponent::Layer&, AnimatorComponent::State& editableState)
+                            {
+                                int next = 0;
+                                for (int i = 0; i < (int)clips.size(); ++i)
+                                {
+                                    if ((int)clips[i].Index == editableState.ClipIndex)
+                                    {
+                                        next = (i + 1) % (int)clips.size();
+                                        break;
+                                    }
+                                }
+
+                                editableState.Motion = AnimatorComponent::State::MotionType::Clip;
+                                editableState.ClipIndex = (int)clips[next].Index;
+                                editableState.MotionPath = sourcePath.string();
+                                editableState.MotionAssetGuid = AssetDatabase::GetGuidFromPath(sourcePath);
+                                editableAnimator.SelectedClipIndex = editableState.ClipIndex;
+                                editableAnimator.SelectedClipName = clips[next].Name;
+                            });
+                    });
+            }
+            item->AddChild(clipSlot);
+
+            auto* removeClip = new UI::Button("AnimatorStateRemoveClip", "Remove Clip");
+            removeClip->SetNormalColor({ 0.28f, 0.09f, 0.10f, 1.0f });
+            removeClip->SetHoverColor({ 0.38f, 0.12f, 0.14f, 1.0f });
+            removeClip->SetOnClick([commitStateEdit]()
+                {
+                    commitStateEdit([](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::State& editableState)
+                        {
+                            editableState.Motion = AnimatorComponent::State::MotionType::Clip;
+                            editableState.ClipIndex = -1;
+                            editableState.Tree.Children.clear();
+                        });
+                });
+            item->AddChild(removeClip);
+
+            auto* loop = new UI::Button("AnimatorStateLoop", state.Loop ? "Loop: On" : "Loop: Off");
+            loop->SetActive(state.Loop);
+            loop->SetOnClick([commitStateEdit]()
+                {
+                    commitStateEdit([](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::State& editableState)
+                        {
+                            editableState.Loop = !editableState.Loop;
+                        });
+                });
+            item->AddChild(loop);
+
+            auto* writeDefaults = new UI::Button("AnimatorStateWriteDefaults", state.WriteDefaults ? "Write Defaults: On" : "Write Defaults: Off");
+            writeDefaults->SetActive(state.WriteDefaults);
+            writeDefaults->SetOnClick([commitStateEdit]()
+                {
+                    commitStateEdit([](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::State& editableState)
+                        {
+                            editableState.WriteDefaults = !editableState.WriteDefaults;
+                        });
+                });
+            item->AddChild(writeDefaults);
+
+            auto* speedMinus = new UI::Button("AnimatorStateSpeedMinus", "Speed -");
+            speedMinus->SetOnClick([commitStateEdit]()
+                {
+                    commitStateEdit([](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::State& editableState)
+                        {
+                            editableState.Speed = std::clamp(editableState.Speed - 0.1f, 0.0f, 8.0f);
+                        });
+                });
+            item->AddChild(speedMinus);
+
+            auto* speedValue = new UI::Button("AnimatorStateSpeedValue", "Speed: " + std::to_string((int)std::round(state.Speed * 100.0f)) + "%");
+            speedValue->SetNormalColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+            speedValue->SetHoverColor({ 0.13f, 0.13f, 0.14f, 1.0f });
+            item->AddChild(speedValue);
+
+            auto* speedPlus = new UI::Button("AnimatorStateSpeedPlus", "Speed +");
+            speedPlus->SetOnClick([commitStateEdit]()
+                {
+                    commitStateEdit([](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::State& editableState)
+                        {
+                            editableState.Speed = std::clamp(editableState.Speed + 0.1f, 0.0f, 8.0f);
+                        });
+                });
+            item->AddChild(speedPlus);
+
+            if (clips.empty())
+            {
+                auto* noClips = new UI::Button("AnimatorStateNoClips", "No source clips found");
+                noClips->SetNormalColor({ 0.20f, 0.16f, 0.08f, 1.0f });
+                noClips->SetHoverColor({ 0.20f, 0.16f, 0.08f, 1.0f });
+                item->AddChild(noClips);
+            }
+            else
+            {
+                const int maxVisibleClips = (std::min)(8, (int)clips.size());
+                for (int i = 0; i < maxVisibleClips; ++i)
+                {
+                    const AnimationClipInfo clip = clips[i];
+                    auto* clipButton = new UI::Button("AnimatorStateClip" + std::to_string(i), "Use: " + FitInspectorValue(clip.Name, 220.0f));
+                    clipButton->SetOnClick([commitStateEdit, clip, sourcePath]()
+                        {
+                            commitStateEdit([&](AnimatorComponent& editableAnimator, AnimatorComponent::Layer&, AnimatorComponent::State& editableState)
+                                {
+                                    editableState.Motion = AnimatorComponent::State::MotionType::Clip;
+                                    editableState.ClipIndex = (int)clip.Index;
+                                    editableState.MotionPath = sourcePath.string();
+                                    editableState.MotionAssetGuid = AssetDatabase::GetGuidFromPath(sourcePath);
+                                    if (editableState.Name.empty() || editableState.Name == "New State" || editableState.Name == "State")
+                                        editableState.Name = clip.Name.empty() ? ("Clip " + std::to_string(clip.Index)) : clip.Name;
+                                    editableState.ImportSettings.DisplayName = editableState.Name;
+                                    editableAnimator.SelectedClipIndex = editableState.ClipIndex;
+                                    editableAnimator.SelectedClipName = clip.Name;
+                                });
+                        });
+                    item->AddChild(clipButton);
+                }
+            }
+
+            auto* back = new UI::Button("AnimatorStateBackToObject", "Back To Object Inspector");
+            back->SetOnClick([this]()
+                {
+                    m_HasSelectedAnimatorState = false;
+                    m_SelectedAnimatorLayerIndex = -1;
+                    m_SelectedAnimatorStateIndex = -1;
+                    RebuildInspector();
+                });
+            item->AddChild(back);
 
             auto& window = CCEngine::Application::Get()->GetWindow();
             UpdateLayout({ 0.0f, 0.0f }, { (float)window.GetWidth(), (float)window.GetHeight() });

@@ -11,6 +11,7 @@
 #include "UI/ScriptFieldWidget.h"
 #include "UI/TextInput.h"
 #include "Renderer/ShaderProperty.h"
+#include "Renderer/UIRenderer.h"
 #include <algorithm>
 #include <iostream>
 #include <cctype>
@@ -25,6 +26,144 @@ namespace CCEngine {
     namespace UI {
         namespace
         {
+            class InspectorFieldRow : public Widget
+            {
+            public:
+                enum class Kind { ObjectField, Toggle, Dropdown };
+
+                InspectorFieldRow(const std::string& name, std::string label, std::string value, Kind kind)
+                    : Widget(name), m_Label(std::move(label)), m_Value(std::move(value)), m_Kind(kind)
+                {
+                }
+
+                void SetValue(const std::string& value) { m_Value = value; }
+                void SetChecked(bool checked) { m_Checked = checked; }
+                void SetOnClick(std::function<void(InspectorFieldRow*)> callback) { m_OnClick = std::move(callback); }
+                void SetOnObjectButtonClick(std::function<void(InspectorFieldRow*)> callback) { m_OnObjectButtonClick = std::move(callback); }
+                void SetOnDoubleClick(std::function<void(InspectorFieldRow*)> callback) { m_OnDoubleClick = std::move(callback); }
+
+                void OnRender() override
+                {
+                    if (!m_IsVisible)
+                        return;
+
+                    const float x = m_CalculatedPos.x;
+                    const float y = m_CalculatedPos.y;
+                    const float w = m_CalculatedSize.x;
+                    const float h = m_CalculatedSize.y;
+                    const float labelW = (std::min)(150.0f, w * 0.42f);
+                    const float fieldX = x + labelW;
+                    const float fieldW = (std::max)(24.0f, w - labelW);
+
+                    UIRenderer::DrawString(m_Label, x + 4.0f, y + h * 0.5f + 7.0f, { 0.72f, 0.72f, 0.74f, 1.0f });
+
+                    if (m_Kind == Kind::Toggle)
+                    {
+                        UIRenderer::DrawRectFilled(fieldX + 4.0f, y + 4.0f, 15.0f, 15.0f, { 0.10f, 0.10f, 0.105f, 1.0f });
+                        UIRenderer::DrawRect({ fieldX + 4.0f, y + 4.0f }, { 15.0f, 15.0f }, m_Checked ? DirectX::XMFLOAT4{ 0.58f, 0.78f, 0.98f, 1.0f } : DirectX::XMFLOAT4{ 0.30f, 0.30f, 0.32f, 1.0f });
+                        if (m_Checked)
+                            UIRenderer::DrawString("v", fieldX + 8.0f, y + 18.0f, { 0.88f, 0.92f, 0.96f, 1.0f });
+                    }
+                    else
+                    {
+                        const DirectX::XMFLOAT4 fill = m_IsPressed
+                            ? DirectX::XMFLOAT4{ 0.16f, 0.19f, 0.23f, 1.0f }
+                            : DirectX::XMFLOAT4{ 0.12f, 0.12f, 0.125f, 1.0f };
+                        UIRenderer::DrawRectFilled(fieldX, y + 1.0f, fieldW - 4.0f, h - 2.0f, fill);
+                        UIRenderer::DrawRect({ fieldX, y + 1.0f }, { fieldW - 4.0f, h - 2.0f }, { 0.25f, 0.25f, 0.27f, 1.0f });
+                        const float textW = (std::max)(12.0f, fieldW - 38.0f);
+                        UIRenderer::DrawString(FitValueToWidth(m_Value, textW), fieldX + 8.0f, y + h * 0.5f + 7.0f, { 0.84f, 0.84f, 0.86f, 1.0f });
+                        if (m_Kind == Kind::Dropdown)
+                            UIRenderer::DrawString("v", fieldX + fieldW - 22.0f, y + h * 0.5f + 7.0f, { 0.70f, 0.70f, 0.72f, 1.0f });
+                        else
+                            UIRenderer::DrawString("o", fieldX + fieldW - 22.0f, y + h * 0.5f + 7.0f, { 0.60f, 0.60f, 0.62f, 1.0f });
+                    }
+
+                    Widget::OnRender();
+                }
+
+            protected:
+                bool OnMouseButtonPressed(MouseButtonPressedEvent& e) override
+                {
+                    if (e.GetButton() != 0 || !IsPointInside(e.GetX(), e.GetY()))
+                        return false;
+                    m_IsPressed = true;
+                    e.Handled = true;
+                    return true;
+                }
+
+                bool OnMouseButtonReleased(MouseButtonReleasedEvent& e) override
+                {
+                    if (e.GetButton() != 0)
+                        return false;
+                    const bool fire = m_IsPressed && IsPointInside(e.GetX(), e.GetY());
+                    m_IsPressed = false;
+                    if (!fire)
+                        return e.Handled;
+
+                    const float w = m_CalculatedSize.x;
+                    const float labelW = (std::min)(150.0f, w * 0.42f);
+                    const float fieldX = m_CalculatedPos.x + labelW;
+                    const float fieldW = (std::max)(24.0f, w - labelW);
+                    const bool objectButton =
+                        m_Kind == Kind::ObjectField &&
+                        e.GetX() >= fieldX + fieldW - 30.0f &&
+                        e.GetX() <= fieldX + fieldW;
+
+                    if (objectButton && m_OnObjectButtonClick)
+                    {
+                        m_OnObjectButtonClick(this);
+                        e.Handled = true;
+                        return true;
+                    }
+
+                    const auto now = std::chrono::steady_clock::now();
+                    const bool doubleClick =
+                        m_OnDoubleClick &&
+                        m_LastClickedRow == this &&
+                        std::chrono::duration<float>(now - m_LastClickTime).count() <= 0.45f;
+                    m_LastClickedRow = this;
+                    m_LastClickTime = now;
+
+                    if (doubleClick)
+                    {
+                        m_OnDoubleClick(this);
+                        e.Handled = true;
+                        return true;
+                    }
+
+                    if (m_OnClick)
+                    {
+                        m_OnClick(this);
+                        e.Handled = true;
+                    }
+                    return e.Handled;
+                }
+
+            private:
+                static std::string FitValueToWidth(const std::string& text, float availableWidth)
+                {
+                    const int maxChars = (std::max)(0, (int)(availableWidth / 8.0f));
+                    if ((int)text.size() <= maxChars)
+                        return text;
+                    if (maxChars <= 3)
+                        return text.substr(0, (size_t)(std::max)(0, maxChars));
+                    return text.substr(0, (size_t)maxChars - 3) + "...";
+                }
+
+                std::string m_Label;
+                std::string m_Value;
+                Kind m_Kind = Kind::ObjectField;
+                bool m_Checked = false;
+                bool m_IsPressed = false;
+                std::function<void(InspectorFieldRow*)> m_OnClick;
+                std::function<void(InspectorFieldRow*)> m_OnObjectButtonClick;
+                std::function<void(InspectorFieldRow*)> m_OnDoubleClick;
+                inline static InspectorFieldRow* m_LastClickedRow = nullptr;
+                inline static std::chrono::steady_clock::time_point m_LastClickTime =
+                    std::chrono::steady_clock::now() - std::chrono::seconds(2);
+            };
+
             Entity FindModelRoot(Entity entity)
             {
                 Entity current = entity;
@@ -211,8 +350,8 @@ namespace CCEngine {
                 switch (mode)
                 {
                     case AnimatorComponent::CullingMode::AlwaysAnimate: return "Always Animate";
-                    case AnimatorComponent::CullingMode::CullCompletely: return "Cull Completely";
-                    default: return "Cull Update Transforms";
+                    case AnimatorComponent::CullingMode::CullCompletely: return "Cull Complete";
+                    default: return "Cull Update";
                 }
             }
 
@@ -1203,32 +1342,10 @@ namespace CCEngine {
                         if (!guidPath.empty())
                             controllerPath = guidPath;
                     }
-                    const std::string controllerLabel = controllerPath.empty()
-                        ? "Controller: None (create/assign .ccanimcontroller)"
-                        : "Controller: " + controllerPath.filename().string();
-
-                    auto controllerButton = new UI::Button("AnimatorControllerAsset", controllerLabel);
-                    controllerButton->SetAnchorMin(0.0f, 0.0f); controllerButton->SetAnchorMax(1.0f, 0.0f);
-                    controllerButton->SetOffsetMin(15.0f, 0.0f); controllerButton->SetOffsetMax(-10.0f, 28.0f);
-                    controllerButton->SetOnClick([entity]() mutable
-                        {
-                            static entt::entity lastClicked = entt::null;
-                            static auto lastClickTime = std::chrono::steady_clock::now() - std::chrono::seconds(2);
-
-                            auto now = std::chrono::steady_clock::now();
-                            const bool doubleClick =
-                                lastClicked == (entt::entity)entity &&
-                                std::chrono::duration<float>(now - lastClickTime).count() <= 0.45f;
-
-                            lastClicked = (entt::entity)entity;
-                            lastClickTime = now;
-
-                            if (doubleClick && entity && entity.HasComponent<AnimatorComponent>())
-                                entity.GetComponent<AnimatorComponent>().EditorOpenGraphRequested = true;
-                        });
-                    item->AddChild(controllerButton);
-
                     {
+                    const std::string controllerLabel = controllerPath.empty()
+                        ? "None (Runtime Animator Controller)"
+                        : controllerPath.filename().string();
                     std::filesystem::path avatarPath = animator.AvatarPath;
                     if (!animator.AvatarGuid.empty())
                     {
@@ -1237,10 +1354,10 @@ namespace CCEngine {
                             avatarPath = guidPath;
                     }
 
-                    auto assignControllerButton = new UI::Button("AnimatorAssignController", "Assign Controller...");
-                    assignControllerButton->SetAnchorMin(0.0f, 0.0f); assignControllerButton->SetAnchorMax(1.0f, 0.0f);
-                    assignControllerButton->SetOffsetMin(15.0f, 0.0f); assignControllerButton->SetOffsetMax(-10.0f, 28.0f);
-                    assignControllerButton->SetOnClick([entity]() mutable
+                    auto controllerRow = new InspectorFieldRow("AnimatorControllerAsset", "Controller", controllerLabel, InspectorFieldRow::Kind::ObjectField);
+                    controllerRow->SetAnchorMin(0.0f, 0.0f); controllerRow->SetAnchorMax(1.0f, 0.0f);
+                    controllerRow->SetOffsetMin(15.0f, 0.0f); controllerRow->SetOffsetMax(-10.0f, 22.0f);
+                    auto pickAnimatorController = [entity](InspectorFieldRow* row) mutable
                         {
                             if (!entity || !entity.HasComponent<AnimatorComponent>())
                                 return;
@@ -1253,16 +1370,29 @@ namespace CCEngine {
                             anim.ControllerPath = filepath;
                             anim.ControllerAssetGuid = AssetDatabase::GetGuidFromPath(filepath);
                             AnimatorControllerAsset::LoadFromFile(filepath, anim);
+                            row->SetValue(std::filesystem::path(filepath).filename().string());
+                        };
+                    // 슬롯 본문은 선택창을 열지 않는다.
+                    // 더블클릭은 Graph 열기, 오른쪽 o 버튼은 Controller 선택으로 역할을 분리해야
+                    // 더블클릭 때 첫 클릭이 파일 선택창을 먼저 띄우는 문제가 생기지 않는다.
+                    controllerRow->SetOnObjectButtonClick(pickAnimatorController);
+                    controllerRow->SetOnDoubleClick([entity](InspectorFieldRow*) mutable
+                        {
+                            if (entity && entity.HasComponent<AnimatorComponent>())
+                            {
+                                const auto& anim = entity.GetComponent<AnimatorComponent>();
+                                if (!anim.ControllerPath.empty() || !anim.ControllerAssetGuid.empty())
+                                    entity.GetComponent<AnimatorComponent>().EditorOpenGraphRequested = true;
+                            }
                         });
-                    item->AddChild(assignControllerButton);
+                    item->AddChild(controllerRow);
 
-                    auto avatarButton = new UI::Button("AnimatorAvatarAsset",
-                        avatarPath.empty()
-                            ? "Avatar: None"
-                            : "Avatar: " + avatarPath.filename().string());
-                    avatarButton->SetAnchorMin(0.0f, 0.0f); avatarButton->SetAnchorMax(1.0f, 0.0f);
-                    avatarButton->SetOffsetMin(15.0f, 0.0f); avatarButton->SetOffsetMax(-10.0f, 28.0f);
-                    avatarButton->SetOnClick([entity, avatarButton]() mutable
+                    auto avatarRow = new InspectorFieldRow("AnimatorAvatarAsset", "Avatar",
+                        avatarPath.empty() ? "None" : avatarPath.filename().string(),
+                        InspectorFieldRow::Kind::ObjectField);
+                    avatarRow->SetAnchorMin(0.0f, 0.0f); avatarRow->SetAnchorMax(1.0f, 0.0f);
+                    avatarRow->SetOffsetMin(15.0f, 0.0f); avatarRow->SetOffsetMax(-10.0f, 22.0f);
+                    avatarRow->SetOnClick([entity](InspectorFieldRow* row) mutable
                         {
                             if (!entity || !entity.HasComponent<AnimatorComponent>())
                                 return;
@@ -1274,15 +1404,15 @@ namespace CCEngine {
                             auto& anim = entity.GetComponent<AnimatorComponent>();
                             anim.AvatarPath = filepath;
                             anim.AvatarGuid = AssetDatabase::GetGuidFromPath(filepath);
-                            avatarButton->SetText("Avatar: " + std::filesystem::path(filepath).filename().string());
+                            row->SetValue(std::filesystem::path(filepath).filename().string());
                         });
-                    item->AddChild(avatarButton);
+                    item->AddChild(avatarRow);
 
-                    auto applyRootButton = new UI::Button("AnimatorApplyRootMotion", animator.ApplyRootMotion ? "Apply Root Motion: On" : "Apply Root Motion: Off");
-                    applyRootButton->SetAnchorMin(0.0f, 0.0f); applyRootButton->SetAnchorMax(1.0f, 0.0f);
-                    applyRootButton->SetOffsetMin(15.0f, 0.0f); applyRootButton->SetOffsetMax(-10.0f, 28.0f);
-                    applyRootButton->SetActive(animator.ApplyRootMotion);
-                    applyRootButton->SetOnClick([entity, applyRootButton]() mutable
+                    auto applyRootRow = new InspectorFieldRow("AnimatorApplyRootMotion", "Apply Root Motion", "", InspectorFieldRow::Kind::Toggle);
+                    applyRootRow->SetAnchorMin(0.0f, 0.0f); applyRootRow->SetAnchorMax(1.0f, 0.0f);
+                    applyRootRow->SetOffsetMin(15.0f, 0.0f); applyRootRow->SetOffsetMax(-10.0f, 22.0f);
+                    applyRootRow->SetChecked(animator.ApplyRootMotion);
+                    applyRootRow->SetOnClick([entity](InspectorFieldRow* row) mutable
                         {
                             if (!entity || !entity.HasComponent<AnimatorComponent>())
                                 return;
@@ -1292,15 +1422,14 @@ namespace CCEngine {
                             if (auto* state = FindInspectorActiveState(anim))
                                 state->ApplyRootMotion = anim.ApplyRootMotion;
                             SaveAnimatorControllerIfAssigned(anim);
-                            applyRootButton->SetActive(anim.ApplyRootMotion);
-                            applyRootButton->SetText(anim.ApplyRootMotion ? "Apply Root Motion: On" : "Apply Root Motion: Off");
+                            row->SetChecked(anim.ApplyRootMotion);
                         });
-                    item->AddChild(applyRootButton);
+                    item->AddChild(applyRootRow);
 
-                    auto updateModeButton = new UI::Button("AnimatorUpdateMode", std::string("Update Mode: ") + AnimatorUpdateModeName(animator.UpdateModeValue));
-                    updateModeButton->SetAnchorMin(0.0f, 0.0f); updateModeButton->SetAnchorMax(1.0f, 0.0f);
-                    updateModeButton->SetOffsetMin(15.0f, 0.0f); updateModeButton->SetOffsetMax(-10.0f, 28.0f);
-                    updateModeButton->SetOnClick([entity, updateModeButton]() mutable
+                    auto updateModeRow = new InspectorFieldRow("AnimatorUpdateMode", "Update Mode", AnimatorUpdateModeName(animator.UpdateModeValue), InspectorFieldRow::Kind::Dropdown);
+                    updateModeRow->SetAnchorMin(0.0f, 0.0f); updateModeRow->SetAnchorMax(1.0f, 0.0f);
+                    updateModeRow->SetOffsetMin(15.0f, 0.0f); updateModeRow->SetOffsetMax(-10.0f, 22.0f);
+                    updateModeRow->SetOnClick([entity](InspectorFieldRow* row) mutable
                         {
                             if (!entity || !entity.HasComponent<AnimatorComponent>())
                                 return;
@@ -1308,14 +1437,14 @@ namespace CCEngine {
                             auto& anim = entity.GetComponent<AnimatorComponent>();
                             int next = (static_cast<int>(anim.UpdateModeValue) + 1) % 3;
                             anim.UpdateModeValue = static_cast<AnimatorComponent::UpdateMode>(next);
-                            updateModeButton->SetText(std::string("Update Mode: ") + AnimatorUpdateModeName(anim.UpdateModeValue));
+                            row->SetValue(AnimatorUpdateModeName(anim.UpdateModeValue));
                         });
-                    item->AddChild(updateModeButton);
+                    item->AddChild(updateModeRow);
 
-                    auto cullingModeButton = new UI::Button("AnimatorCullingMode", std::string("Culling Mode: ") + AnimatorCullingModeName(animator.CullingModeValue));
-                    cullingModeButton->SetAnchorMin(0.0f, 0.0f); cullingModeButton->SetAnchorMax(1.0f, 0.0f);
-                    cullingModeButton->SetOffsetMin(15.0f, 0.0f); cullingModeButton->SetOffsetMax(-10.0f, 28.0f);
-                    cullingModeButton->SetOnClick([entity, cullingModeButton]() mutable
+                    auto cullingModeRow = new InspectorFieldRow("AnimatorCullingMode", "Culling Mode", AnimatorCullingModeName(animator.CullingModeValue), InspectorFieldRow::Kind::Dropdown);
+                    cullingModeRow->SetAnchorMin(0.0f, 0.0f); cullingModeRow->SetAnchorMax(1.0f, 0.0f);
+                    cullingModeRow->SetOffsetMin(15.0f, 0.0f); cullingModeRow->SetOffsetMax(-10.0f, 22.0f);
+                    cullingModeRow->SetOnClick([entity](InspectorFieldRow* row) mutable
                         {
                             if (!entity || !entity.HasComponent<AnimatorComponent>())
                                 return;
@@ -1323,33 +1452,12 @@ namespace CCEngine {
                             auto& anim = entity.GetComponent<AnimatorComponent>();
                             int next = (static_cast<int>(anim.CullingModeValue) + 1) % 3;
                             anim.CullingModeValue = static_cast<AnimatorComponent::CullingMode>(next);
-                            cullingModeButton->SetText(std::string("Culling Mode: ") + AnimatorCullingModeName(anim.CullingModeValue));
+                            row->SetValue(AnimatorCullingModeName(anim.CullingModeValue));
                         });
-                    item->AddChild(cullingModeButton);
-
-                    const int stateCount = animator.Layers.empty()
-                        ? static_cast<int>(animator.States.size())
-                        : static_cast<int>(animator.Layers[std::clamp(animator.ActiveLayerIndex, 0, static_cast<int>(animator.Layers.size()) - 1)].States.size());
-                    auto summaryButton = new UI::Button("AnimatorSummary",
-                        "Info: States " + std::to_string(stateCount) +
-                        " / Layers " + std::to_string(animator.Layers.size()) +
-                        " / Params " + std::to_string(animator.Parameters.size()));
-                    summaryButton->SetAnchorMin(0.0f, 0.0f); summaryButton->SetAnchorMax(1.0f, 0.0f);
-                    summaryButton->SetOffsetMin(15.0f, 0.0f); summaryButton->SetOffsetMax(-10.0f, 28.0f);
-                    item->AddChild(summaryButton);
-
-                    auto openGraphButton = new UI::Button("AnimatorOpenGraph", "Open Animator Graph");
-                    openGraphButton->SetAnchorMin(0.0f, 0.0f); openGraphButton->SetAnchorMax(1.0f, 0.0f);
-                    openGraphButton->SetOffsetMin(15.0f, 0.0f); openGraphButton->SetOffsetMax(-10.0f, 28.0f);
-                    openGraphButton->SetOnClick([entity]() mutable
-                        {
-                            if (entity && entity.HasComponent<AnimatorComponent>())
-                                entity.GetComponent<AnimatorComponent>().EditorOpenGraphRequested = true;
-                        });
-                    item->AddChild(openGraphButton);
+                    item->AddChild(cullingModeRow);
 
                     // Unity처럼 Animator 컴포넌트는 실행에 필요한 참조와 정책만 노출한다.
-                    // 레이어, 전이, 루트 모션 세부 설정은 Animator Graph 전용 창에서 다룬다.
+                    // 상세 그래프 편집은 Asset Browser에서 Controller 에셋을 더블클릭해 연다.
                     AddRemoveComponentButton<AnimatorComponent>(parent, item, entity, "Animator");
                     return;
                     }

@@ -18,6 +18,7 @@ namespace CCEngine::UI
 
         void SetTarget(Entity entity);
         void SetOnClosed(std::function<void()> callback) { m_OnClosed = std::move(callback); }
+        void SetOnStateSelected(std::function<void(Entity, int, int)> callback) { m_OnStateSelected = std::move(callback); }
         bool TryAcceptAssetDrop(const std::string& filepath, const std::string& assetType, float mouseX, float mouseY);
 
         virtual void OnRender() override;
@@ -160,6 +161,7 @@ namespace CCEngine::UI
         void DeleteSelectedState();
         void SelectOnlyState(CCEngine::AnimatorComponent& animator, int stateIndex);
         void ClearStateSelection(CCEngine::AnimatorComponent& animator);
+        void NotifyStateSelected(const CCEngine::AnimatorComponent& animator, int stateIndex) const;
         void SelectStatesInBox(CCEngine::AnimatorComponent& animator);
         bool IsStateSelected(int stateIndex) const;
         void AddParameter(CCEngine::AnimatorComponent::Parameter::Type type);
@@ -266,5 +268,6 @@ namespace CCEngine::UI
         float m_NodeWidth = 218.0f;
         float m_NodeHeight = 82.0f;
         std::function<void()> m_OnClosed = nullptr;
+        std::function<void(Entity, int, int)> m_OnStateSelected = nullptr;
     };
 }

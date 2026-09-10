@@ -3810,6 +3810,7 @@ namespace CCEngine::UI
         m_StateEditMessage = "Empty State created. Click Name to rename, Replace Clip to assign motion.";
         CommitGraphEdit(*animator);
         ResetRuntime(*animator);
+        NotifyStateSelected(*animator, m_SelectedStateIndex);
     }
 
     void AnimatorGraphPanel::AddStateFromClipIndex(int clipIndex, const std::string& clipName, const DirectX::XMFLOAT2& graphPosition)
@@ -3837,6 +3838,7 @@ namespace CCEngine::UI
         m_SelectedStateIndices.push_back(m_SelectedStateIndex);
         CommitGraphEdit(*animator);
         ResetRuntime(*animator);
+        NotifyStateSelected(*animator, m_SelectedStateIndex);
     }
 
     void AnimatorGraphPanel::ReplaceStateClip(int stateIndex, int clipIndex, const std::string& clipName)
@@ -4797,6 +4799,7 @@ namespace CCEngine::UI
         layer->ActiveStateIndex = stateIndex;
         layer->SelectedTransitionIndex = -1;
         SyncBaseLayerToLegacyGraph(animator);
+        NotifyStateSelected(animator, stateIndex);
     }
 
     void AnimatorGraphPanel::ClearStateSelection(AnimatorComponent& animator)
@@ -4812,6 +4815,18 @@ namespace CCEngine::UI
         if (layer)
             layer->SelectedTransitionIndex = -1;
         SyncBaseLayerToLegacyGraph(animator);
+        NotifyStateSelected(animator, -1);
+    }
+
+    void AnimatorGraphPanel::NotifyStateSelected(const AnimatorComponent& animator, int stateIndex) const
+    {
+        if (!m_OnStateSelected)
+            return;
+
+        const int layerIndex = animator.Layers.empty()
+            ? -1
+            : std::clamp(animator.ActiveLayerIndex, 0, (int)animator.Layers.size() - 1);
+        m_OnStateSelected(m_TargetEntity, layerIndex, stateIndex);
     }
 
     void AnimatorGraphPanel::SelectStatesInBox(AnimatorComponent& animator)

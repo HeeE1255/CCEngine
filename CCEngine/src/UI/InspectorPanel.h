@@ -25,6 +25,7 @@ namespace CCEngine
 
             // 외부(하이어라키 등)에서 선택된 엔티티를 세팅
             void SetSelectedEntity(Entity entity);
+            void SetSelectedAnimatorState(Entity entity, int layerIndex, int stateIndex);
             void SetSelectedAsset(const std::filesystem::path& assetPath, const std::string& assetType);
             Entity GetSelectedEntity() const { return m_SelectedEntity; }
             bool HasSelectedAsset() const { return !m_SelectedAssetPath.empty(); }
@@ -89,6 +90,7 @@ namespace CCEngine
             void BuildMaterialInspector();
             void BuildShaderInspector();
             void BuildAvatarInspector();
+            void BuildAnimatorStateInspector();
             void BuildGenericAssetInspector();
             MaterialAsset BuildShaderPreviewMaterial(const std::filesystem::path& shaderPath) const;
             void MarkSelectedMaterialDirty();
@@ -112,6 +114,9 @@ namespace CCEngine
             Entity m_SelectedEntity;
             std::filesystem::path m_SelectedAssetPath;
             std::string m_SelectedAssetType;
+            bool m_HasSelectedAnimatorState = false;
+            int m_SelectedAnimatorLayerIndex = -1;
+            int m_SelectedAnimatorStateIndex = -1;
             MaterialAsset m_SelectedMaterial;
             Framebuffer* m_MaterialPreviewFramebuffer = nullptr;
             std::shared_ptr<Mesh> m_MaterialPreviewMesh;
