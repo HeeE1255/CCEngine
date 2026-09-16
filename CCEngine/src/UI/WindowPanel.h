@@ -23,6 +23,7 @@ namespace CCEngine
 
             virtual void OnUpdate(float deltaTime) override;
             virtual void OnRender() override;
+            virtual bool OnEvent(Event& e) override;
             virtual bool WantsMouseCapture() const override { return m_IsDragging || m_ResizeMode != ResizeMode::None; }
             virtual bool IsPointInside(float mouseX, float mouseY) const override;
 

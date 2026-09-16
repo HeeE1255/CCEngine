@@ -6,6 +6,7 @@
 #include "Scene/Entity.h"
 
 #include <functional>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -19,6 +20,7 @@ namespace CCEngine::UI
         void SetTarget(Entity entity);
         void SetOnClosed(std::function<void()> callback) { m_OnClosed = std::move(callback); }
         void SetOnStateSelected(std::function<void(Entity, int, int)> callback) { m_OnStateSelected = std::move(callback); }
+        void SetOnTransitionSelected(std::function<void(Entity, int, int)> callback) { m_OnTransitionSelected = std::move(callback); }
         bool TryAcceptAssetDrop(const std::string& filepath, const std::string& assetType, float mouseX, float mouseY);
 
         virtual void OnRender() override;
@@ -102,6 +104,9 @@ namespace CCEngine::UI
 
         CCEngine::AnimatorComponent* GetAnimator() const;
         StateNodeRect GetStateRect(int stateIndex) const;
+        StateNodeRect GetEndpointRect(int stateIndex) const;
+        DirectX::XMFLOAT2 GetRectConnectionPoint(const StateNodeRect& rect, DirectX::XMFLOAT2 toward) const;
+        std::pair<DirectX::XMFLOAT2, DirectX::XMFLOAT2> GetTransitionEndpoints(int fromStateIndex, int toStateIndex, int transitionIndex = -1) const;
         int GetStateAt(float mouseX, float mouseY) const;
         int GetTransitionAt(float mouseX, float mouseY) const;
         void DrawGrid(float x, float y, float w, float h) const;
@@ -162,6 +167,7 @@ namespace CCEngine::UI
         void SelectOnlyState(CCEngine::AnimatorComponent& animator, int stateIndex);
         void ClearStateSelection(CCEngine::AnimatorComponent& animator);
         void NotifyStateSelected(const CCEngine::AnimatorComponent& animator, int stateIndex) const;
+        void NotifyTransitionSelected(const CCEngine::AnimatorComponent& animator, int transitionIndex) const;
         void SelectStatesInBox(CCEngine::AnimatorComponent& animator);
         bool IsStateSelected(int stateIndex) const;
         void AddParameter(CCEngine::AnimatorComponent::Parameter::Type type);
@@ -269,5 +275,6 @@ namespace CCEngine::UI
         float m_NodeHeight = 82.0f;
         std::function<void()> m_OnClosed = nullptr;
         std::function<void(Entity, int, int)> m_OnStateSelected = nullptr;
+        std::function<void(Entity, int, int)> m_OnTransitionSelected = nullptr;
     };
 }

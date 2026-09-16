@@ -42,6 +42,7 @@
 #include <regex>
 #include <set>
 #include <sstream>
+#include <tuple>
 #include <unordered_set>
 #include <vector>
 #include <Windows.h>
@@ -196,6 +197,387 @@ namespace CCEngine
 
             private:
                 std::function<const MaterialAsset*()> m_GetMaterial;
+            };
+
+            class AnimatorStateInspectorRow : public Widget
+            {
+            public:
+                enum class Kind { Field, Toggle, Section, Action, Stepper };
+
+                AnimatorStateInspectorRow(const std::string& name, std::string label, std::string value, Kind kind)
+                    : Widget(name), m_Label(std::move(label)), m_Value(std::move(value)), m_Kind(kind)
+                {
+                }
+
+                void SetChecked(bool checked) { m_Checked = checked; }
+                void SetWarning(bool warning) { m_Warning = warning; }
+                void SetSelected(bool selected) { m_Selected = selected; }
+                void SetOnClick(std::function<void()> callback) { m_OnClick = std::move(callback); }
+                void SetOnIconClick(std::function<void()> callback) { m_OnIconClick = std::move(callback); }
+                void SetOnMinus(std::function<void()> callback) { m_OnMinus = std::move(callback); }
+                void SetOnPlus(std::function<void()> callback) { m_OnPlus = std::move(callback); }
+
+                void OnRender() override
+                {
+                    if (!m_IsVisible)
+                        return;
+
+                    const float x = m_CalculatedPos.x;
+                    const float y = m_CalculatedPos.y;
+                    const float w = m_CalculatedSize.x;
+                    const float h = m_CalculatedSize.y;
+                    auto [mouseX, mouseY] = Application::Get()->GetWindow().GetMousePosition();
+                    const bool hovered = IsInteractive() &&
+                        IsPointInside(mouseX, mouseY) &&
+                        !IsMouseBlockedByWidgetAbove(mouseX, mouseY);
+
+                    if (m_Kind == Kind::Section)
+                    {
+                        UIRenderer::DrawRectFilled(x, y + 2.0f, w, h - 4.0f, { 0.115f, 0.118f, 0.125f, 1.0f });
+                        UIRenderer::DrawString(m_Label, x + 8.0f, y + h * 0.5f + 7.0f, { 0.84f, 0.86f, 0.88f, 1.0f });
+                        return;
+                    }
+
+                    const float labelW = (std::min)(145.0f, w * 0.40f);
+                    const float fieldX = x + labelW;
+                    const float fieldW = (std::max)(24.0f, w - labelW);
+                    UIRenderer::DrawString(m_Label, x + 4.0f, y + h * 0.5f + 7.0f, { 0.72f, 0.72f, 0.74f, 1.0f });
+
+                    if (m_Kind == Kind::Toggle)
+                    {
+                        if (hovered || m_IsPressed)
+                            UIRenderer::DrawRectFilled(fieldX, y + 1.0f, fieldW - 4.0f, h - 2.0f, m_IsPressed ? DirectX::XMFLOAT4{ 0.16f, 0.19f, 0.23f, 1.0f } : DirectX::XMFLOAT4{ 0.14f, 0.15f, 0.17f, 1.0f });
+                        UIRenderer::DrawRectFilled(fieldX + 4.0f, y + 4.0f, 15.0f, 15.0f, { 0.10f, 0.10f, 0.105f, 1.0f });
+                        UIRenderer::DrawRect({ fieldX + 4.0f, y + 4.0f }, { 15.0f, 15.0f },
+                            m_Checked ? DirectX::XMFLOAT4{ 0.58f, 0.78f, 0.98f, 1.0f } : DirectX::XMFLOAT4{ 0.30f, 0.30f, 0.32f, 1.0f });
+                        if (m_Checked)
+                            UIRenderer::DrawString("v", fieldX + 8.0f, y + 18.0f, { 0.88f, 0.92f, 0.96f, 1.0f });
+                        return;
+                    }
+
+                    DirectX::XMFLOAT4 fill = m_IsPressed
+                        ? DirectX::XMFLOAT4{ 0.16f, 0.19f, 0.23f, 1.0f }
+                        : (hovered ? DirectX::XMFLOAT4{ 0.145f, 0.155f, 0.17f, 1.0f } : DirectX::XMFLOAT4{ 0.12f, 0.12f, 0.125f, 1.0f });
+                    if (m_Warning)
+                        fill = hovered ? DirectX::XMFLOAT4{ 0.28f, 0.19f, 0.09f, 1.0f } : DirectX::XMFLOAT4{ 0.22f, 0.16f, 0.08f, 1.0f };
+                    if (m_Kind == Kind::Action)
+                        fill = m_IsPressed ? DirectX::XMFLOAT4{ 0.12f, 0.20f, 0.30f, 1.0f } : (hovered ? DirectX::XMFLOAT4{ 0.22f, 0.30f, 0.40f, 1.0f } : DirectX::XMFLOAT4{ 0.18f, 0.24f, 0.32f, 1.0f });
+                    if (m_Selected)
+                        fill = hovered ? DirectX::XMFLOAT4{ 0.20f, 0.38f, 0.58f, 1.0f } : DirectX::XMFLOAT4{ 0.15f, 0.30f, 0.48f, 1.0f };
+
+                    UIRenderer::DrawRectFilled(fieldX, y + 1.0f, fieldW - 4.0f, h - 2.0f, fill);
+                    const DirectX::XMFLOAT4 border = m_Selected
+                        ? DirectX::XMFLOAT4{ 0.42f, 0.70f, 0.95f, 1.0f }
+                        : DirectX::XMFLOAT4{ 0.25f, 0.25f, 0.27f, 1.0f };
+                    UIRenderer::DrawRect({ fieldX, y + 1.0f }, { fieldW - 4.0f, h - 2.0f }, border);
+
+                    float textW = fieldW - 16.0f;
+                    if (m_Kind == Kind::Field)
+                        textW -= 24.0f;
+                    if (m_Kind == Kind::Stepper)
+                        textW -= 56.0f;
+                    UIRenderer::DrawString(Fit(m_Value, textW), fieldX + 8.0f, y + h * 0.5f + 7.0f, { 0.84f, 0.84f, 0.86f, 1.0f });
+
+                    if (m_Kind == Kind::Field && (m_OnClick || m_OnIconClick))
+                    {
+                        UIRenderer::DrawString("o", fieldX + fieldW - 22.0f, y + h * 0.5f + 7.0f, { 0.60f, 0.60f, 0.62f, 1.0f });
+                    }
+                    else if (m_Kind == Kind::Stepper)
+                    {
+                        const float minusX = fieldX + fieldW - 58.0f;
+                        const float plusX = fieldX + fieldW - 31.0f;
+                        UIRenderer::DrawRectFilled(minusX, y + 3.0f, 23.0f, h - 6.0f, { 0.10f, 0.105f, 0.115f, 1.0f });
+                        UIRenderer::DrawRectFilled(plusX, y + 3.0f, 23.0f, h - 6.0f, { 0.10f, 0.105f, 0.115f, 1.0f });
+                        UIRenderer::DrawString("-", minusX + 8.0f, y + h * 0.5f + 7.0f, { 0.86f, 0.86f, 0.88f, 1.0f });
+                        UIRenderer::DrawString("+", plusX + 7.0f, y + h * 0.5f + 7.0f, { 0.86f, 0.86f, 0.88f, 1.0f });
+                    }
+                }
+
+            protected:
+                bool OnMouseButtonPressed(MouseButtonPressedEvent& e) override
+                {
+                    if (e.GetButton() != 0 || !IsInteractive() || !IsPointInside(e.GetX(), e.GetY()))
+                        return false;
+                    if (m_Kind == Kind::Stepper && !IsPointInsideStepperButton(e.GetX(), e.GetY()))
+                        return false;
+                    m_IsPressed = true;
+                    e.Handled = true;
+                    return true;
+                }
+
+                bool OnMouseButtonReleased(MouseButtonReleasedEvent& e) override
+                {
+                    if (e.GetButton() != 0)
+                        return false;
+                    const bool fire = m_IsPressed && IsPointInside(e.GetX(), e.GetY());
+                    m_IsPressed = false;
+                    if (!fire)
+                        return e.Handled;
+
+                    if (m_Kind == Kind::Stepper)
+                    {
+                        auto [minusX, plusX, buttonY, buttonH] = GetStepperButtonRects();
+                        if (e.GetX() >= minusX && e.GetX() <= minusX + 23.0f &&
+                            e.GetY() >= buttonY && e.GetY() <= buttonY + buttonH)
+                        {
+                            if (m_OnMinus) m_OnMinus();
+                            e.Handled = true;
+                            return true;
+                        }
+                        if (e.GetX() >= plusX && e.GetX() <= plusX + 23.0f &&
+                            e.GetY() >= buttonY && e.GetY() <= buttonY + buttonH)
+                        {
+                            if (m_OnPlus) m_OnPlus();
+                            e.Handled = true;
+                            return true;
+                        }
+                    }
+                    else if (m_Kind == Kind::Field && m_OnIconClick && IsPointInsideFieldIcon(e.GetX(), e.GetY()))
+                    {
+                        m_OnIconClick();
+                        e.Handled = true;
+                        return true;
+                    }
+
+                    if (m_OnClick)
+                        m_OnClick();
+                    e.Handled = true;
+                    return true;
+                }
+
+            private:
+                bool IsInteractive() const
+                {
+                    if (m_Kind == Kind::Section)
+                        return false;
+                    if (m_Kind == Kind::Stepper)
+                        return (bool)m_OnMinus || (bool)m_OnPlus;
+                    if (m_Kind == Kind::Toggle || m_Kind == Kind::Action)
+                        return (bool)m_OnClick;
+                    return (bool)m_OnClick || (bool)m_OnIconClick;
+                }
+
+                std::tuple<float, float, float, float> GetStepperButtonRects() const
+                {
+                    const float w = m_CalculatedSize.x;
+                    const float labelW = (std::min)(145.0f, w * 0.40f);
+                    const float fieldX = m_CalculatedPos.x + labelW;
+                    const float fieldW = (std::max)(24.0f, w - labelW);
+                    return { fieldX + fieldW - 58.0f, fieldX + fieldW - 31.0f, m_CalculatedPos.y + 3.0f, m_CalculatedSize.y - 6.0f };
+                }
+
+                bool IsPointInsideStepperButton(float mouseX, float mouseY) const
+                {
+                    auto [minusX, plusX, buttonY, buttonH] = GetStepperButtonRects();
+                    const bool inMinus = mouseX >= minusX && mouseX <= minusX + 23.0f && mouseY >= buttonY && mouseY <= buttonY + buttonH;
+                    const bool inPlus = mouseX >= plusX && mouseX <= plusX + 23.0f && mouseY >= buttonY && mouseY <= buttonY + buttonH;
+                    return inMinus || inPlus;
+                }
+
+                std::tuple<float, float, float, float> GetFieldIconRect() const
+                {
+                    const float w = m_CalculatedSize.x;
+                    const float labelW = (std::min)(145.0f, w * 0.40f);
+                    const float fieldX = m_CalculatedPos.x + labelW;
+                    const float fieldW = (std::max)(24.0f, w - labelW);
+                    return { fieldX + fieldW - 28.0f, m_CalculatedPos.y + 3.0f, 24.0f, m_CalculatedSize.y - 6.0f };
+                }
+
+                bool IsPointInsideFieldIcon(float mouseX, float mouseY) const
+                {
+                    auto [iconX, iconY, iconW, iconH] = GetFieldIconRect();
+                    return mouseX >= iconX && mouseX <= iconX + iconW && mouseY >= iconY && mouseY <= iconY + iconH;
+                }
+
+                static std::string Fit(const std::string& text, float availableWidth)
+                {
+                    const int maxChars = (std::max)(0, (int)(availableWidth / 8.0f));
+                    if ((int)text.size() <= maxChars)
+                        return text;
+                    if (maxChars <= 3)
+                        return text.substr(0, (size_t)(std::max)(0, maxChars));
+                    return text.substr(0, (size_t)maxChars - 3) + "...";
+                }
+
+                std::string m_Label;
+                std::string m_Value;
+                Kind m_Kind = Kind::Field;
+                bool m_Checked = false;
+                bool m_Warning = false;
+                bool m_Selected = false;
+                bool m_IsPressed = false;
+                std::function<void()> m_OnClick;
+                std::function<void()> m_OnIconClick;
+                std::function<void()> m_OnMinus;
+                std::function<void()> m_OnPlus;
+            };
+
+            class AnimatorTransitionBlendPreview : public Widget
+            {
+            public:
+                AnimatorTransitionBlendPreview(
+                    const std::string& name,
+                    std::string sourceName,
+                    std::string targetName,
+                    bool hasExitTime,
+                    float exitTime,
+                    float blendTime)
+                    : Widget(name),
+                    m_SourceName(std::move(sourceName)),
+                    m_TargetName(std::move(targetName)),
+                    m_HasExitTime(hasExitTime),
+                    m_ExitTime(exitTime),
+                    m_BlendTime(blendTime)
+                {
+                }
+
+                void OnRender() override
+                {
+                    if (!m_IsVisible)
+                        return;
+
+                    const float x = m_CalculatedPos.x;
+                    const float y = m_CalculatedPos.y;
+                    const float w = m_CalculatedSize.x;
+                    const float h = m_CalculatedSize.y;
+                    const float innerX = x + 10.0f;
+                    const float innerY = y + 8.0f;
+                    const float innerW = (std::max)(80.0f, w - 20.0f);
+
+                    UIRenderer::DrawRectFilled(x, y, w, h, { 0.060f, 0.064f, 0.072f, 1.0f });
+                    UIRenderer::DrawRect({ x, y }, { w, h }, { 0.22f, 0.24f, 0.28f, 1.0f });
+                    UIRenderer::DrawString("Blend Preview", innerX, innerY + 15.0f, { 0.84f, 0.86f, 0.90f, 1.0f });
+
+                    const float graphX = innerX + 14.0f;
+                    const float graphY = y + 34.0f;
+                    const float graphW = (std::max)(60.0f, innerW - 14.0f);
+                    const float graphH = 44.0f;
+                    const float topY = graphY + 6.0f;
+                    const float bottomY = graphY + graphH - 6.0f;
+                    const float midY = graphY + graphH * 0.5f;
+
+                    const float exitN = m_HasExitTime ? std::clamp(m_ExitTime, 0.0f, 1.0f) : 0.0f;
+                    const float visualBlend = std::clamp(m_BlendTime, 0.02f, 1.0f);
+                    float blendStart = m_HasExitTime ? exitN : 0.0f;
+                    float blendEnd = blendStart + visualBlend;
+                    if (blendEnd > 1.0f)
+                    {
+                        blendEnd = 1.0f;
+                        blendStart = (std::max)(0.0f, blendEnd - visualBlend);
+                    }
+
+                    const float blendStartX = graphX + blendStart * graphW;
+                    const float blendEndX = graphX + blendEnd * graphW;
+                    const float exitX = graphX + exitN * graphW;
+
+                    UIRenderer::DrawRectFilled(graphX, graphY, graphW, graphH, { 0.035f, 0.038f, 0.045f, 1.0f });
+                    UIRenderer::DrawRectFilled(blendStartX, graphY, (std::max)(2.0f, blendEndX - blendStartX), graphH, { 0.18f, 0.28f, 0.42f, 0.45f });
+                    UIRenderer::DrawRect({ graphX, graphY }, { graphW, graphH }, { 0.18f, 0.19f, 0.21f, 1.0f });
+                    DrawTimelineTicks(graphX, graphY, graphW, graphH);
+                    DrawPreviewLine({ graphX, midY }, { graphX + graphW, midY }, { 0.18f, 0.19f, 0.21f, 1.0f }, 1.0f);
+                    DrawPreviewLine({ exitX, graphY }, { exitX, graphY + graphH }, { 0.78f, 0.48f, 0.16f, 1.0f }, 1.5f);
+
+                    // 선형 블렌드는 전환 구간에서 기존 상태 가중치가 내려가고, 다음 상태 가중치가 올라간다.
+                    // 이 그래프는 실제 포즈 섞임을 눈으로 확인하기 위한 UI라서 Source/Target 두 선을 동시에 그린다.
+                    DrawPreviewLine({ graphX, topY }, { blendStartX, topY }, { 0.32f, 0.54f, 0.82f, 1.0f }, 2.0f);
+                    DrawPreviewLine({ blendStartX, topY }, { blendEndX, bottomY }, { 0.32f, 0.54f, 0.82f, 1.0f }, 2.0f);
+                    DrawPreviewLine({ blendEndX, bottomY }, { graphX + graphW, bottomY }, { 0.32f, 0.54f, 0.82f, 1.0f }, 2.0f);
+                    DrawPreviewLine({ graphX, bottomY }, { blendStartX, bottomY }, { 0.28f, 0.68f, 0.40f, 1.0f }, 2.0f);
+                    DrawPreviewLine({ blendStartX, bottomY }, { blendEndX, topY }, { 0.28f, 0.68f, 0.40f, 1.0f }, 2.0f);
+                    DrawPreviewLine({ blendEndX, topY }, { graphX + graphW, topY }, { 0.28f, 0.68f, 0.40f, 1.0f }, 2.0f);
+
+                    UIRenderer::DrawString("1", graphX - 6.0f, topY + 4.0f, { 0.55f, 0.57f, 0.62f, 1.0f });
+                    UIRenderer::DrawString("0", graphX - 6.0f, bottomY + 4.0f, { 0.55f, 0.57f, 0.62f, 1.0f });
+                    UIRenderer::DrawString("Exit", (std::min)(exitX + 4.0f, graphX + graphW - 38.0f), graphY + 14.0f, { 0.78f, 0.48f, 0.16f, 1.0f });
+                    UIRenderer::DrawString("Blend", (std::min)(blendStartX + 4.0f, graphX + graphW - 48.0f), graphY + graphH - 3.0f, { 0.70f, 0.74f, 0.80f, 1.0f });
+
+                    const float barY = y + h - 28.0f;
+                    UIRenderer::DrawRectFilled(innerX, barY, innerW, 8.0f, { 0.10f, 0.105f, 0.115f, 1.0f });
+                    UIRenderer::DrawRectFilled(innerX, barY, (std::max)(2.0f, blendEndX - innerX), 8.0f, { 0.32f, 0.54f, 0.82f, 0.85f });
+                    UIRenderer::DrawRectFilled(blendStartX, barY + 12.0f, (std::max)(2.0f, innerX + innerW - blendStartX), 8.0f, { 0.28f, 0.68f, 0.40f, 0.85f });
+
+                    UIRenderer::DrawString(FitLabel("Source: " + m_SourceName, innerW * 0.48f), innerX, barY + 26.0f, { 0.62f, 0.72f, 0.90f, 1.0f });
+                    UIRenderer::DrawString(FitLabel("Target: " + m_TargetName, innerW * 0.48f), innerX + innerW * 0.52f, barY + 26.0f, { 0.58f, 0.82f, 0.62f, 1.0f });
+                }
+
+            private:
+                static void DrawPreviewLine(DirectX::XMFLOAT2 a, DirectX::XMFLOAT2 b, const DirectX::XMFLOAT4& color, float thickness)
+                {
+                    const float dx = b.x - a.x;
+                    const float dy = b.y - a.y;
+                    const int steps = (std::max)(1, (int)(std::sqrt(dx * dx + dy * dy) / 3.0f));
+                    for (int i = 0; i <= steps; ++i)
+                    {
+                        const float t = (float)i / (float)steps;
+                        const float px = a.x + dx * t;
+                        const float py = a.y + dy * t;
+                        UIRenderer::DrawRectFilled(px - thickness * 0.5f, py - thickness * 0.5f, thickness, thickness, color);
+                    }
+                }
+
+                static float PickTickStep(float graphWidth)
+                {
+                    const float desiredPixels = 72.0f;
+                    const float desiredTickCount = std::clamp(graphWidth / desiredPixels, 2.0f, 10.0f);
+                    const float rawStep = 1.0f / desiredTickCount;
+                    const float candidates[] = { 0.5f, 0.25f, 0.2f, 0.1f, 0.05f };
+                    for (float candidate : candidates)
+                    {
+                        if (candidate <= rawStep)
+                            return candidate;
+                    }
+                    return 0.05f;
+                }
+
+                static std::string FormatTickLabel(float value)
+                {
+                    std::ostringstream stream;
+                    const bool whole = std::abs(value - std::round(value)) < 0.001f;
+                    stream << std::fixed << std::setprecision(whole ? 0 : 2) << value;
+                    std::string text = stream.str();
+                    while (text.size() > 1 && text.back() == '0')
+                        text.pop_back();
+                    if (!text.empty() && text.back() == '.')
+                        text.pop_back();
+                    return text;
+                }
+
+                static void DrawTimelineTicks(float graphX, float graphY, float graphW, float graphH)
+                {
+                    const float step = PickTickStep(graphW);
+                    const int tickCount = (int)std::round(1.0f / step);
+                    for (int i = 0; i <= tickCount; ++i)
+                    {
+                        const float normalizedTime = std::clamp(i * step, 0.0f, 1.0f);
+                        const float tickX = graphX + normalizedTime * graphW;
+                        const bool major = i == 0 || i == tickCount || std::abs(std::fmod(normalizedTime, 0.5f)) < 0.001f;
+                        const float tickH = major ? graphH : graphH * 0.42f;
+                        const DirectX::XMFLOAT4 tickColor = major
+                            ? DirectX::XMFLOAT4{ 0.24f, 0.25f, 0.28f, 1.0f }
+                            : DirectX::XMFLOAT4{ 0.16f, 0.17f, 0.19f, 1.0f };
+
+                        // 인스팩터 폭이 넓어지면 더 촘촘한 눈금을 보여준다.
+                        // 좁을 때는 자동으로 큰 단위만 남겨 숫자끼리 겹치지 않게 한다.
+                        DrawPreviewLine({ tickX, graphY }, { tickX, graphY + tickH }, tickColor, 1.0f);
+                        UIRenderer::DrawString(FormatTickLabel(normalizedTime), tickX - 7.0f, graphY + graphH + 14.0f, { 0.50f, 0.52f, 0.57f, 1.0f });
+                    }
+                }
+
+                static std::string FitLabel(const std::string& text, float width)
+                {
+                    const int maxChars = (std::max)(0, (int)(width / 8.0f));
+                    if ((int)text.size() <= maxChars)
+                        return text;
+                    if (maxChars <= 3)
+                        return text.substr(0, (size_t)(std::max)(0, maxChars));
+                    return text.substr(0, (size_t)maxChars - 3) + "...";
+                }
+
+                std::string m_SourceName;
+                std::string m_TargetName;
+                bool m_HasExitTime = false;
+                float m_ExitTime = 0.0f;
+                float m_BlendTime = 0.0f;
             };
 
             Widget* FindVisibleDescendantByName(Widget* widget, const std::string& name)
@@ -513,15 +895,8 @@ namespace CCEngine
 
             std::filesystem::path ResolveInspectorAnimationSourcePath(const AnimatorComponent& animator, const AnimatorComponent::State* state)
             {
-                std::filesystem::path sourcePath = animator.SourcePath;
-                if (!animator.SourceAssetGuid.empty())
-                {
-                    std::filesystem::path guidPath = AssetDatabase::GetPathFromGuid(animator.SourceAssetGuid);
-                    if (!guidPath.empty())
-                        sourcePath = guidPath;
-                }
-
-                if (sourcePath.empty() && state)
+                std::filesystem::path sourcePath;
+                if (state)
                 {
                     sourcePath = state->MotionPath;
                     if (!state->MotionAssetGuid.empty())
@@ -530,6 +905,16 @@ namespace CCEngine
                         if (!guidPath.empty())
                             sourcePath = guidPath;
                     }
+                    if (!sourcePath.empty() && std::filesystem::exists(sourcePath))
+                        return sourcePath;
+                }
+
+                sourcePath = animator.SourcePath;
+                if (!animator.SourceAssetGuid.empty())
+                {
+                    std::filesystem::path guidPath = AssetDatabase::GetPathFromGuid(animator.SourceAssetGuid);
+                    if (!guidPath.empty())
+                        sourcePath = guidPath;
                 }
 
                 return sourcePath;
@@ -551,6 +936,98 @@ namespace CCEngine
                 if ((int)text.size() <= maxChars)
                     return text;
                 return text.substr(0, (size_t)maxChars - 3) + "...";
+            }
+
+            const char* InspectorConditionModeName(AnimatorComponent::TransitionCondition::CompareMode mode)
+            {
+                switch (mode)
+                {
+                    case AnimatorComponent::TransitionCondition::CompareMode::IfNot: return "If Not";
+                    case AnimatorComponent::TransitionCondition::CompareMode::Greater: return ">";
+                    case AnimatorComponent::TransitionCondition::CompareMode::Less: return "<";
+                    case AnimatorComponent::TransitionCondition::CompareMode::Equals: return "==";
+                    case AnimatorComponent::TransitionCondition::CompareMode::NotEquals: return "!=";
+                    default: return "If";
+                }
+            }
+
+            const AnimatorComponent::Parameter* FindInspectorAnimatorParameter(const AnimatorComponent& animator, const std::string& name)
+            {
+                auto it = std::find_if(animator.Parameters.begin(), animator.Parameters.end(),
+                    [&](const AnimatorComponent::Parameter& parameter) { return parameter.Name == name; });
+                return it == animator.Parameters.end() ? nullptr : &(*it);
+            }
+
+            AnimatorComponent::TransitionCondition::CompareMode NextInspectorConditionMode(
+                AnimatorComponent::TransitionCondition::CompareMode mode,
+                AnimatorComponent::Parameter::Type parameterType)
+            {
+                if (parameterType == AnimatorComponent::Parameter::Type::Bool ||
+                    parameterType == AnimatorComponent::Parameter::Type::Trigger)
+                {
+                    return mode == AnimatorComponent::TransitionCondition::CompareMode::If
+                        ? AnimatorComponent::TransitionCondition::CompareMode::IfNot
+                        : AnimatorComponent::TransitionCondition::CompareMode::If;
+                }
+
+                const int next = (static_cast<int>(mode) + 1) % 6;
+                return static_cast<AnimatorComponent::TransitionCondition::CompareMode>(next);
+            }
+
+            void CycleInspectorConditionParameter(AnimatorComponent& animator, AnimatorComponent::TransitionCondition& condition)
+            {
+                if (animator.Parameters.empty())
+                {
+                    condition.ParameterName.clear();
+                    return;
+                }
+
+                int current = -1;
+                for (int i = 0; i < (int)animator.Parameters.size(); ++i)
+                {
+                    if (animator.Parameters[i].Name == condition.ParameterName)
+                    {
+                        current = i;
+                        break;
+                    }
+                }
+
+                const auto& nextParameter = animator.Parameters[(current + 1) % animator.Parameters.size()];
+                condition.ParameterName = nextParameter.Name;
+                condition.Mode = nextParameter.ParamType == AnimatorComponent::Parameter::Type::Float
+                    ? AnimatorComponent::TransitionCondition::CompareMode::Greater
+                    : AnimatorComponent::TransitionCondition::CompareMode::If;
+            }
+
+            AnimatorComponent::TransitionCondition MakeInspectorDefaultCondition(const AnimatorComponent& animator)
+            {
+                AnimatorComponent::TransitionCondition condition;
+                if (!animator.Parameters.empty())
+                {
+                    condition.ParameterName = animator.Parameters.front().Name;
+                    condition.Mode = animator.Parameters.front().ParamType == AnimatorComponent::Parameter::Type::Float
+                        ? AnimatorComponent::TransitionCondition::CompareMode::Greater
+                        : AnimatorComponent::TransitionCondition::CompareMode::If;
+                }
+                return condition;
+            }
+
+            std::string InspectorAnimatorEndpointLabel(const AnimatorComponent::Layer& layer, int stateIndex)
+            {
+                if (stateIndex == AnimatorComponent::Transition::AnyStateIndex)
+                    return "Any State";
+                if (stateIndex == AnimatorComponent::Transition::ExitStateIndex)
+                    return "Exit";
+                if (stateIndex >= 0 && stateIndex < (int)layer.States.size())
+                    return layer.States[stateIndex].Name;
+                return "Invalid";
+            }
+
+            std::string FormatInspectorFloat(float value, int precision = 2)
+            {
+                std::ostringstream ss;
+                ss << std::fixed << std::setprecision(precision) << value;
+                return ss.str();
             }
         }
 
@@ -574,15 +1051,18 @@ namespace CCEngine
 
         void InspectorPanel::SetSelectedEntity(Entity entity)
         {
-            if (m_SelectedEntity == entity && !m_HasSelectedAnimatorState) return;
+            if (m_SelectedEntity == entity && !m_HasSelectedAnimatorState && !m_HasSelectedAnimatorTransition) return;
 
             FlushSelectedMaterialSave();
             m_SelectedEntity = entity;
             m_SelectedAssetPath.clear();
             m_SelectedAssetType.clear();
             m_HasSelectedAnimatorState = false;
+            m_HasSelectedAnimatorTransition = false;
+            m_AnimatorStateClipSlotSelected = false;
             m_SelectedAnimatorLayerIndex = -1;
             m_SelectedAnimatorStateIndex = -1;
+            m_SelectedAnimatorTransitionIndex = -1;
             m_MaterialPreviewImage = nullptr;
             RebuildInspector();
         }
@@ -591,11 +1071,14 @@ namespace CCEngine
         {
             if (!entity || !entity.HasComponent<AnimatorComponent>() || layerIndex < 0 || stateIndex < 0)
             {
-                if (m_HasSelectedAnimatorState)
+                if (m_HasSelectedAnimatorState || m_HasSelectedAnimatorTransition)
                 {
                     m_HasSelectedAnimatorState = false;
+                    m_HasSelectedAnimatorTransition = false;
+                    m_AnimatorStateClipSlotSelected = false;
                     m_SelectedAnimatorLayerIndex = -1;
                     m_SelectedAnimatorStateIndex = -1;
+                    m_SelectedAnimatorTransitionIndex = -1;
                     RebuildInspector();
                 }
                 return;
@@ -606,8 +1089,42 @@ namespace CCEngine
             m_SelectedAssetPath.clear();
             m_SelectedAssetType.clear();
             m_HasSelectedAnimatorState = true;
+            m_HasSelectedAnimatorTransition = false;
+            m_AnimatorStateClipSlotSelected = false;
             m_SelectedAnimatorLayerIndex = layerIndex;
             m_SelectedAnimatorStateIndex = stateIndex;
+            m_SelectedAnimatorTransitionIndex = -1;
+            m_MaterialPreviewImage = nullptr;
+            RebuildInspector();
+        }
+
+        void InspectorPanel::SetSelectedAnimatorTransition(Entity entity, int layerIndex, int transitionIndex)
+        {
+            if (!entity || !entity.HasComponent<AnimatorComponent>() || layerIndex < 0 || transitionIndex < 0)
+            {
+                if (m_HasSelectedAnimatorState || m_HasSelectedAnimatorTransition)
+                {
+                    m_HasSelectedAnimatorState = false;
+                    m_HasSelectedAnimatorTransition = false;
+                    m_AnimatorStateClipSlotSelected = false;
+                    m_SelectedAnimatorLayerIndex = -1;
+                    m_SelectedAnimatorStateIndex = -1;
+                    m_SelectedAnimatorTransitionIndex = -1;
+                    RebuildInspector();
+                }
+                return;
+            }
+
+            FlushSelectedMaterialSave();
+            m_SelectedEntity = entity;
+            m_SelectedAssetPath.clear();
+            m_SelectedAssetType.clear();
+            m_HasSelectedAnimatorState = false;
+            m_HasSelectedAnimatorTransition = true;
+            m_AnimatorStateClipSlotSelected = false;
+            m_SelectedAnimatorLayerIndex = layerIndex;
+            m_SelectedAnimatorStateIndex = -1;
+            m_SelectedAnimatorTransitionIndex = transitionIndex;
             m_MaterialPreviewImage = nullptr;
             RebuildInspector();
         }
@@ -622,8 +1139,11 @@ namespace CCEngine
             m_SelectedAssetPath = assetPath;
             m_SelectedAssetType = assetType;
             m_HasSelectedAnimatorState = false;
+            m_HasSelectedAnimatorTransition = false;
+            m_AnimatorStateClipSlotSelected = false;
             m_SelectedAnimatorLayerIndex = -1;
             m_SelectedAnimatorStateIndex = -1;
+            m_SelectedAnimatorTransitionIndex = -1;
             if (m_SelectedAssetType != "material")
             {
                 m_SelectedMaterial = MaterialAsset{};
@@ -692,6 +1212,11 @@ namespace CCEngine
                 BuildAnimatorStateInspector();
                 return;
             }
+            if (m_HasSelectedAnimatorTransition)
+            {
+                BuildAnimatorTransitionInspector();
+                return;
+            }
 
             InspectorRegistry::DrawAllComponents(this, m_SelectedEntity);
 
@@ -712,6 +1237,33 @@ namespace CCEngine
             UpdateLayout({ 0.0f, 0.0f }, { (float)window.GetWidth(), (float)window.GetHeight() });
         }
 
+        bool InspectorPanel::ClearSelectedAnimatorStateClip()
+        {
+            if (!m_HasSelectedAnimatorState || !m_AnimatorStateClipSlotSelected || !m_SelectedEntity || !m_SelectedEntity.HasComponent<AnimatorComponent>())
+                return false;
+
+            auto& animator = m_SelectedEntity.GetComponent<AnimatorComponent>();
+            AnimatorComponent::Layer* layer = GetInspectorAnimatorLayer(animator, m_SelectedAnimatorLayerIndex);
+            if (!layer || m_SelectedAnimatorStateIndex < 0 || m_SelectedAnimatorStateIndex >= (int)layer->States.size())
+                return false;
+
+            auto& state = layer->States[m_SelectedAnimatorStateIndex];
+            state.Motion = AnimatorComponent::State::MotionType::Clip;
+            state.ClipIndex = -1;
+            state.MotionPath.clear();
+            state.MotionAssetGuid.clear();
+            state.Tree.Children.clear();
+            animator.SelectedClipIndex = -1;
+            animator.SelectedClipName.clear();
+
+            ResetInspectorAnimatorRuntime(animator);
+            const bool saved = SaveInspectorAnimatorController(animator);
+            if (saved && m_OnAssetChanged)
+                m_OnAssetChanged(ResolveInspectorControllerPath(animator), "animatorcontroller");
+            RequestRebuild();
+            return true;
+        }
+
         void InspectorPanel::BuildAnimatorStateInspector()
         {
             auto invalid = [this](const std::string& message)
@@ -726,8 +1278,10 @@ namespace CCEngine
                 back->SetOnClick([this]()
                     {
                         m_HasSelectedAnimatorState = false;
+                        m_HasSelectedAnimatorTransition = false;
                         m_SelectedAnimatorLayerIndex = -1;
                         m_SelectedAnimatorStateIndex = -1;
+                        m_SelectedAnimatorTransitionIndex = -1;
                         RebuildInspector();
                     });
                 item->AddChild(back);
@@ -781,18 +1335,49 @@ namespace CCEngine
             item->SetAnchorMax(1.0f, 0.0f);
             AddChild(item);
 
+            auto addSection = [&](const std::string& label)
+            {
+                item->AddChild(new AnimatorStateInspectorRow("AnimatorStateSection" + label, label, "", AnimatorStateInspectorRow::Kind::Section));
+            };
+            auto addField = [&](const std::string& name, const std::string& label, const std::string& value, std::function<void()> onClick = {})
+            {
+                auto* row = new AnimatorStateInspectorRow(name, label, value, AnimatorStateInspectorRow::Kind::Field);
+                if (onClick)
+                    row->SetOnClick(std::move(onClick));
+                item->AddChild(row);
+                return row;
+            };
+            auto addToggle = [&](const std::string& name, const std::string& label, bool checked, std::function<void()> onClick)
+            {
+                auto* row = new AnimatorStateInspectorRow(name, label, "", AnimatorStateInspectorRow::Kind::Toggle);
+                row->SetChecked(checked);
+                row->SetOnClick(std::move(onClick));
+                item->AddChild(row);
+                return row;
+            };
+            auto addAction = [&](const std::string& name, const std::string& label, const std::string& value, std::function<void()> onClick)
+            {
+                auto* row = new AnimatorStateInspectorRow(name, label, value, AnimatorStateInspectorRow::Kind::Action);
+                row->SetOnClick(std::move(onClick));
+                item->AddChild(row);
+                return row;
+            };
+            auto addStepper = [&](const std::string& name, const std::string& label, const std::string& value, std::function<void()> onMinus, std::function<void()> onPlus)
+            {
+                auto* row = new AnimatorStateInspectorRow(name, label, value, AnimatorStateInspectorRow::Kind::Stepper);
+                row->SetOnMinus(std::move(onMinus));
+                row->SetOnPlus(std::move(onPlus));
+                item->AddChild(row);
+                return row;
+            };
+
+            addSection("State");
             const std::string objectName = m_SelectedEntity.HasComponent<TagComponent>()
                 ? m_SelectedEntity.GetComponent<TagComponent>().Tag
                 : std::string("Object");
-            auto* owner = new UI::Button("AnimatorStateOwner", "Object: " + FitInspectorValue(objectName, 230.0f));
-            owner->SetNormalColor({ 0.13f, 0.13f, 0.14f, 1.0f });
-            owner->SetHoverColor({ 0.13f, 0.13f, 0.14f, 1.0f });
-            item->AddChild(owner);
-
-            auto* layerButton = new UI::Button("AnimatorStateLayer", "Layer: " + FitInspectorValue(layer->Name, 230.0f));
-            layerButton->SetNormalColor({ 0.13f, 0.13f, 0.14f, 1.0f });
-            layerButton->SetHoverColor({ 0.13f, 0.13f, 0.14f, 1.0f });
-            item->AddChild(layerButton);
+            addField("AnimatorStateOwner", "Object", objectName);
+            addField("AnimatorStateLayer", "Layer", layer->Name);
+            addField("AnimatorStateController", "Controller", ResolveInspectorControllerPath(animator).filename().string());
 
             auto* nameInput = new UI::TextInput("AnimatorStateName", "State Name");
             nameInput->SetText(state.Name, false);
@@ -826,144 +1411,510 @@ namespace CCEngine
                 }
             }
 
-            auto* motion = new UI::Button("AnimatorStateMotion", std::string("Motion: ") + InspectorMotionTypeName(state.Motion));
-            motion->SetNormalColor({ 0.13f, 0.13f, 0.14f, 1.0f });
-            motion->SetHoverColor({ 0.16f, 0.16f, 0.18f, 1.0f });
-            item->AddChild(motion);
+            addSection("Motion");
+            addField("AnimatorStateMotion", "Motion", InspectorMotionTypeName(state.Motion));
+            addField("AnimatorStateMotionSource", "Source", sourcePath.empty() ? "None" : sourcePath.filename().string());
 
-            auto* clipSlot = new UI::Button("AnimatorStateClipSlot", "Clip: " + FitInspectorValue(clipName, 230.0f));
-            clipSlot->SetNormalColor(state.ClipIndex < 0 ? DirectX::XMFLOAT4{ 0.18f, 0.13f, 0.10f, 1.0f } : DirectX::XMFLOAT4{ 0.13f, 0.16f, 0.19f, 1.0f });
-            clipSlot->SetHoverColor({ 0.20f, 0.24f, 0.28f, 1.0f });
-            if (!clips.empty())
-            {
-                clipSlot->SetOnClick([commitStateEdit, clips, sourcePath]()
-                    {
-                        commitStateEdit([&](AnimatorComponent& editableAnimator, AnimatorComponent::Layer&, AnimatorComponent::State& editableState)
-                            {
-                                int next = 0;
-                                for (int i = 0; i < (int)clips.size(); ++i)
-                                {
-                                    if ((int)clips[i].Index == editableState.ClipIndex)
-                                    {
-                                        next = (i + 1) % (int)clips.size();
-                                        break;
-                                    }
-                                }
+            auto openClipSelection = [this]()
+                {
+                    m_AnimatorStateClipSlotSelected = true;
+                    Widget::SetKeyboardFocus(this);
+                    if (m_OnAnimatorClipPickRequested)
+                        m_OnAnimatorClipPickRequested(m_SelectedEntity, m_SelectedAnimatorLayerIndex, m_SelectedAnimatorStateIndex);
+                    else
+                        ConsoleLog::Warning("Animator clip picker is not connected to Asset Browser.");
+                    RequestRebuild();
+                };
 
-                                editableState.Motion = AnimatorComponent::State::MotionType::Clip;
-                                editableState.ClipIndex = (int)clips[next].Index;
-                                editableState.MotionPath = sourcePath.string();
-                                editableState.MotionAssetGuid = AssetDatabase::GetGuidFromPath(sourcePath);
-                                editableAnimator.SelectedClipIndex = editableState.ClipIndex;
-                                editableAnimator.SelectedClipName = clips[next].Name;
-                            });
-                    });
-            }
+            addAction("AnimatorStateSelectClipFile", "", "Select Clip File", openClipSelection);
+
+            const bool hasClip = state.Motion == AnimatorComponent::State::MotionType::Clip && state.ClipIndex >= 0;
+            auto* clipSlot = new AnimatorStateInspectorRow("AnimatorStateClipSlot", "Clip", clipName, AnimatorStateInspectorRow::Kind::Field);
+            clipSlot->SetOnClick([this, hasClip, openClipSelection, clipSlot]()
+                {
+                    const auto now = std::chrono::steady_clock::now();
+                    const bool doubleClick = hasClip &&
+                        m_AnimatorStateClipSlotSelected &&
+                        std::chrono::duration_cast<std::chrono::milliseconds>(now - m_LastAnimatorClipSlotClickTime).count() <= 350;
+
+                    m_AnimatorStateClipSlotSelected = true;
+                    m_LastAnimatorClipSlotClickTime = now;
+                    Widget::SetKeyboardFocus(this);
+                    clipSlot->SetSelected(true);
+
+                    // 첫 클릭에서 Inspector를 리빌드하면 같은 row가 사라져 더블클릭 판정이 끊길 수 있다.
+                    // 그래서 클립이 있는 슬롯은 같은 위젯 안에서 선택 표시만 갱신하고, 두 번째 클릭에서 picker를 연다.
+                    if (!hasClip || doubleClick)
+                        openClipSelection();
+                });
+            clipSlot->SetSelected(m_AnimatorStateClipSlotSelected);
+            clipSlot->SetWarning(!hasClip);
+            clipSlot->SetOnIconClick(openClipSelection);
             item->AddChild(clipSlot);
 
-            auto* removeClip = new UI::Button("AnimatorStateRemoveClip", "Remove Clip");
-            removeClip->SetNormalColor({ 0.28f, 0.09f, 0.10f, 1.0f });
-            removeClip->SetHoverColor({ 0.38f, 0.12f, 0.14f, 1.0f });
-            removeClip->SetOnClick([commitStateEdit]()
+            addToggle("AnimatorStateUseAvailableClips", "Use Available Clips", m_ShowAnimatorAvailableClips, [this]()
                 {
-                    commitStateEdit([](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::State& editableState)
-                        {
-                            editableState.Motion = AnimatorComponent::State::MotionType::Clip;
-                            editableState.ClipIndex = -1;
-                            editableState.Tree.Children.clear();
-                        });
+                    m_ShowAnimatorAvailableClips = !m_ShowAnimatorAvailableClips;
+                    RequestRebuild();
                 });
-            item->AddChild(removeClip);
 
-            auto* loop = new UI::Button("AnimatorStateLoop", state.Loop ? "Loop: On" : "Loop: Off");
-            loop->SetActive(state.Loop);
-            loop->SetOnClick([commitStateEdit]()
-                {
-                    commitStateEdit([](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::State& editableState)
-                        {
-                            editableState.Loop = !editableState.Loop;
-                        });
-                });
-            item->AddChild(loop);
-
-            auto* writeDefaults = new UI::Button("AnimatorStateWriteDefaults", state.WriteDefaults ? "Write Defaults: On" : "Write Defaults: Off");
-            writeDefaults->SetActive(state.WriteDefaults);
-            writeDefaults->SetOnClick([commitStateEdit]()
-                {
-                    commitStateEdit([](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::State& editableState)
-                        {
-                            editableState.WriteDefaults = !editableState.WriteDefaults;
-                        });
-                });
-            item->AddChild(writeDefaults);
-
-            auto* speedMinus = new UI::Button("AnimatorStateSpeedMinus", "Speed -");
-            speedMinus->SetOnClick([commitStateEdit]()
-                {
-                    commitStateEdit([](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::State& editableState)
-                        {
-                            editableState.Speed = std::clamp(editableState.Speed - 0.1f, 0.0f, 8.0f);
-                        });
-                });
-            item->AddChild(speedMinus);
-
-            auto* speedValue = new UI::Button("AnimatorStateSpeedValue", "Speed: " + std::to_string((int)std::round(state.Speed * 100.0f)) + "%");
-            speedValue->SetNormalColor({ 0.13f, 0.13f, 0.14f, 1.0f });
-            speedValue->SetHoverColor({ 0.13f, 0.13f, 0.14f, 1.0f });
-            item->AddChild(speedValue);
-
-            auto* speedPlus = new UI::Button("AnimatorStateSpeedPlus", "Speed +");
-            speedPlus->SetOnClick([commitStateEdit]()
-                {
-                    commitStateEdit([](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::State& editableState)
-                        {
-                            editableState.Speed = std::clamp(editableState.Speed + 0.1f, 0.0f, 8.0f);
-                        });
-                });
-            item->AddChild(speedPlus);
-
-            if (clips.empty())
+            if (m_ShowAnimatorAvailableClips && !clips.empty())
             {
-                auto* noClips = new UI::Button("AnimatorStateNoClips", "No source clips found");
-                noClips->SetNormalColor({ 0.20f, 0.16f, 0.08f, 1.0f });
-                noClips->SetHoverColor({ 0.20f, 0.16f, 0.08f, 1.0f });
-                item->AddChild(noClips);
-            }
-            else
-            {
-                const int maxVisibleClips = (std::min)(8, (int)clips.size());
-                for (int i = 0; i < maxVisibleClips; ++i)
+                addSection("Available Clips");
+                for (const auto& clip : clips)
                 {
-                    const AnimationClipInfo clip = clips[i];
-                    auto* clipButton = new UI::Button("AnimatorStateClip" + std::to_string(i), "Use: " + FitInspectorValue(clip.Name, 220.0f));
-                    clipButton->SetOnClick([commitStateEdit, clip, sourcePath]()
+                    const std::string rowName = "AnimatorStateClipChoice" + std::to_string(clip.Index);
+                    const bool activeClip = (int)clip.Index == state.ClipIndex;
+                    auto* row = addField(rowName, activeClip ? "Current" : "Clip", clip.Name.empty() ? ("Clip " + std::to_string(clip.Index)) : clip.Name,
+                        [this, commitStateEdit, clip, sourcePath]()
                         {
+                            m_AnimatorStateClipSlotSelected = true;
+                            Widget::SetKeyboardFocus(this);
                             commitStateEdit([&](AnimatorComponent& editableAnimator, AnimatorComponent::Layer&, AnimatorComponent::State& editableState)
                                 {
                                     editableState.Motion = AnimatorComponent::State::MotionType::Clip;
                                     editableState.ClipIndex = (int)clip.Index;
                                     editableState.MotionPath = sourcePath.string();
                                     editableState.MotionAssetGuid = AssetDatabase::GetGuidFromPath(sourcePath);
-                                    if (editableState.Name.empty() || editableState.Name == "New State" || editableState.Name == "State")
-                                        editableState.Name = clip.Name.empty() ? ("Clip " + std::to_string(clip.Index)) : clip.Name;
-                                    editableState.ImportSettings.DisplayName = editableState.Name;
+                                    editableState.Tree.Children.clear();
                                     editableAnimator.SelectedClipIndex = editableState.ClipIndex;
                                     editableAnimator.SelectedClipName = clip.Name;
                                 });
                         });
-                    item->AddChild(clipButton);
+                    // 이 목록은 현재 소스 파일 안의 클립 후보를 보여주는 곳이다.
+                    // 선택 상태 파란색은 실제로 사용자가 클릭한 Object Field에만 쓰고,
+                    // 현재 재생 클립은 "Current" 라벨로만 표시해 좌표/선택 오해를 줄인다.
                 }
             }
+            else if (m_ShowAnimatorAvailableClips)
+            {
+                auto* noClips = addField("AnimatorStateNoClips", "Clip Source", "No source clips found");
+                noClips->SetWarning(true);
+            }
 
-            auto* back = new UI::Button("AnimatorStateBackToObject", "Back To Object Inspector");
-            back->SetOnClick([this]()
+            addAction("AnimatorStateRemoveClip", "", "Remove Clip", [this, commitStateEdit]()
+                {
+                    m_AnimatorStateClipSlotSelected = false;
+                    commitStateEdit([](AnimatorComponent& editableAnimator, AnimatorComponent::Layer&, AnimatorComponent::State& editableState)
+                        {
+                            editableAnimator.SelectedClipIndex = -1;
+                            editableAnimator.SelectedClipName.clear();
+                            editableState.Motion = AnimatorComponent::State::MotionType::Clip;
+                            editableState.ClipIndex = -1;
+                            editableState.MotionPath.clear();
+                            editableState.MotionAssetGuid.clear();
+                            editableState.Tree.Children.clear();
+                        });
+                });
+
+            addStepper("AnimatorStateSpeed", "Speed", std::to_string((int)std::round(state.Speed * 100.0f)) + "%",
+                [commitStateEdit]()
+                {
+                    commitStateEdit([](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::State& editableState)
+                        {
+                            editableState.Speed = std::clamp(editableState.Speed - 0.1f, 0.0f, 8.0f);
+                        });
+                },
+                [commitStateEdit]()
+                {
+                    commitStateEdit([](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::State& editableState)
+                        {
+                            editableState.Speed = std::clamp(editableState.Speed + 0.1f, 0.0f, 8.0f);
+                        });
+                });
+
+            addToggle("AnimatorStateLoop", "Loop", state.Loop, [commitStateEdit]()
+                {
+                    commitStateEdit([](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::State& editableState)
+                        {
+                            editableState.Loop = !editableState.Loop;
+                        });
+                });
+
+            addToggle("AnimatorStateWriteDefaults", "Write Defaults", state.WriteDefaults, [commitStateEdit]()
+                {
+                    commitStateEdit([](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::State& editableState)
+                        {
+                            editableState.WriteDefaults = !editableState.WriteDefaults;
+                        });
+                });
+
+            addSection("Root Motion");
+            auto* rootBoneInput = new UI::TextInput("AnimatorStateRootBone", "Root Bone");
+            rootBoneInput->SetText(animator.HumanoidRootBone.empty() ? "Hips" : animator.HumanoidRootBone, false);
+            rootBoneInput->SetOnTextChanged([commitStateEdit](const std::string& text)
+                {
+                    commitStateEdit([&](AnimatorComponent& editableAnimator, AnimatorComponent::Layer&, AnimatorComponent::State&)
+                        {
+                            editableAnimator.HumanoidRootBone = text.empty() ? "Hips" : text;
+                        });
+                });
+            item->AddChild(rootBoneInput);
+
+            addAction("AnimatorStateRootAuto", "Root Bone", "Auto: Hips", [commitStateEdit]()
+                {
+                    commitStateEdit([](AnimatorComponent& editableAnimator, AnimatorComponent::Layer&, AnimatorComponent::State&)
+                        {
+                            editableAnimator.HumanoidRootBone = "Hips";
+                        });
+                });
+
+            addToggle("AnimatorStateApplyRoot", "Apply Root Motion", state.ApplyRootMotion, [commitStateEdit]()
+                {
+                    commitStateEdit([](AnimatorComponent& editableAnimator, AnimatorComponent::Layer&, AnimatorComponent::State& editableState)
+                        {
+                            editableState.ApplyRootMotion = !editableState.ApplyRootMotion;
+                            editableAnimator.ApplyRootMotion = editableState.ApplyRootMotion;
+                        });
+                });
+
+            addToggle("AnimatorStateBakeRoot", "Bake Root Transform", state.ImportSettings.BakeRootTransform, [commitStateEdit]()
+                {
+                    commitStateEdit([](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::State& editableState)
+                        {
+                            editableState.ImportSettings.BakeRootTransform = !editableState.ImportSettings.BakeRootTransform;
+                        });
+                });
+
+            addToggle("AnimatorStateLockRootXZ", "Lock Root XZ", state.ImportSettings.LockRootPositionXZ, [commitStateEdit]()
+                {
+                    commitStateEdit([](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::State& editableState)
+                        {
+                            editableState.ImportSettings.LockRootPositionXZ = !editableState.ImportSettings.LockRootPositionXZ;
+                        });
+                });
+
+            addToggle("AnimatorStateLockRootY", "Lock Root Y", state.ImportSettings.LockRootPositionY, [commitStateEdit]()
+                {
+                    commitStateEdit([](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::State& editableState)
+                        {
+                            editableState.ImportSettings.LockRootPositionY = !editableState.ImportSettings.LockRootPositionY;
+                        });
+                });
+
+            addToggle("AnimatorStateLockRootRotation", "Lock Root Rotation", state.ImportSettings.LockRootRotation, [commitStateEdit]()
+                {
+                    commitStateEdit([](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::State& editableState)
+                        {
+                            editableState.ImportSettings.LockRootRotation = !editableState.ImportSettings.LockRootRotation;
+                        });
+                });
+
+            addSection("Inspector");
+            addAction("AnimatorStateBackToObject", "", "Back To Object Inspector", [this]()
                 {
                     m_HasSelectedAnimatorState = false;
+                    m_HasSelectedAnimatorTransition = false;
                     m_SelectedAnimatorLayerIndex = -1;
                     m_SelectedAnimatorStateIndex = -1;
+                    m_SelectedAnimatorTransitionIndex = -1;
                     RebuildInspector();
                 });
-            item->AddChild(back);
+
+            auto& window = CCEngine::Application::Get()->GetWindow();
+            UpdateLayout({ 0.0f, 0.0f }, { (float)window.GetWidth(), (float)window.GetHeight() });
+        }
+
+        void InspectorPanel::BuildAnimatorTransitionInspector()
+        {
+            auto invalid = [this](const std::string& message)
+            {
+                auto* item = new UI::InspectorItem("AnimatorTransitionInvalid", "Animator Transition");
+                AddChild(item);
+                auto* text = new UI::Button("AnimatorTransitionInvalidText", message);
+                text->SetNormalColor({ 0.22f, 0.10f, 0.10f, 1.0f });
+                text->SetHoverColor({ 0.22f, 0.10f, 0.10f, 1.0f });
+                item->AddChild(text);
+                auto* back = new UI::Button("AnimatorTransitionBack", "Back To Object Inspector");
+                back->SetOnClick([this]()
+                    {
+                        m_HasSelectedAnimatorState = false;
+                        m_HasSelectedAnimatorTransition = false;
+                        m_SelectedAnimatorLayerIndex = -1;
+                        m_SelectedAnimatorStateIndex = -1;
+                        m_SelectedAnimatorTransitionIndex = -1;
+                        RebuildInspector();
+                    });
+                item->AddChild(back);
+            };
+
+            if (!m_SelectedEntity || !m_SelectedEntity.HasComponent<AnimatorComponent>())
+            {
+                invalid("Animator component missing.");
+                return;
+            }
+
+            auto& animator = m_SelectedEntity.GetComponent<AnimatorComponent>();
+            AnimatorComponent::Layer* layer = GetInspectorAnimatorLayer(animator, m_SelectedAnimatorLayerIndex);
+            if (!layer || m_SelectedAnimatorTransitionIndex < 0 || m_SelectedAnimatorTransitionIndex >= (int)layer->Transitions.size())
+            {
+                invalid("Selected transition no longer exists.");
+                return;
+            }
+
+            auto& transition = layer->Transitions[m_SelectedAnimatorTransitionIndex];
+            const Entity entity = m_SelectedEntity;
+            const int layerIndex = m_SelectedAnimatorLayerIndex;
+            const int transitionIndex = m_SelectedAnimatorTransitionIndex;
+            std::function<void(const std::function<void(AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::Transition&)>&)> commitTransitionEdit;
+            commitTransitionEdit = [this, entity, layerIndex, transitionIndex](const std::function<void(AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::Transition&)>& edit) mutable
+                {
+                    Entity editableEntity = entity;
+                    if (!editableEntity || !editableEntity.HasComponent<AnimatorComponent>())
+                        return;
+
+                    auto& currentAnimator = editableEntity.GetComponent<AnimatorComponent>();
+                    AnimatorComponent::Layer* currentLayer = GetInspectorAnimatorLayer(currentAnimator, layerIndex);
+                    if (!currentLayer || transitionIndex < 0 || transitionIndex >= (int)currentLayer->Transitions.size())
+                        return;
+
+                    currentLayer->SelectedTransitionIndex = transitionIndex;
+                    edit(currentAnimator, *currentLayer, currentLayer->Transitions[transitionIndex]);
+                    currentLayer->SelectedTransitionIndex = std::clamp(currentLayer->SelectedTransitionIndex, -1, (int)currentLayer->Transitions.size() - 1);
+                    currentAnimator.ActiveLayerIndex = std::clamp(layerIndex, 0, (int)currentAnimator.Layers.size() - 1);
+                    ResetInspectorAnimatorRuntime(currentAnimator);
+                    const bool saved = SaveInspectorAnimatorController(currentAnimator);
+                    if (saved && m_OnAssetChanged)
+                        m_OnAssetChanged(ResolveInspectorControllerPath(currentAnimator), "animatorcontroller");
+                    m_SelectedAnimatorTransitionIndex = std::clamp(currentLayer->SelectedTransitionIndex, -1, (int)currentLayer->Transitions.size() - 1);
+                    RequestRebuild();
+                };
+
+            auto* item = new UI::InspectorItem("AnimatorTransitionItem", "Animator Transition");
+            item->SetAnchorMin(0.0f, 0.0f);
+            item->SetAnchorMax(1.0f, 0.0f);
+            AddChild(item);
+
+            auto addSection = [&](const std::string& label)
+            {
+                item->AddChild(new AnimatorStateInspectorRow("AnimatorTransitionSection" + label, label, "", AnimatorStateInspectorRow::Kind::Section));
+            };
+            auto addField = [&](const std::string& name, const std::string& label, const std::string& value, std::function<void()> onClick = {})
+            {
+                auto* row = new AnimatorStateInspectorRow(name, label, value, AnimatorStateInspectorRow::Kind::Field);
+                if (onClick)
+                    row->SetOnClick(std::move(onClick));
+                item->AddChild(row);
+                return row;
+            };
+            auto addToggle = [&](const std::string& name, const std::string& label, bool checked, std::function<void()> onClick)
+            {
+                auto* row = new AnimatorStateInspectorRow(name, label, "", AnimatorStateInspectorRow::Kind::Toggle);
+                row->SetChecked(checked);
+                row->SetOnClick(std::move(onClick));
+                item->AddChild(row);
+                return row;
+            };
+            auto addAction = [&](const std::string& name, const std::string& label, const std::string& value, std::function<void()> onClick)
+            {
+                auto* row = new AnimatorStateInspectorRow(name, label, value, AnimatorStateInspectorRow::Kind::Action);
+                row->SetOnClick(std::move(onClick));
+                item->AddChild(row);
+                return row;
+            };
+            auto addStepper = [&](const std::string& name, const std::string& label, const std::string& value, std::function<void()> onMinus, std::function<void()> onPlus)
+            {
+                auto* row = new AnimatorStateInspectorRow(name, label, value, AnimatorStateInspectorRow::Kind::Stepper);
+                row->SetOnMinus(std::move(onMinus));
+                row->SetOnPlus(std::move(onPlus));
+                item->AddChild(row);
+                return row;
+            };
+
+            const std::string fromLabel = InspectorAnimatorEndpointLabel(*layer, transition.FromStateIndex);
+            const std::string toLabel = InspectorAnimatorEndpointLabel(*layer, transition.ToStateIndex);
+            addSection("Transition");
+            addField("AnimatorTransitionName", "Transition", fromLabel + " -> " + toLabel);
+            addField("AnimatorTransitionLayer", "Layer", layer->Name);
+            addToggle("AnimatorTransitionExitTime", "Has Exit Time", transition.HasExitTime, [commitTransitionEdit]()
+                {
+                    commitTransitionEdit([](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::Transition& editableTransition)
+                        {
+                            editableTransition.HasExitTime = !editableTransition.HasExitTime;
+                        });
+                });
+            addStepper("AnimatorTransitionExitValue", "Exit Time", FormatInspectorFloat(transition.ExitTime, 2),
+                [commitTransitionEdit]()
+                {
+                    commitTransitionEdit([](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::Transition& editableTransition)
+                        {
+                            editableTransition.ExitTime = std::clamp(editableTransition.ExitTime - 0.05f, 0.0f, 1.0f);
+                        });
+                },
+                [commitTransitionEdit]()
+                {
+                    commitTransitionEdit([](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::Transition& editableTransition)
+                        {
+                            editableTransition.ExitTime = std::clamp(editableTransition.ExitTime + 0.05f, 0.0f, 1.0f);
+                        });
+                });
+
+            addSection("Settings");
+            addToggle("AnimatorTransitionInterrupt", "Can Interrupt", transition.CanInterrupt, [commitTransitionEdit]()
+                {
+                    commitTransitionEdit([](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::Transition& editableTransition)
+                        {
+                            editableTransition.CanInterrupt = !editableTransition.CanInterrupt;
+                        });
+                });
+            addStepper("AnimatorTransitionPriority", "Priority", std::to_string(transition.Priority),
+                [commitTransitionEdit]()
+                {
+                    commitTransitionEdit([](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::Transition& editableTransition)
+                        {
+                            editableTransition.Priority -= 1;
+                        });
+                },
+                [commitTransitionEdit]()
+                {
+                    commitTransitionEdit([](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::Transition& editableTransition)
+                        {
+                            editableTransition.Priority += 1;
+                        });
+                });
+            addStepper("AnimatorTransitionBlend", "Blend Time", FormatInspectorFloat(transition.BlendTime, 2) + "s",
+                [commitTransitionEdit]()
+                {
+                    commitTransitionEdit([](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::Transition& editableTransition)
+                        {
+                            editableTransition.BlendTime = (std::max)(0.0f, editableTransition.BlendTime - 0.05f);
+                        });
+                },
+                [commitTransitionEdit]()
+                {
+                    commitTransitionEdit([](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::Transition& editableTransition)
+                        {
+                            editableTransition.BlendTime += 0.05f;
+                        });
+                });
+            addSection("Blend Preview");
+            item->AddChild(new AnimatorTransitionBlendPreview(
+                "AnimatorTransitionBlendPreview",
+                fromLabel,
+                toLabel,
+                transition.HasExitTime,
+                transition.ExitTime,
+                transition.BlendTime));
+
+            addSection("Conditions");
+            if (transition.Conditions.empty())
+            {
+                auto* warning = addField("AnimatorTransitionNoConditions", "List", "No conditions");
+                if (!transition.HasExitTime)
+                    warning->SetWarning(true);
+            }
+
+            for (int i = 0; i < (int)transition.Conditions.size(); ++i)
+            {
+                const auto& condition = transition.Conditions[i];
+                const auto* parameter = FindInspectorAnimatorParameter(animator, condition.ParameterName);
+                const std::string value = parameter && parameter->ParamType == AnimatorComponent::Parameter::Type::Float
+                    ? (" " + FormatInspectorFloat(condition.FloatValue, 1))
+                    : "";
+                auto* conditionRow = addField("AnimatorTransitionCondition" + std::to_string(i), "Condition " + std::to_string(i + 1),
+                    condition.ParameterName + " " + InspectorConditionModeName(condition.Mode) + value,
+                    [commitTransitionEdit, i]()
+                    {
+                        commitTransitionEdit([i](AnimatorComponent& editableAnimator, AnimatorComponent::Layer&, AnimatorComponent::Transition& editableTransition)
+                            {
+                                if (i >= 0 && i < (int)editableTransition.Conditions.size())
+                                    CycleInspectorConditionParameter(editableAnimator, editableTransition.Conditions[i]);
+                            });
+                    });
+                if (!parameter)
+                    conditionRow->SetWarning(true);
+
+                addAction("AnimatorTransitionConditionMode" + std::to_string(i), "Mode", InspectorConditionModeName(condition.Mode), [commitTransitionEdit, i]()
+                    {
+                        commitTransitionEdit([i](AnimatorComponent& editableAnimator, AnimatorComponent::Layer&, AnimatorComponent::Transition& editableTransition)
+                            {
+                                if (i < 0 || i >= (int)editableTransition.Conditions.size())
+                                    return;
+                                auto& editableCondition = editableTransition.Conditions[i];
+                                const auto* editableParameter = FindInspectorAnimatorParameter(editableAnimator, editableCondition.ParameterName);
+                                editableCondition.Mode = NextInspectorConditionMode(editableCondition.Mode,
+                                    editableParameter ? editableParameter->ParamType : AnimatorComponent::Parameter::Type::Float);
+                            });
+                    });
+                addStepper("AnimatorTransitionConditionValue" + std::to_string(i), "Value", parameter && parameter->ParamType == AnimatorComponent::Parameter::Type::Float ? FormatInspectorFloat(condition.FloatValue, 1) : (condition.BoolValue ? "True" : "False"),
+                    [commitTransitionEdit, i]()
+                    {
+                        commitTransitionEdit([i](AnimatorComponent& editableAnimator, AnimatorComponent::Layer&, AnimatorComponent::Transition& editableTransition)
+                            {
+                                if (i < 0 || i >= (int)editableTransition.Conditions.size())
+                                    return;
+                                auto& editableCondition = editableTransition.Conditions[i];
+                                const auto* editableParameter = FindInspectorAnimatorParameter(editableAnimator, editableCondition.ParameterName);
+                                if (editableParameter && editableParameter->ParamType == AnimatorComponent::Parameter::Type::Float)
+                                    editableCondition.FloatValue -= 0.1f;
+                                else
+                                    editableCondition.BoolValue = !editableCondition.BoolValue;
+                            });
+                    },
+                    [commitTransitionEdit, i]()
+                    {
+                        commitTransitionEdit([i](AnimatorComponent& editableAnimator, AnimatorComponent::Layer&, AnimatorComponent::Transition& editableTransition)
+                            {
+                                if (i < 0 || i >= (int)editableTransition.Conditions.size())
+                                    return;
+                                auto& editableCondition = editableTransition.Conditions[i];
+                                const auto* editableParameter = FindInspectorAnimatorParameter(editableAnimator, editableCondition.ParameterName);
+                                if (editableParameter && editableParameter->ParamType == AnimatorComponent::Parameter::Type::Float)
+                                    editableCondition.FloatValue += 0.1f;
+                                else
+                                    editableCondition.BoolValue = !editableCondition.BoolValue;
+                            });
+                    });
+                addAction("AnimatorTransitionConditionRemove" + std::to_string(i), "", "Remove Condition", [commitTransitionEdit, i]()
+                    {
+                        commitTransitionEdit([i](AnimatorComponent&, AnimatorComponent::Layer&, AnimatorComponent::Transition& editableTransition)
+                            {
+                                if (i >= 0 && i < (int)editableTransition.Conditions.size())
+                                    editableTransition.Conditions.erase(editableTransition.Conditions.begin() + i);
+                            });
+                    });
+            }
+
+            addAction("AnimatorTransitionAddCondition", "", "+ Add Condition", [commitTransitionEdit]()
+                {
+                    commitTransitionEdit([](AnimatorComponent& editableAnimator, AnimatorComponent::Layer&, AnimatorComponent::Transition& editableTransition)
+                        {
+                            editableTransition.Conditions.push_back(MakeInspectorDefaultCondition(editableAnimator));
+                        });
+                });
+            addAction("AnimatorTransitionSort", "", "Sort Transitions By Priority", [commitTransitionEdit, transitionIndex]()
+                {
+                    commitTransitionEdit([transitionIndex](AnimatorComponent&, AnimatorComponent::Layer& editableLayer, AnimatorComponent::Transition& editableTransition)
+                        {
+                            auto selected = editableTransition;
+                            std::stable_sort(editableLayer.Transitions.begin(), editableLayer.Transitions.end(),
+                                [](const AnimatorComponent::Transition& a, const AnimatorComponent::Transition& b)
+                                {
+                                    return a.Priority < b.Priority;
+                                });
+                            auto it = std::find_if(editableLayer.Transitions.begin(), editableLayer.Transitions.end(), [&selected](const AnimatorComponent::Transition& item)
+                                {
+                                    return item.FromStateIndex == selected.FromStateIndex &&
+                                        item.ToStateIndex == selected.ToStateIndex &&
+                                        item.Priority == selected.Priority &&
+                                        item.Conditions.size() == selected.Conditions.size();
+                                });
+                            editableLayer.SelectedTransitionIndex = it == editableLayer.Transitions.end()
+                                ? std::clamp(transitionIndex, -1, (int)editableLayer.Transitions.size() - 1)
+                                : static_cast<int>(std::distance(editableLayer.Transitions.begin(), it));
+                        });
+                });
+
+            addSection("Inspector");
+            addAction("AnimatorTransitionBackToObject", "", "Back To Object Inspector", [this]()
+                {
+                    m_HasSelectedAnimatorState = false;
+                    m_HasSelectedAnimatorTransition = false;
+                    m_SelectedAnimatorLayerIndex = -1;
+                    m_SelectedAnimatorStateIndex = -1;
+                    m_SelectedAnimatorTransitionIndex = -1;
+                    RebuildInspector();
+                });
 
             auto& window = CCEngine::Application::Get()->GetWindow();
             UpdateLayout({ 0.0f, 0.0f }, { (float)window.GetWidth(), (float)window.GetHeight() });
@@ -2572,9 +3523,37 @@ namespace CCEngine
                 }
             }
 
+            if (e.GetEventType() == EventType::KeyPressed && m_HasSelectedAnimatorState && m_AnimatorStateClipSlotSelected && Widget::IsKeyboardFocusOwner(this))
+            {
+                auto& ke = static_cast<KeyPressedEvent&>(e);
+                if (ke.GetKeyCode() == VK_BACK || ke.GetKeyCode() == VK_DELETE)
+                {
+                    const bool handled = ClearSelectedAnimatorStateClip();
+                    e.Handled = handled;
+                    return handled;
+                }
+                if (ke.GetKeyCode() == VK_ESCAPE)
+                {
+                    m_AnimatorStateClipSlotSelected = false;
+                    RequestRebuild();
+                    e.Handled = true;
+                    return true;
+                }
+            }
+
             if (e.GetEventType() == EventType::MouseButtonPressed)
             {
                 auto& me = static_cast<MouseButtonPressedEvent&>(e);
+                if (me.GetButton() == 0 && m_HasSelectedAnimatorState && m_AnimatorStateClipSlotSelected)
+                {
+                    Widget* clipSlot = FindVisibleDescendantByName(this, "AnimatorStateClipSlot");
+                    if (!clipSlot || !clipSlot->IsPointInside(me.GetX(), me.GetY()))
+                    {
+                        m_AnimatorStateClipSlotSelected = false;
+                        RequestRebuild();
+                    }
+                }
+
                 if (me.GetButton() == 0 && IsMaterialPreviewPoint(me.GetX(), me.GetY()))
                 {
                     m_IsDraggingMaterialPreview = true;

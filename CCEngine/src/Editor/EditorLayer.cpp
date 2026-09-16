@@ -1,4 +1,5 @@
 #include "EditorLayer.h"
+#include "Animation/Animator.h"
 #include "Animation/AnimatorControllerAsset.h"
 #include "Renderer/Renderer.h"
 #include "Renderer/Renderer2D.h"
@@ -743,6 +744,13 @@ namespace CCEngine {
             }
         }
 
+        if (m_PendingAssetPick.Active && m_AssetPickerPanel && !m_AssetPickerPanel->IsVisible())
+        {
+            // Object picker를 X로 닫으면 선택 대기 상태도 같이 끝내야 한다.
+            // 그렇지 않으면 나중에 일반 Asset Browser에서 고른 에셋이 이전 슬롯에 잘못 들어간다.
+            ClearPendingAssetPick(false);
+        }
+
         // 외부 컴파일 작업의 완료 결과는 메인 스레드에서 Console로 전달한다.
         if (ScriptCompiler::Update())
         {
@@ -879,6 +887,9 @@ namespace CCEngine {
             for (UI::InspectorPanel* inspector : m_InspectorPanels)
             {
                 if (!inspector)
+                    continue;
+
+                if (inspector->IsInspectingAnimatorState() && !hierarchySelectionChanged)
                     continue;
 
                 // Asset Browser에서 선택한 셰이더/머티리얼은 Inspector의 명시적 선택 상태다.
@@ -3796,6 +3807,9 @@ namespace CCEngine {
 
     void EditorLayer::SelectAssetForInspection(const std::filesystem::path& assetPath, const std::string& assetType)
     {
+        if (TryApplyPendingAssetPick(assetPath, assetType))
+            return;
+
         if (assetType == "animatorcontroller" && m_HierarchyPanel)
         {
             Entity selected = m_HierarchyPanel->GetSelectedEntity();
@@ -3836,6 +3850,227 @@ namespace CCEngine {
         ConsoleLog::Info("Animator controller assigned: " + controllerPath.filename().string());
         if (openGraph)
             OpenAnimatorGraphEditorWindow(entity);
+        return true;
+    }
+
+    void EditorLayer::BeginAssetPick(const std::string& label, const std::vector<std::string>& acceptedTypes, std::function<bool(const std::filesystem::path&, const std::string&)> onPicked)
+    {
+        m_PendingAssetPick.Label = label;
+        m_PendingAssetPick.AcceptedTypes = acceptedTypes;
+        for (std::string& type : m_PendingAssetPick.AcceptedTypes)
+            std::transform(type.begin(), type.end(), type.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+        m_PendingAssetPick.OnPicked = std::move(onPicked);
+        m_PendingAssetPick.Active = true;
+
+        OpenAssetPickerWindow(label, m_PendingAssetPick.AcceptedTypes);
+
+        ConsoleLog::Info("Asset Browser picker started: " + label);
+    }
+
+    void EditorLayer::OpenAssetPickerWindow(const std::string& label, const std::vector<std::string>& acceptedTypes)
+    {
+        if (!m_RootUI)
+            return;
+
+        if (!m_AssetPickerPanel)
+        {
+            m_AssetPickerPanel = new UI::AssetBrowserPanel("AssetPickerPanel", "Select Asset");
+            m_AssetPickerPanel->SetDockingEnabled(true);
+            m_AssetPickerPanel->SetAssetUndoManager(&m_AssetUndoManager);
+            m_AssetPickerPanel->SetExternalWatcherActive(m_AssetFileWatcher.IsRunning());
+            m_AssetPickerPanel->SetOnAssetSelected([this](const std::string& path, const std::string& type)
+                {
+                    SelectAssetForInspection(path, type);
+                });
+            m_AssetPickerPanel->SetOnModelSelected([this](const std::string& path)
+                {
+                    SelectAssetForInspection(path, "model");
+                });
+            m_AssetPickerPanel->SetOnPrefabSelected([this](const std::string& path)
+                {
+                    SelectAssetForInspection(path, "prefab");
+                });
+            m_AssetPickerPanel->SetOnSceneSelected([this](const std::string& path)
+                {
+                    SelectAssetForInspection(path, "scene");
+                });
+            m_AssetPickerPanel->SetOnCodeAssetOpened([this](const std::string& path)
+                {
+                    std::filesystem::path assetPath = path;
+                    SelectAssetForInspection(assetPath, AssetDatabase::AssetKindToString(AssetDatabase::GetAssetKind(assetPath)));
+                });
+            m_AssetPickerPanel->SetOnAnimatorControllerOpened([this](const std::string& path)
+                {
+                    SelectAssetForInspection(path, "animatorcontroller");
+                });
+            m_AssetPickerPanel->SetOnAssetDatabaseChanged([this]()
+                {
+                    ClearMissingInspectorAssetSelections();
+                    QueueAssetReferenceValidation();
+                });
+            m_AssetPickerPanel->SetOnAssetHistoryChanged([this]() { MarkHistoryPanelDirty(); });
+            m_RootUI->AddChild(m_AssetPickerPanel);
+        }
+        else if (!m_AssetPickerPanel->GetOwnerWindow() && m_AssetPickerPanel->GetParent() != m_RootUI)
+        {
+            m_RootUI->AddChild(m_AssetPickerPanel);
+        }
+
+        auto& mainWindow = CCEngine::Application::Get()->GetWindow();
+        const float pickerW = (std::min)(760.0f, (std::max)(420.0f, (float)mainWindow.GetWidth() - 120.0f));
+        const float pickerH = (std::min)(520.0f, (std::max)(300.0f, (float)mainWindow.GetHeight() - 120.0f));
+        const float pickerX = ((float)mainWindow.GetWidth() - pickerW) * 0.5f;
+        const float pickerY = ((float)mainWindow.GetHeight() - pickerH) * 0.5f;
+
+        // Object Field picker는 기존 Asset Browser의 필터를 바꾸면 안 된다.
+        // 동시에 일반 에디터 창처럼 도킹/분리/복귀가 가능해야 하므로, 이미 멀티 윈도우로 분리된 상태면
+        // 그 창을 유지하고, 메인 창 내부에 있을 때만 중앙 플로팅 위치를 새로 잡는다.
+        const bool inExternalWindow = m_AssetPickerPanel->GetOwnerWindow() != nullptr;
+        m_AssetPickerPanel->SetDockingEnabled(true);
+        if (!inExternalWindow)
+        {
+            m_AssetPickerPanel->SetOwnerWindow(nullptr);
+            m_AssetPickerPanel->SetAnchorMin(0.0f, 0.0f);
+            m_AssetPickerPanel->SetAnchorMax(0.0f, 0.0f);
+            m_AssetPickerPanel->SetOffsetMin(pickerX, pickerY);
+            m_AssetPickerPanel->SetOffsetMax(pickerX + pickerW, pickerY + pickerH);
+        }
+        m_AssetPickerPanel->SetVisible(true);
+        m_AssetPickerPanel->BeginAssetPickerFilter(label, acceptedTypes);
+        m_AssetPickerPanel->Refresh(false);
+        m_AssetPickerPanel->BringToFront();
+    }
+
+    void EditorLayer::ClearPendingAssetPick(bool clearBrowserFilters)
+    {
+        m_PendingAssetPick = {};
+
+        if (m_AssetPickerPanel)
+        {
+            if (clearBrowserFilters)
+                m_AssetPickerPanel->ClearAssetPickerFilter();
+            if (m_AssetPickerPanel->GetOwnerWindow())
+            {
+                Application::Get()->RequestCloseSecondaryWindowByUI(m_AssetPickerPanel);
+                m_AssetPickerPanel->SetOwnerWindow(nullptr);
+            }
+            m_AssetPickerPanel->SetVisible(false);
+        }
+    }
+
+    bool EditorLayer::TryApplyPendingAssetPick(const std::filesystem::path& assetPath, const std::string& assetType)
+    {
+        if (!m_PendingAssetPick.Active)
+            return false;
+
+        std::string normalizedType = assetType;
+        std::transform(normalizedType.begin(), normalizedType.end(), normalizedType.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+        const bool typeAllowed = std::find(m_PendingAssetPick.AcceptedTypes.begin(), m_PendingAssetPick.AcceptedTypes.end(), normalizedType) != m_PendingAssetPick.AcceptedTypes.end();
+        if (!typeAllowed)
+        {
+            ConsoleLog::Warning("Asset pick expects type for " + m_PendingAssetPick.Label + ", ignored: " + assetType);
+            return true;
+        }
+
+        const bool applied = m_PendingAssetPick.OnPicked ? m_PendingAssetPick.OnPicked(assetPath, normalizedType) : false;
+        if (applied)
+            ClearPendingAssetPick(true);
+        return true;
+    }
+
+    void EditorLayer::BeginAnimatorClipPick(Entity entity, int layerIndex, int stateIndex)
+    {
+        if (!entity || !entity.HasComponent<AnimatorComponent>() || layerIndex < 0 || stateIndex < 0)
+        {
+            ConsoleLog::Warning("Animator clip pick ignored: selected state is invalid.");
+            return;
+        }
+
+        // 슬롯별 선택 UI는 모두 BeginAssetPick을 거친다.
+        // 이렇게 해야 Material/Texture/Animator Clip 같은 오브젝트 필드가 같은 UX와 필터 규칙을 공유한다.
+        BeginAssetPick("Animator Clip", { "model" },
+            [this, entity, layerIndex, stateIndex](const std::filesystem::path& path, const std::string&)
+            {
+                return ApplyAnimatorClipAssetToState(entity, layerIndex, stateIndex, path);
+            });
+    }
+
+    bool EditorLayer::ApplyAnimatorClipAssetToState(Entity target, int layerIndex, int stateIndex, const std::filesystem::path& assetPath)
+    {
+        if (assetPath.empty() || AssetDatabase::GetAssetKind(assetPath) != AssetKind::Model)
+        {
+            ConsoleLog::Warning("Animator clip pick expects a model asset with animation clips.");
+            return false;
+        }
+
+        if (!target || !target.HasComponent<AnimatorComponent>())
+        {
+            ConsoleLog::Warning("Animator clip pick cancelled: target Animator disappeared.");
+            return false;
+        }
+
+        auto& animator = target.GetComponent<AnimatorComponent>();
+        if (layerIndex < 0 || layerIndex >= (int)animator.Layers.size())
+        {
+            ConsoleLog::Warning("Animator clip pick cancelled: target layer disappeared.");
+            return false;
+        }
+
+        auto& layer = animator.Layers[layerIndex];
+        if (stateIndex < 0 || stateIndex >= (int)layer.States.size())
+        {
+            ConsoleLog::Warning("Animator clip pick cancelled: target state disappeared.");
+            return false;
+        }
+
+        const std::vector<AnimationClipInfo> clips = AnimationClip::InspectClips(assetPath.string());
+        if (clips.empty())
+        {
+            ConsoleLog::Warning("Selected model has no animation clips: " + assetPath.string());
+            return false;
+        }
+
+        auto& state = layer.States[stateIndex];
+        const AnimationClipInfo& firstClip = clips.front();
+        state.Motion = AnimatorComponent::State::MotionType::Clip;
+        state.ClipIndex = (int)firstClip.Index;
+        state.MotionPath = assetPath.string();
+        state.MotionAssetGuid = AssetDatabase::GetGuidFromPath(assetPath);
+        state.Tree.Children.clear();
+        if (state.Name.empty() || state.Name == "New State" || state.Name == "State")
+            state.Name = firstClip.Name.empty() ? ("Clip " + std::to_string(firstClip.Index)) : firstClip.Name;
+        state.ImportSettings.DisplayName = state.Name;
+        animator.SelectedClipIndex = state.ClipIndex;
+        animator.SelectedClipName = firstClip.Name;
+        animator.RuntimeClip.reset();
+        animator.RuntimeClipKey.clear();
+        animator.AnimPlayer.StopAnimation();
+        animator.IsPlaying = false;
+
+        if (!animator.ControllerPath.empty() || !animator.ControllerAssetGuid.empty())
+        {
+            std::filesystem::path controllerPath = animator.ControllerPath;
+            if (!animator.ControllerAssetGuid.empty())
+            {
+                std::filesystem::path guidPath = AssetDatabase::GetPathFromGuid(animator.ControllerAssetGuid);
+                if (!guidPath.empty())
+                    controllerPath = guidPath;
+            }
+            if (!controllerPath.empty())
+            {
+                AnimatorControllerAsset::Normalize(animator);
+                if (AnimatorControllerAsset::SaveToFile(controllerPath, animator))
+                    AssetDatabase::EnsureMetaFile(controllerPath);
+            }
+        }
+
+        for (UI::InspectorPanel* inspector : m_InspectorPanels)
+        {
+            if (inspector && inspector->IsVisible())
+                inspector->SetSelectedAnimatorState(target, layerIndex, stateIndex);
+        }
+
+        ConsoleLog::Info("Animator state clip assigned from Asset Browser: " + assetPath.filename().string());
         return true;
     }
 
@@ -4481,6 +4716,11 @@ namespace CCEngine {
                     else
                         OpenCodeAssetInExternalEditor(path);
                 });
+            inspector->SetAnimatorClipPickRequestedCallback(
+                [this](Entity entity, int layerIndex, int stateIndex)
+                {
+                    BeginAnimatorClipPick(entity, layerIndex, stateIndex);
+                });
             // 새 Inspector를 만들 때 현재 하이어라키 선택을 기본값으로 넣는다.
             // 단, Asset Browser에서 셰이더/머티리얼을 명시적으로 선택한 Inspector는
             // 매 프레임 하이어라키 선택으로 덮어쓰면 안 된다.
@@ -4796,7 +5036,23 @@ namespace CCEngine {
                 for (UI::InspectorPanel* inspector : m_InspectorPanels)
                 {
                     if (inspector && inspector->IsVisible())
+                    {
                         inspector->SetSelectedAnimatorState(entity, layerIndex, stateIndex);
+                        if (stateIndex >= 0)
+                            inspector->BringToFront();
+                    }
+                }
+            });
+        m_AnimatorGraphPanel->SetOnTransitionSelected([this](Entity entity, int layerIndex, int transitionIndex)
+            {
+                for (UI::InspectorPanel* inspector : m_InspectorPanels)
+                {
+                    if (inspector && inspector->IsVisible())
+                    {
+                        inspector->SetSelectedAnimatorTransition(entity, layerIndex, transitionIndex);
+                        if (transitionIndex >= 0)
+                            inspector->BringToFront();
+                    }
                 }
             });
 
@@ -4964,6 +5220,11 @@ namespace CCEngine {
                     OpenMaterialGraphEditorWindow(path);
                 else
                     OpenCodeAssetInExternalEditor(path);
+            });
+        m_InspectorPanel->SetAnimatorClipPickRequestedCallback(
+            [this](Entity entity, int layerIndex, int stateIndex)
+            {
+                BeginAnimatorClipPick(entity, layerIndex, stateIndex);
             });
         m_RootUI->AddChild(m_InspectorPanel);
         m_InspectorPanels.push_back(m_InspectorPanel);

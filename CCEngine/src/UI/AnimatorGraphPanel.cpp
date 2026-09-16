@@ -985,6 +985,8 @@ namespace CCEngine::UI
                         layer->SelectedTransitionIndex = transitionIndex;
                         m_SelectedTransitionIndex = transitionIndex;
                         m_SelectedStateIndex = -1;
+                        m_SelectedStateIndices.clear();
+                        NotifyTransitionSelected(*animator, transitionIndex);
                         OpenContextMenu(ContextMenuMode::Transition, e.GetX(), e.GetY(), -1, transitionIndex);
                     }
                     else if (stateIndex >= 0)
@@ -1098,6 +1100,7 @@ namespace CCEngine::UI
                 layer->SelectedTransitionIndex = transitionIndex;
                 m_SelectedStateIndex = -1;
                 m_SelectedStateIndices.clear();
+                NotifyTransitionSelected(*animator, transitionIndex);
                 e.Handled = true;
                 return true;
             }
@@ -1113,6 +1116,7 @@ namespace CCEngine::UI
                     // Inspector에 표시할 대표 상태만 바꾼다.
                     layer->ActiveStateIndex = stateIndex;
                     m_SelectedStateIndex = stateIndex;
+                    NotifyStateSelected(*animator, stateIndex);
                 }
                 layer->SelectedTransitionIndex = -1;
                 m_SelectedTransitionIndex = -1;
@@ -1604,7 +1608,7 @@ namespace CCEngine::UI
                 UIRenderer::DrawString("States", x + 18.0f, rowY - 10.0f, TextStrong);
                 for (int i = 0; i < (int)layer.States.size(); ++i)
                 {
-                    const bool active = i == layer.ActiveStateIndex;
+                    const bool active = m_SelectedTransitionIndex < 0 && i == layer.ActiveStateIndex;
                     const bool hover = IsPointInRect(m_LastMouseX, m_LastMouseY, x + 12.0f, rowY, w - 25.0f, 27.0f);
                     DirectX::XMFLOAT4 fill = active ? DirectX::XMFLOAT4{ 0.18f, 0.31f, 0.48f, 1.0f } : DirectX::XMFLOAT4{ 0.13f, 0.135f, 0.145f, 1.0f };
                     if (hover && !active)
@@ -1619,65 +1623,11 @@ namespace CCEngine::UI
                 if (m_SelectedStateIndex >= 0 && m_SelectedStateIndex < (int)layer.States.size())
                 {
                     const auto& state = layer.States[m_SelectedStateIndex];
-                    const float propY = y + h - 390.0f;
-                    UIRenderer::DrawRectFilled(x + 10.0f, propY, w - 22.0f, 376.0f, { 0.070f, 0.074f, 0.082f, 1.0f });
-                    DrawBorder(x + 10.0f, propY, w - 22.0f, 376.0f, PanelStroke);
-                    UIRenderer::DrawString("Selected State", x + 20.0f, propY + 24.0f, TextStrong);
-                    const bool editingStateName = m_EditingStateNameIndex == m_SelectedStateIndex;
-                    UIRenderer::DrawString("Name", x + 20.0f, propY + 50.0f, TextMuted);
-                    UIRenderer::DrawRectFilled(x + 68.0f, propY + 31.0f, w - 100.0f, 23.0f,
-                        editingStateName ? DirectX::XMFLOAT4{ 0.12f, 0.14f, 0.18f, 1.0f } : DirectX::XMFLOAT4{ 0.10f, 0.105f, 0.115f, 1.0f });
-                    DrawBorder(x + 68.0f, propY + 31.0f, w - 100.0f, 23.0f, editingStateName ? AccentBlue : PanelStroke);
-                    UIRenderer::DrawString(FitText(editingStateName ? m_StateNameEditBuffer : state.Name, w - 116.0f), x + 76.0f, propY + 49.0f, TextStrong);
-                    UIRenderer::DrawString(MotionLabel(state), x + 20.0f, propY + 76.0f, TextMuted);
-                    UIRenderer::DrawRectFilled(x + 20.0f, propY + 88.0f, 15.0f, 15.0f, { 0.10f, 0.105f, 0.115f, 1.0f });
-                    DrawBorder(x + 20.0f, propY + 88.0f, 15.0f, 15.0f, state.Loop ? AccentGreen : PanelStroke);
-                    if (state.Loop)
-                        UIRenderer::DrawString("v", x + 24.0f, propY + 102.0f, AccentGreen);
-                    UIRenderer::DrawString("Loop", x + 42.0f, propY + 104.0f, state.Loop ? AccentGreen : TextMuted);
-                    // Write Defaults는 별도 상태가 아니라, 선택한 상태 안의 옵션이다.
-                    // Unity처럼 한 State를 고른 뒤 체크박스로 켜고 끄는 흐름을 유지한다.
-                    UIRenderer::DrawRectFilled(x + 20.0f, propY + 114.0f, 15.0f, 15.0f, { 0.10f, 0.105f, 0.115f, 1.0f });
-                    DrawBorder(x + 20.0f, propY + 114.0f, 15.0f, 15.0f, state.WriteDefaults ? AccentGreen : PanelStroke);
-                    if (state.WriteDefaults)
-                        UIRenderer::DrawString("v", x + 24.0f, propY + 128.0f, AccentGreen);
-                    UIRenderer::DrawString("Write Defaults", x + 42.0f, propY + 130.0f, state.WriteDefaults ? AccentGreen : TextMuted);
-                    UIRenderer::DrawString(("Speed: " + std::to_string(state.Speed)).substr(0, 13), x + 20.0f, propY + 156.0f, TextMuted);
-                    UIRenderer::DrawRectFilled(x + w - 72.0f, propY + 138.0f, 24.0f, 20.0f, { 0.12f, 0.125f, 0.14f, 1.0f });
-                    UIRenderer::DrawRectFilled(x + w - 44.0f, propY + 138.0f, 24.0f, 20.0f, { 0.12f, 0.125f, 0.14f, 1.0f });
-                    UIRenderer::DrawString("-", x + w - 64.0f, propY + 154.0f, TextStrong);
-                    UIRenderer::DrawString("+", x + w - 37.0f, propY + 154.0f, TextStrong);
-
-                    auto drawCheck = [&](const char* label, bool checked, float localY)
-                        {
-                            UIRenderer::DrawRectFilled(x + 20.0f, propY + localY, 15.0f, 15.0f, { 0.10f, 0.105f, 0.115f, 1.0f });
-                            DrawBorder(x + 20.0f, propY + localY, 15.0f, 15.0f, checked ? AccentGreen : PanelStroke);
-                            if (checked)
-                                UIRenderer::DrawString("v", x + 24.0f, propY + localY + 14.0f, AccentGreen);
-                            UIRenderer::DrawString(label, x + 42.0f, propY + localY + 16.0f, checked ? TextStrong : TextMuted);
-                        };
-
-                    UIRenderer::DrawString("Root Motion Import", x + 20.0f, propY + 184.0f, TextStrong);
-                    UIRenderer::DrawString(FitText("Root Bone: " + animator->HumanoidRootBone, w - 132.0f), x + 20.0f, propY + 208.0f, TextMuted);
-                    const bool autoRootHover = IsPointInRect(m_LastMouseX, m_LastMouseY, x + w - 84.0f, propY + 190.0f, 62.0f, 22.0f);
-                    UIRenderer::DrawRectFilled(x + w - 84.0f, propY + 190.0f, 62.0f, 22.0f,
-                        autoRootHover ? DirectX::XMFLOAT4{ 0.18f, 0.25f, 0.34f, 1.0f } : DirectX::XMFLOAT4{ 0.12f, 0.125f, 0.14f, 1.0f });
-                    DrawBorder(x + w - 84.0f, propY + 190.0f, 62.0f, 22.0f, autoRootHover ? AccentBlue : PanelStroke);
-                    UIRenderer::DrawString("Auto", x + w - 67.0f, propY + 207.0f, TextStrong);
-                    // 루트모션 관련 옵션은 State 안의 Import Settings로 보관한다.
-                    // 같은 클립이라도 State마다 이동을 굽거나 잠그는 정책이 다를 수 있기 때문이다.
-                    drawCheck("Apply Root Motion", state.ApplyRootMotion, 224.0f);
-                    drawCheck("Bake Root Transform", state.ImportSettings.BakeRootTransform, 250.0f);
-                    drawCheck("Lock Root XZ", state.ImportSettings.LockRootPositionXZ, 276.0f);
-                    drawCheck("Lock Root Y", state.ImportSettings.LockRootPositionY, 302.0f);
-                    drawCheck("Lock Root Rotation", state.ImportSettings.LockRootRotation, 328.0f);
-                    const DirectX::XMFLOAT4 statusColor = animator->RuntimeRootMotionRootMissing ? AccentRed : TextMuted;
-                    if (state.Motion == AnimatorComponent::State::MotionType::BlendTree)
-                        UIRenderer::DrawString(FitText("Replace Clip: whole state / Edit Tree: child clips", w - 44.0f), x + 20.0f, propY + 364.0f, AccentOrange);
-                    else if (!m_StateEditMessage.empty())
-                        UIRenderer::DrawString(FitText(m_StateEditMessage, w - 44.0f), x + 20.0f, propY + 364.0f, AccentOrange);
-                    else
-                        UIRenderer::DrawString(animator->RuntimeRootMotionRootMissing ? "Runtime: root channel missing" : "Runtime: root ready", x + 20.0f, propY + 364.0f, statusColor);
+                    const float infoY = (std::min)(rowY + 8.0f, y + h - 86.0f);
+                    UIRenderer::DrawRectFilled(x + 10.0f, infoY, w - 22.0f, 72.0f, { 0.070f, 0.074f, 0.082f, 1.0f });
+                    DrawBorder(x + 10.0f, infoY, w - 22.0f, 72.0f, PanelStroke);
+                    UIRenderer::DrawString(FitText("Selected: " + state.Name, w - 44.0f), x + 20.0f, infoY + 24.0f, TextStrong);
+                    UIRenderer::DrawString("Edit details in Inspector.", x + 20.0f, infoY + 50.0f, AccentBlue);
                 }
             }
             else
@@ -1708,7 +1658,6 @@ namespace CCEngine::UI
                 }
             }
 
-            DrawTransitionInspector(x + 10.0f, y + h - 364.0f, w - 22.0f, 350.0f);
         }
         UIRenderer::PopClipRect();
     }
@@ -1763,8 +1712,11 @@ namespace CCEngine::UI
             if (layer && !layer->States.empty())
             {
                 int entryIndex = std::clamp(layer->EntryStateIndex, 0, (int)layer->States.size() - 1);
+                StateNodeRect entryRect{ AnimatorComponent::Transition::AnyStateIndex, entry.x, entry.y, 112.0f, 36.0f };
                 StateNodeRect entryState = GetStateRect(entryIndex);
-                DrawNodeConnection({ entry.x + 112.0f, entry.y + 18.0f }, { entryState.X, entryState.Y + entryState.H * 0.5f }, AccentGreen);
+                DirectX::XMFLOAT2 from = GetRectConnectionPoint(entryRect, { entryState.X + entryState.W * 0.5f, entryState.Y + entryState.H * 0.5f });
+                DirectX::XMFLOAT2 to = GetRectConnectionPoint(entryState, { entryRect.X + entryRect.W * 0.5f, entryRect.Y + entryRect.H * 0.5f });
+                DrawNodeConnection(from, to, AccentGreen);
             }
 
             if (!layer)
@@ -1774,20 +1726,29 @@ namespace CCEngine::UI
             }
 
             for (int i = 0; i < (int)layer->Transitions.size(); ++i)
-                DrawTransitionArrow(i, layer->Transitions[i], i == m_SelectedTransitionIndex || i == layer->SelectedTransitionIndex);
+            {
+                if (i != m_SelectedTransitionIndex && i != layer->SelectedTransitionIndex)
+                    DrawTransitionArrow(i, layer->Transitions[i], false);
+            }
+            for (int i = 0; i < (int)layer->Transitions.size(); ++i)
+            {
+                if (i == m_SelectedTransitionIndex || i == layer->SelectedTransitionIndex)
+                    DrawTransitionArrow(i, layer->Transitions[i], true);
+            }
 
             if (m_IsCreatingTransition &&
                 m_TransitionSourceStateIndex >= 0 &&
                 m_TransitionSourceStateIndex < (int)layer->States.size())
             {
                 const StateNodeRect sourceRect = GetStateRect(m_TransitionSourceStateIndex);
-                DirectX::XMFLOAT2 from = { sourceRect.X + sourceRect.W, sourceRect.Y + sourceRect.H * 0.5f };
                 DirectX::XMFLOAT2 to = { m_LastMouseX, m_LastMouseY };
+                DirectX::XMFLOAT2 from = GetRectConnectionPoint(sourceRect, to);
                 const int hoverState = GetStateAt(m_LastMouseX, m_LastMouseY);
                 if (hoverState >= 0 && hoverState < (int)layer->States.size() && hoverState != m_TransitionSourceStateIndex)
                 {
                     const StateNodeRect targetRect = GetStateRect(hoverState);
-                    to = { targetRect.X, targetRect.Y + targetRect.H * 0.5f };
+                    from = GetRectConnectionPoint(sourceRect, { targetRect.X + targetRect.W * 0.5f, targetRect.Y + targetRect.H * 0.5f });
+                    to = GetRectConnectionPoint(targetRect, { sourceRect.X + sourceRect.W * 0.5f, sourceRect.Y + sourceRect.H * 0.5f });
                 }
 
                 // Transition 생성 중에는 아직 데이터에 저장하지 않고 임시 선만 그린다.
@@ -2375,38 +2336,14 @@ namespace CCEngine::UI
             !IsValidAnimatorStateEndpoint(*layer, transition.ToStateIndex))
             return;
 
-        auto endpoint = [this](int stateIndex, bool source)
-        {
-            if (stateIndex >= 0)
-            {
-                StateNodeRect r = GetStateRect(stateIndex);
-                return source
-                    ? DirectX::XMFLOAT2{ r.X + r.W, r.Y + r.H * 0.5f }
-                    : DirectX::XMFLOAT2{ r.X, r.Y + r.H * 0.5f };
-            }
-
-            DirectX::XMFLOAT2 p = GraphToScreen(GetSpecialAnimatorNodeGraphPosition(stateIndex));
-            return source
-                ? DirectX::XMFLOAT2{ p.x + 112.0f, p.y + 18.0f }
-                : DirectX::XMFLOAT2{ p.x, p.y + 18.0f };
-        };
-
-        DirectX::XMFLOAT2 from = endpoint(transition.FromStateIndex, true);
-        DirectX::XMFLOAT2 to = endpoint(transition.ToStateIndex, false);
-        if (transition.FromStateIndex >= 0 && transition.ToStateIndex >= 0 && to.x < from.x)
-        {
-            const StateNodeRect fromRect = GetStateRect(transition.FromStateIndex);
-            const StateNodeRect toRect = GetStateRect(transition.ToStateIndex);
-            from = { fromRect.X + fromRect.W * 0.5f, fromRect.Y + fromRect.H };
-            to = { toRect.X + toRect.W * 0.5f, toRect.Y };
-        }
+        auto [from, to] = GetTransitionEndpoints(transition.FromStateIndex, transition.ToStateIndex, transitionIndex);
 
         const auto issues = ValidateTransition(*animator, *layer, transition);
         const DirectX::XMFLOAT4 color = !issues.empty()
             ? AccentOrange
-            : (selected ? DirectX::XMFLOAT4{ 0.88f, 0.92f, 1.0f, 1.0f } : DirectX::XMFLOAT4{ 0.58f, 0.64f, 0.72f, 1.0f });
+            : (selected ? AccentBlue : DirectX::XMFLOAT4{ 0.58f, 0.64f, 0.72f, 1.0f });
         // Animator 전이는 방향성이 중요하다. 곡선 대신 직선+화살촉으로 그려 Unity Animator처럼 흐름을 바로 읽게 한다.
-        DrawLine(from, to, color, selected ? 3.0f : 2.0f);
+        DrawLine(from, to, color, selected ? 4.0f : 2.0f);
         DrawArrowHead(from, to, color);
 
         if (!transition.Conditions.empty() || !issues.empty())
@@ -2670,7 +2607,7 @@ namespace CCEngine::UI
         {
             EnsureAnimatorLayers(*animator);
             auto& activeLayer = animator->Layers[animator->ActiveLayerIndex];
-            if (m_SelectedTransitionIndex >= 0 && m_SelectedTransitionIndex < (int)activeLayer.Transitions.size())
+            if (false && m_SelectedTransitionIndex >= 0 && m_SelectedTransitionIndex < (int)activeLayer.Transitions.size())
             {
                 const float panelX = x + 10.0f;
                 const float panelW = m_SidebarWidth - 22.0f;
@@ -2888,7 +2825,7 @@ namespace CCEngine::UI
                 return true;
             }
 
-            if (m_SelectedTransitionIndex >= 0 && m_SelectedTransitionIndex < (int)activeLayer.Transitions.size())
+            if (false && m_SelectedTransitionIndex >= 0 && m_SelectedTransitionIndex < (int)activeLayer.Transitions.size())
             {
                 const float panelX = x + 10.0f;
                 const float panelW = m_SidebarWidth - 22.0f;
@@ -3010,94 +2947,6 @@ namespace CCEngine::UI
                     }
 
                     CommitGraphEdit(*animator);
-                    return true;
-                }
-            }
-
-            if (m_SidebarPage == SidebarPage::Layers && m_SelectedStateIndex >= 0 && m_SelectedStateIndex < (int)activeLayer.States.size())
-            {
-                const float propY = y + (m_CalculatedSize.y - m_TitleContentTop - m_ToolbarHeight) - 390.0f;
-                auto& state = activeLayer.States[m_SelectedStateIndex];
-                if (IsPointInRect(mouseX, mouseY, x + 68.0f, propY + 31.0f, m_SidebarWidth - 100.0f, 23.0f))
-                {
-                    BeginStateRename(m_SelectedStateIndex);
-                    return true;
-                }
-                if (IsPointInRect(mouseX, mouseY, x + 10.0f, propY + 84.0f, m_SidebarWidth - 22.0f, 24.0f))
-                {
-                    state.Loop = !state.Loop;
-                    animator->Loop = state.Loop;
-                    CommitGraphEdit(*animator);
-                    ResetRuntime(*animator);
-                    return true;
-                }
-                if (IsPointInRect(mouseX, mouseY, x + 10.0f, propY + 110.0f, m_SidebarWidth - 22.0f, 24.0f))
-                {
-                    state.WriteDefaults = !state.WriteDefaults;
-                    animator->AnimPlayer.SetWriteDefaults(state.WriteDefaults);
-                    CommitGraphEdit(*animator);
-                    ResetRuntime(*animator);
-                    return true;
-                }
-                if (IsPointInRect(mouseX, mouseY, x + m_SidebarWidth - 72.0f, propY + 138.0f, 24.0f, 20.0f))
-                {
-                    state.Speed = (std::max)(0.0f, state.Speed - 0.1f);
-                    animator->Speed = state.Speed;
-                    CommitGraphEdit(*animator);
-                    ResetRuntime(*animator);
-                    return true;
-                }
-                if (IsPointInRect(mouseX, mouseY, x + m_SidebarWidth - 44.0f, propY + 138.0f, 24.0f, 20.0f))
-                {
-                    state.Speed += 0.1f;
-                    animator->Speed = state.Speed;
-                    CommitGraphEdit(*animator);
-                    ResetRuntime(*animator);
-                    return true;
-                }
-                if (IsPointInRect(mouseX, mouseY, x + m_SidebarWidth - 84.0f, propY + 190.0f, 62.0f, 22.0f))
-                {
-                    // 자동 탐색은 후보를 "추측"하지만, 저장은 실제 FBX 노드/채널 이름으로 한다.
-                    // 그래야 Mixamo처럼 네임스페이스가 붙은 루트 본도 Root Motion 샘플링에서 빠지지 않는다.
-                    animator->HumanoidRootBone = FindBestRootBoneCandidateForState(m_TargetEntity, *animator, state);
-                    CommitGraphEdit(*animator);
-                    ResetRuntime(*animator);
-                    return true;
-                }
-                if (IsPointInRect(mouseX, mouseY, x + 10.0f, propY + 220.0f, m_SidebarWidth - 22.0f, 24.0f))
-                {
-                    state.ApplyRootMotion = !state.ApplyRootMotion;
-                    animator->ApplyRootMotion = state.ApplyRootMotion;
-                    CommitGraphEdit(*animator);
-                    ResetRuntime(*animator);
-                    return true;
-                }
-                if (IsPointInRect(mouseX, mouseY, x + 10.0f, propY + 246.0f, m_SidebarWidth - 22.0f, 24.0f))
-                {
-                    state.ImportSettings.BakeRootTransform = !state.ImportSettings.BakeRootTransform;
-                    CommitGraphEdit(*animator);
-                    ResetRuntime(*animator);
-                    return true;
-                }
-                if (IsPointInRect(mouseX, mouseY, x + 10.0f, propY + 272.0f, m_SidebarWidth - 22.0f, 24.0f))
-                {
-                    state.ImportSettings.LockRootPositionXZ = !state.ImportSettings.LockRootPositionXZ;
-                    CommitGraphEdit(*animator);
-                    ResetRuntime(*animator);
-                    return true;
-                }
-                if (IsPointInRect(mouseX, mouseY, x + 10.0f, propY + 298.0f, m_SidebarWidth - 22.0f, 24.0f))
-                {
-                    state.ImportSettings.LockRootPositionY = !state.ImportSettings.LockRootPositionY;
-                    CommitGraphEdit(*animator);
-                    ResetRuntime(*animator);
-                    return true;
-                }
-                if (IsPointInRect(mouseX, mouseY, x + 10.0f, propY + 324.0f, m_SidebarWidth - 22.0f, 24.0f))
-                {
-                    state.ImportSettings.LockRootRotation = !state.ImportSettings.LockRootRotation;
-                    CommitGraphEdit(*animator);
-                    ResetRuntime(*animator);
                     return true;
                 }
             }
@@ -4829,6 +4678,17 @@ namespace CCEngine::UI
         m_OnStateSelected(m_TargetEntity, layerIndex, stateIndex);
     }
 
+    void AnimatorGraphPanel::NotifyTransitionSelected(const AnimatorComponent& animator, int transitionIndex) const
+    {
+        if (!m_OnTransitionSelected)
+            return;
+
+        const int layerIndex = animator.Layers.empty()
+            ? -1
+            : std::clamp(animator.ActiveLayerIndex, 0, (int)animator.Layers.size() - 1);
+        m_OnTransitionSelected(m_TargetEntity, layerIndex, transitionIndex);
+    }
+
     void AnimatorGraphPanel::SelectStatesInBox(AnimatorComponent& animator)
     {
         auto* layer = GetActiveLayer(animator);
@@ -5119,7 +4979,7 @@ namespace CCEngine::UI
 
     float AnimatorGraphPanel::GetSelectedStateRawDurationSeconds(const AnimatorComponent& animator, const AnimatorComponent::State& state)
     {
-        const std::string key = animator.SourceAssetGuid + "|" + animator.SourcePath + "|" + std::to_string(state.ClipIndex);
+        const std::string key = state.MotionAssetGuid + "|" + state.MotionPath + "|" + animator.SourceAssetGuid + "|" + animator.SourcePath + "|" + std::to_string(state.ClipIndex);
         if (m_TimelineClipKey == key && m_TimelineClipDurationSeconds > 0.0f)
             return m_TimelineClipDurationSeconds;
 
@@ -5194,13 +5054,21 @@ namespace CCEngine::UI
 
         // 스크럽은 현재 State의 시간만 바꾼 뒤 같은 클립을 0초 업데이트로 평가한다.
         // 자동 재생을 켜지 않기 때문에 타임라인을 놓은 뒤에도 클립이 혼자 계속 흐르지 않는다.
-        std::filesystem::path sourcePath = animator.SourcePath;
-        if (!animator.SourceAssetGuid.empty())
+        std::filesystem::path sourcePath = state.MotionPath;
+        if (!state.MotionAssetGuid.empty())
+        {
+            std::filesystem::path guidPath = AssetDatabase::GetPathFromGuid(state.MotionAssetGuid);
+            if (!guidPath.empty())
+                sourcePath = guidPath;
+        }
+        if (sourcePath.empty() && !animator.SourceAssetGuid.empty())
         {
             std::filesystem::path guidPath = AssetDatabase::GetPathFromGuid(animator.SourceAssetGuid);
             if (!guidPath.empty())
                 sourcePath = guidPath;
         }
+        if (sourcePath.empty())
+            sourcePath = animator.SourcePath;
         if (!animator.RuntimeClip && !sourcePath.empty())
             animator.RuntimeClip = AnimationClip::LoadShared(sourcePath.string(), (uint32_t)(std::max)(0, state.ClipIndex));
         if (!animator.RuntimeClip)
@@ -5243,6 +5111,78 @@ namespace CCEngine::UI
         return { stateIndex, screen.x, screen.y, screenW, screenH };
     }
 
+    AnimatorGraphPanel::StateNodeRect AnimatorGraphPanel::GetEndpointRect(int stateIndex) const
+    {
+        if (stateIndex >= 0)
+            return GetStateRect(stateIndex);
+
+        DirectX::XMFLOAT2 p = GraphToScreen(GetSpecialAnimatorNodeGraphPosition(stateIndex));
+        return { stateIndex, p.x, p.y, 112.0f, 36.0f };
+    }
+
+    DirectX::XMFLOAT2 AnimatorGraphPanel::GetRectConnectionPoint(const StateNodeRect& rect, DirectX::XMFLOAT2 toward) const
+    {
+        const float cx = rect.X + rect.W * 0.5f;
+        const float cy = rect.Y + rect.H * 0.5f;
+        const float dx = toward.x - cx;
+        const float dy = toward.y - cy;
+        const float halfW = (std::max)(1.0f, rect.W * 0.5f);
+        const float halfH = (std::max)(1.0f, rect.H * 0.5f);
+
+        if (std::abs(dx) < 0.001f && std::abs(dy) < 0.001f)
+            return { rect.X + rect.W, cy };
+
+        // 중심에서 상대 노드 방향으로 쏜 선이 사각형 경계와 만나는 점을 사용한다.
+        // 이렇게 해야 좌우/상하/대각 배치가 바뀌어도 항상 가장 가까운 면에 전이선이 붙는다.
+        const bool hitVerticalSide = std::abs(dx) * halfH > std::abs(dy) * halfW;
+        if (hitVerticalSide)
+        {
+            const float x = cx + (dx > 0.0f ? halfW : -halfW);
+            const float t = (x - cx) / dx;
+            return { x, cy + dy * t };
+        }
+
+        const float y = cy + (dy > 0.0f ? halfH : -halfH);
+        const float t = (y - cy) / dy;
+        return { cx + dx * t, y };
+    }
+
+    std::pair<DirectX::XMFLOAT2, DirectX::XMFLOAT2> AnimatorGraphPanel::GetTransitionEndpoints(int fromStateIndex, int toStateIndex, int transitionIndex) const
+    {
+        const StateNodeRect fromRect = GetEndpointRect(fromStateIndex);
+        const StateNodeRect toRect = GetEndpointRect(toStateIndex);
+        const DirectX::XMFLOAT2 fromCenter{ fromRect.X + fromRect.W * 0.5f, fromRect.Y + fromRect.H * 0.5f };
+        const DirectX::XMFLOAT2 toCenter{ toRect.X + toRect.W * 0.5f, toRect.Y + toRect.H * 0.5f };
+        DirectX::XMFLOAT2 from = GetRectConnectionPoint(fromRect, toCenter);
+        DirectX::XMFLOAT2 to = GetRectConnectionPoint(toRect, fromCenter);
+
+        const AnimatorComponent* animator = GetAnimator();
+        const auto* layer = animator ? GetActiveLayer(*animator) : nullptr;
+        const bool hasReverse = layer && transitionIndex >= 0 && transitionIndex < (int)layer->Transitions.size() &&
+            std::any_of(layer->Transitions.begin(), layer->Transitions.end(), [&](const AnimatorComponent::Transition& other)
+                {
+                    return other.FromStateIndex == toStateIndex && other.ToStateIndex == fromStateIndex;
+                });
+
+        if (hasReverse)
+        {
+            const float dx = to.x - from.x;
+            const float dy = to.y - from.y;
+            const float len = (std::max)(0.001f, std::sqrt(dx * dx + dy * dy));
+            const float nx = -dy / len;
+            const float ny = dx / len;
+            const float offset = 8.0f;
+            // A->B와 B->A가 둘 다 있으면 한 선에 겹치지 않게 평행 이동한다.
+            // Unity Animator처럼 방향별 화살표가 따로 보여야 조건/전이 선택을 헷갈리지 않는다.
+            from.x += nx * offset;
+            from.y += ny * offset;
+            to.x += nx * offset;
+            to.y += ny * offset;
+        }
+
+        return { from, to };
+    }
+
     int AnimatorGraphPanel::GetStateAt(float mouseX, float mouseY) const
     {
         const AnimatorComponent* animator = GetAnimator();
@@ -5273,31 +5213,7 @@ namespace CCEngine::UI
                 !IsValidAnimatorStateEndpoint(*layer, transition.ToStateIndex))
                 continue;
 
-            auto endpoint = [this](int stateIndex, bool source)
-            {
-                if (stateIndex >= 0)
-                {
-                    const StateNodeRect r = GetStateRect(stateIndex);
-                    return source
-                        ? DirectX::XMFLOAT2{ r.X + r.W, r.Y + r.H * 0.5f }
-                        : DirectX::XMFLOAT2{ r.X, r.Y + r.H * 0.5f };
-                }
-
-                DirectX::XMFLOAT2 p = GraphToScreen(GetSpecialAnimatorNodeGraphPosition(stateIndex));
-                return source
-                    ? DirectX::XMFLOAT2{ p.x + 112.0f, p.y + 18.0f }
-                    : DirectX::XMFLOAT2{ p.x, p.y + 18.0f };
-            };
-
-            DirectX::XMFLOAT2 from = endpoint(transition.FromStateIndex, true);
-            DirectX::XMFLOAT2 to = endpoint(transition.ToStateIndex, false);
-            if (transition.FromStateIndex >= 0 && transition.ToStateIndex >= 0 && to.x < from.x)
-            {
-                const StateNodeRect fromRect = GetStateRect(transition.FromStateIndex);
-                const StateNodeRect toRect = GetStateRect(transition.ToStateIndex);
-                from = { fromRect.X + fromRect.W * 0.5f, fromRect.Y + fromRect.H };
-                to = { toRect.X + toRect.W * 0.5f, toRect.Y };
-            }
+            auto [from, to] = GetTransitionEndpoints(transition.FromStateIndex, transition.ToStateIndex, i);
             if (DistancePointToSegment(mouseX, mouseY, from, to) <= 8.0f)
                 return i;
         }
@@ -5306,28 +5222,27 @@ namespace CCEngine::UI
 
     std::vector<AnimationClipInfo> AnimatorGraphPanel::InspectSourceClips(const AnimatorComponent& animator) const
     {
-        std::filesystem::path sourcePath = animator.SourcePath;
-        if (!animator.SourceAssetGuid.empty())
+        std::filesystem::path sourcePath;
+        const auto* layer = GetActiveLayer(animator);
+        if (layer && m_SelectedStateIndex >= 0 && m_SelectedStateIndex < (int)layer->States.size())
+        {
+            const auto& state = layer->States[m_SelectedStateIndex];
+            sourcePath = state.MotionPath;
+            if (!state.MotionAssetGuid.empty())
+            {
+                std::filesystem::path guidPath = AssetDatabase::GetPathFromGuid(state.MotionAssetGuid);
+                if (!guidPath.empty())
+                    sourcePath = guidPath;
+            }
+        }
+        if (sourcePath.empty() && !animator.SourceAssetGuid.empty())
         {
             std::filesystem::path guidPath = AssetDatabase::GetPathFromGuid(animator.SourceAssetGuid);
             if (!guidPath.empty())
                 sourcePath = guidPath;
         }
         if (sourcePath.empty())
-        {
-            const auto* layer = GetActiveLayer(animator);
-            if (layer && m_SelectedStateIndex >= 0 && m_SelectedStateIndex < (int)layer->States.size())
-            {
-                const auto& state = layer->States[m_SelectedStateIndex];
-                sourcePath = state.MotionPath;
-                if (!state.MotionAssetGuid.empty())
-                {
-                    std::filesystem::path guidPath = AssetDatabase::GetPathFromGuid(state.MotionAssetGuid);
-                    if (!guidPath.empty())
-                        sourcePath = guidPath;
-                }
-            }
-        }
+            sourcePath = animator.SourcePath;
 
         return sourcePath.empty() ? std::vector<AnimationClipInfo>{} : AnimationClip::InspectClips(sourcePath.string());
     }

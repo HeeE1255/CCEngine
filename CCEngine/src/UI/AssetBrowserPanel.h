@@ -28,7 +28,7 @@ namespace CCEngine
         class CC_API AssetBrowserPanel : public WindowPanel
         {
         public:
-            AssetBrowserPanel(const std::string& name = "AssetBrowser");
+            AssetBrowserPanel(const std::string& name = "AssetBrowser", const std::string& title = "Asset Browser");
             AssetBrowserPanel(const AssetBrowserPanel&) = delete;
             AssetBrowserPanel& operator=(const AssetBrowserPanel&) = delete;
 
@@ -37,6 +37,9 @@ namespace CCEngine
             const std::filesystem::path& GetCurrentAssetDirectory() const { return m_CurrentDirectory; }
             bool IsDropTargetPoint(float mouseX, float mouseY) const { return IsContentPoint(mouseX, mouseY); }
             bool ImportExternalPaths(const std::vector<std::filesystem::path>& sourcePaths, float mouseX, float mouseY);
+            void BeginAssetPickerFilter(const std::string& label, const std::vector<std::string>& acceptedTypeKeys);
+            void ClearAssetPickerFilter();
+            bool HasAssetPickerFilter() const { return m_HasPickerFilter; }
 
             void SetOnPrefabSelected(std::function<void(const std::string&)> callback) { m_OnPrefabSelected = callback; }
             void SetOnModelSelected(std::function<void(const std::string&)> callback) { m_OnModelSelected = callback; }
@@ -187,6 +190,7 @@ namespace CCEngine
             void SetSortMode(SortMode mode);
             void SetSearchQuery(const std::string& query);
             void ApplyFilter();
+            void BuildProjectWidePickerEntries(const std::string& query, const std::string& extensionFilter, TypeFilter queryTypeFilter);
             bool EntryMatchesAdvancedFilter(const AssetEntry& entry, const std::string& textQuery, const std::string& extensionFilter, TypeFilter queryTypeFilter) const;
             void SortViewEntries();
             void AppendFbxSubAssetEntries(const AssetEntry& fbxEntry, const std::string& query);
@@ -370,6 +374,10 @@ namespace CCEngine
             SortMode m_SortMode = SortMode::Name;
             bool m_TypeFilterDropdownVisible = false;
             bool m_SortDropdownVisible = false;
+            bool m_HasPickerFilter = false;
+            TypeFilter m_PrePickerTypeFilter = TypeFilter::All;
+            std::string m_PickerFilterLabel;
+            std::unordered_set<std::string> m_PickerAcceptedTypeKeys;
             bool m_ExternalWatcherActive = false;
             std::chrono::steady_clock::time_point m_LastExternalFileCheck = {};
 

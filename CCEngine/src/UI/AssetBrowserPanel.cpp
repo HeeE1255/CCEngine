@@ -1878,8 +1878,8 @@ namespace CCEngine
             }
         }
 
-        AssetBrowserPanel::AssetBrowserPanel(const std::string& name)
-            : WindowPanel(name, "Asset Browser")
+        AssetBrowserPanel::AssetBrowserPanel(const std::string& name, const std::string& title)
+            : WindowPanel(name, title)
         {
             SetClipToBounds(true);
             m_ContentTop = 70.0f;
@@ -2304,7 +2304,45 @@ namespace CCEngine
 
         std::string AssetBrowserPanel::GetTypeFilterLabel() const
         {
+            if (m_HasPickerFilter)
+            {
+                std::string label = m_PickerFilterLabel.empty() ? "Pick Asset" : m_PickerFilterLabel;
+                label = "Pick: " + label;
+                if (label.size() > 15)
+                    label = label.substr(0, 12) + "...";
+                return label;
+            }
             return GetTypeFilterLabel(m_TypeFilter);
+        }
+
+        void AssetBrowserPanel::BeginAssetPickerFilter(const std::string& label, const std::vector<std::string>& acceptedTypeKeys)
+        {
+            if (!m_HasPickerFilter)
+                m_PrePickerTypeFilter = m_TypeFilter;
+            m_HasPickerFilter = true;
+            m_TypeFilter = TypeFilter::All;
+            m_PickerFilterLabel = label;
+            m_PickerAcceptedTypeKeys.clear();
+            for (std::string key : acceptedTypeKeys)
+            {
+                std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+                if (!key.empty())
+                    m_PickerAcceptedTypeKeys.insert(key);
+            }
+            m_TypeFilterDropdownVisible = false;
+            ApplyFilter();
+        }
+
+        void AssetBrowserPanel::ClearAssetPickerFilter()
+        {
+            if (!m_HasPickerFilter)
+                return;
+
+            m_HasPickerFilter = false;
+            m_TypeFilter = m_PrePickerTypeFilter;
+            m_PickerFilterLabel.clear();
+            m_PickerAcceptedTypeKeys.clear();
+            ApplyFilter();
         }
 
         std::string AssetBrowserPanel::GetSortModeLabel() const
@@ -3227,7 +3265,14 @@ namespace CCEngine
             }
             query = textQuery;
 
-            if (query.empty() && extensionFilter.empty() && m_TypeFilter == TypeFilter::All && queryTypeFilter == TypeFilter::All)
+            if (m_HasPickerFilter)
+            {
+                BuildProjectWidePickerEntries(query, extensionFilter, queryTypeFilter);
+                SortViewEntries();
+                return;
+            }
+
+            if (query.empty() && extensionFilter.empty() && m_TypeFilter == TypeFilter::All && queryTypeFilter == TypeFilter::All && !m_HasPickerFilter)
             {
                 for (const AssetEntry& entry : m_Entries)
                 {
@@ -3262,6 +3307,45 @@ namespace CCEngine
             SortViewEntries();
         }
 
+        void AssetBrowserPanel::BuildProjectWidePickerEntries(const std::string& query, const std::string& extensionFilter, TypeFilter queryTypeFilter)
+        {
+            if (!std::filesystem::exists(m_RootDirectory))
+                return;
+
+            std::error_code ec;
+            for (const auto& entry : std::filesystem::recursive_directory_iterator(
+                m_RootDirectory,
+                std::filesystem::directory_options::skip_permission_denied,
+                ec))
+            {
+                if (ec)
+                    break;
+
+                if (!entry.is_regular_file(ec) || ec)
+                {
+                    ec.clear();
+                    continue;
+                }
+
+                if (IsMetaFile(entry.path()))
+                    continue;
+
+                AssetType type = GetAssetType(entry.path());
+                if (type == AssetType::Unknown)
+                    continue;
+
+                AssetEntry assetEntry;
+                assetEntry.Path = entry.path();
+                assetEntry.Type = type;
+                std::error_code relEc;
+                std::filesystem::path relativePath = std::filesystem::relative(entry.path(), m_RootDirectory, relEc);
+                assetEntry.DisplayName = relEc ? entry.path().filename().string() : relativePath.generic_string();
+
+                if (EntryMatchesAdvancedFilter(assetEntry, query, extensionFilter, queryTypeFilter))
+                    m_ViewEntries.push_back(assetEntry);
+            }
+        }
+
         bool AssetBrowserPanel::EntryMatchesAdvancedFilter(const AssetEntry& entry, const std::string& textQuery, const std::string& extensionFilter, TypeFilter queryTypeFilter) const
         {
             auto typeMatches = [&](TypeFilter filter)
@@ -3282,6 +3366,13 @@ namespace CCEngine
                         default: return true;
                     }
                 };
+
+            if (m_HasPickerFilter && entry.Type != AssetType::Folder && entry.DisplayName != "..")
+            {
+                const std::string typeKey = GetTypeKey(entry.Type);
+                if (m_PickerAcceptedTypeKeys.find(typeKey) == m_PickerAcceptedTypeKeys.end())
+                    return false;
+            }
 
             if (!typeMatches(m_TypeFilter) || !typeMatches(queryTypeFilter))
                 return false;
@@ -3558,6 +3649,8 @@ namespace CCEngine
 
             std::string key = GetTreeKey(fbxEntry.Path);
             if (m_ExpandedFbxAssets.find(key) == m_ExpandedFbxAssets.end())
+                return;
+            if (m_HasPickerFilter && m_PickerAcceptedTypeKeys.find(GetTypeKey(AssetType::FbxMesh)) == m_PickerAcceptedTypeKeys.end())
                 return;
 
             const auto& meshes = GetFbxMeshInfos(fbxEntry.Path);

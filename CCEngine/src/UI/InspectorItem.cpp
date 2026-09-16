@@ -38,6 +38,8 @@ namespace CCEngine {
             for (auto* child : m_Children)
             {
                 float childHeight = 24.0f; // 입력 칸이나 버튼의 고정 높이
+                if (child->GetName().find("AnimatorTransitionBlendPreview") != std::string::npos)
+                    childHeight = 136.0f;
 
                 // 자식의 앵커를 상단 기준으로 고정
                 child->SetAnchorMin(0.0f, 0.0f);

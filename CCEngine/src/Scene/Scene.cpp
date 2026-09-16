@@ -63,6 +63,21 @@ namespace CCEngine
             return animator.SourcePath;
         }
 
+        std::string ResolveAnimatorStateSourcePath(AnimatorComponent& animator, const ModelComponent& model, const AnimatorComponent::State& state)
+        {
+            if (!state.MotionAssetGuid.empty())
+            {
+                std::filesystem::path path = AssetDatabase::GetPathFromGuid(state.MotionAssetGuid);
+                if (!path.empty() && std::filesystem::exists(path))
+                    return path.string();
+            }
+
+            if (!state.MotionPath.empty() && std::filesystem::exists(state.MotionPath))
+                return state.MotionPath;
+
+            return ResolveAnimatorSourcePath(animator, model);
+        }
+
         float ReadAnimatorFloatParameter(const AnimatorComponent& animator, const std::string& name)
         {
             auto it = std::find_if(animator.Parameters.begin(), animator.Parameters.end(), [&name](const AnimatorComponent::Parameter& parameter)
@@ -242,13 +257,15 @@ namespace CCEngine
         void PrepareAnimatorClip(AnimatorComponent& animator, const ModelComponent& model)
         {
             std::string sourcePath = ResolveAnimatorSourcePath(animator, model);
-            if (sourcePath.empty() || !std::filesystem::exists(sourcePath))
-                return;
 
             if (!animator.States.empty())
             {
                 animator.ActiveStateIndex = std::clamp(animator.ActiveStateIndex, 0, static_cast<int>(animator.States.size() - 1));
                 auto& state = animator.States[animator.ActiveStateIndex];
+                sourcePath = ResolveAnimatorStateSourcePath(animator, model, state);
+                if (sourcePath.empty() || !std::filesystem::exists(sourcePath))
+                    return;
+
                 const int resolvedClipIndex = ResolveAnimatorStateClipIndex(animator, state);
                 if (resolvedClipIndex < 0)
                 {
@@ -301,11 +318,15 @@ namespace CCEngine
                 if (state.Motion == AnimatorComponent::State::MotionType::Clip)
                     state.ClipIndex = animator.SelectedClipIndex;
             }
+            else if (sourcePath.empty() || !std::filesystem::exists(sourcePath))
+            {
+                return;
+            }
         }
 
         std::shared_ptr<AnimationClip> LoadAnimatorStateClip(AnimatorComponent& animator, const ModelComponent& model, const AnimatorComponent::State& state)
         {
-            const std::string sourcePath = ResolveAnimatorSourcePath(animator, model);
+            const std::string sourcePath = ResolveAnimatorStateSourcePath(animator, model, state);
             if (sourcePath.empty() || !std::filesystem::exists(sourcePath))
                 return nullptr;
 
@@ -533,7 +554,7 @@ namespace CCEngine
             {
                 // Blend Tree는 파라미터를 읽어 여러 클립의 비율을 정하고, 같은 본 이름끼리 포즈를 섞는다.
                 // 이렇게 해두면 Direct, 1D, 2D 방식이 모두 같은 최종 포즈 경로를 사용한다.
-                const std::string sourcePath = ResolveAnimatorSourcePath(animator, model);
+                const std::string sourcePath = ResolveAnimatorStateSourcePath(animator, model, state);
                 if (sourcePath.empty() || !std::filesystem::exists(sourcePath))
                     return pose;
                 for (const auto& [clipIndex, weight] : ResolveBlendTreeWeights(animator, state))

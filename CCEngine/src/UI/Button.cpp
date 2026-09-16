@@ -67,6 +67,7 @@ namespace CCEngine {
             if (IsPointInside(e.GetX(), e.GetY()) && e.GetButton() == 0) // 좌클릭
             {
                 m_IsPressed = true; // 1. 누른 상태로 변경
+                Widget::BeginMouseInteraction(this);
                 e.Handled = true;
                 return true;
             }
@@ -84,14 +85,21 @@ namespace CCEngine {
                     e.Handled = true;
                 }
                 m_IsPressed = false; // 무조건 상태 해제
+                Widget::EndMouseInteraction(this);
                 return e.Handled;
             }
             return false;
         }
 
-        // OnMouseMoved는 이제 OnRender에서 처리하므로 false만 반환
         bool Button::OnMouseMoved(MouseMovedEvent& e)
         {
+            if (m_IsPressed && !IsPointInside(e.GetX(), e.GetY()))
+            {
+                // 버튼을 누른 채 범위 밖으로 벗어나면 즉시 눌림 상태를 푼다.
+                // release 이벤트가 다른 메뉴/패널에 전달되어도 검은 pressed 색이 남지 않게 하는 안전장치다.
+                m_IsPressed = false;
+                Widget::EndMouseInteraction(this);
+            }
             return false;
         }
 

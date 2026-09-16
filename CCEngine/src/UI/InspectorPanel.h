@@ -4,6 +4,7 @@
 #include "UI/Widget.h"
 #include "Scene/Entity.h"
 #include "Renderer/MaterialAsset.h"
+#include <chrono>
 #include <filesystem>
 #include <vector>
 #include <functional>
@@ -26,9 +27,11 @@ namespace CCEngine
             // 외부(하이어라키 등)에서 선택된 엔티티를 세팅
             void SetSelectedEntity(Entity entity);
             void SetSelectedAnimatorState(Entity entity, int layerIndex, int stateIndex);
+            void SetSelectedAnimatorTransition(Entity entity, int layerIndex, int transitionIndex);
             void SetSelectedAsset(const std::filesystem::path& assetPath, const std::string& assetType);
             Entity GetSelectedEntity() const { return m_SelectedEntity; }
             bool HasSelectedAsset() const { return !m_SelectedAssetPath.empty(); }
+            bool IsInspectingAnimatorState() const { return m_HasSelectedAnimatorState || m_HasSelectedAnimatorTransition; }
             bool ClearSelectedAssetIfMissing();
             void RequestRebuild() { m_NeedsRebuild = true; }
             void SetAssetChangedCallback(std::function<void(const std::filesystem::path&, const std::string&)> callback)
@@ -50,6 +53,10 @@ namespace CCEngine
             void SetShaderEditorOpenCallback(std::function<void(const std::filesystem::path&)> callback)
             {
                 m_OnOpenShaderEditor = std::move(callback);
+            }
+            void SetAnimatorClipPickRequestedCallback(std::function<void(Entity, int, int)> callback)
+            {
+                m_OnAnimatorClipPickRequested = std::move(callback);
             }
             void SetSceneStructureChangeCallbacks(
                 std::function<void(const std::string&)> beginChange,
@@ -91,6 +98,8 @@ namespace CCEngine
             void BuildShaderInspector();
             void BuildAvatarInspector();
             void BuildAnimatorStateInspector();
+            void BuildAnimatorTransitionInspector();
+            bool ClearSelectedAnimatorStateClip();
             void BuildGenericAssetInspector();
             MaterialAsset BuildShaderPreviewMaterial(const std::filesystem::path& shaderPath) const;
             void MarkSelectedMaterialDirty();
@@ -115,8 +124,13 @@ namespace CCEngine
             std::filesystem::path m_SelectedAssetPath;
             std::string m_SelectedAssetType;
             bool m_HasSelectedAnimatorState = false;
+            bool m_HasSelectedAnimatorTransition = false;
+            bool m_AnimatorStateClipSlotSelected = false;
+            bool m_ShowAnimatorAvailableClips = false;
+            std::chrono::steady_clock::time_point m_LastAnimatorClipSlotClickTime{};
             int m_SelectedAnimatorLayerIndex = -1;
             int m_SelectedAnimatorStateIndex = -1;
+            int m_SelectedAnimatorTransitionIndex = -1;
             MaterialAsset m_SelectedMaterial;
             Framebuffer* m_MaterialPreviewFramebuffer = nullptr;
             std::shared_ptr<Mesh> m_MaterialPreviewMesh;
@@ -150,6 +164,7 @@ namespace CCEngine
             std::function<void(const std::filesystem::path&, uint32_t, uint32_t, const std::vector<uint32_t>&)> m_OnMaterialPreviewCaptured;
             std::function<void(const std::filesystem::path&, RendererHandle)> m_OnMaterialPreviewTextureReady;
             std::function<void(const std::filesystem::path&)> m_OnOpenShaderEditor;
+            std::function<void(Entity, int, int)> m_OnAnimatorClipPickRequested;
             bool m_NeedsRebuild = false;
             bool m_MaterialSavePending = false;
             float m_MaterialSaveCountdown = 0.0f;

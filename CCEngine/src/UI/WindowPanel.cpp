@@ -167,6 +167,44 @@ namespace CCEngine
                 mouseY <= m_CalculatedPos.y + m_CalculatedSize.y + resizeHitPadding;
         }
 
+        bool WindowPanel::OnEvent(Event& e)
+        {
+            if (!m_IsVisible)
+                return false;
+
+            if (e.GetEventType() == EventType::MouseButtonPressed)
+            {
+                auto& me = static_cast<MouseButtonPressedEvent&>(e);
+                if (me.GetButton() == 0)
+                {
+                    constexpr float edge = 8.0f;
+                    constexpr float outerEdge = 6.0f;
+
+                    const float mouseX = me.GetX();
+                    const float mouseY = me.GetY();
+                    const bool onLeft = mouseX >= m_CalculatedPos.x - outerEdge && mouseX <= m_CalculatedPos.x + edge;
+                    const bool onRight = mouseX >= m_CalculatedPos.x + m_CalculatedSize.x - edge && mouseX <= m_CalculatedPos.x + m_CalculatedSize.x + outerEdge;
+                    const bool onTop = mouseY >= m_CalculatedPos.y - outerEdge && mouseY <= m_CalculatedPos.y + edge;
+                    const bool onBottom = mouseY >= m_CalculatedPos.y + m_CalculatedSize.y - edge && mouseY <= m_CalculatedPos.y + m_CalculatedSize.y + outerEdge;
+                    const bool onResizeBorder = onLeft || onRight || onTop || onBottom;
+                    const bool onTitleBar =
+                        mouseX >= m_CalculatedPos.x &&
+                        mouseX <= m_CalculatedPos.x + m_CalculatedSize.x &&
+                        mouseY >= m_CalculatedPos.y &&
+                        mouseY <= m_CalculatedPos.y + m_TitleBarHeight;
+
+                    if (onResizeBorder || onTitleBar)
+                    {
+                        // Window chrome(타이틀 바/테두리)는 자식 Inspector row보다 먼저 입력을 잡아야 한다.
+                        // Transition Inspector처럼 내부 위젯이 많아도 창 이동/리사이즈 클릭이 설정 항목 클릭으로 새지 않게 한다.
+                        return OnMouseButtonPressed(me);
+                    }
+                }
+            }
+
+            return Panel::OnEvent(e);
+        }
+
         bool WindowPanel::OnMouseButtonPressed(MouseButtonPressedEvent& e)
         {
             bool isTornOff = (m_OwnerWindow != nullptr);

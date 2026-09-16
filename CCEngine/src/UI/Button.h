@@ -27,6 +27,7 @@ namespace CCEngine {
             virtual bool OnMouseButtonPressed(MouseButtonPressedEvent& e) override;
             virtual bool OnMouseButtonReleased(MouseButtonReleasedEvent& e) override;
             virtual bool OnMouseMoved(MouseMovedEvent& e) override;
+            virtual bool WantsMouseCapture() const override { return m_IsPressed; }
 
         private:
             std::string m_Text;
