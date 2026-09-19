@@ -2330,6 +2330,10 @@ namespace CCEngine
                     m_PickerAcceptedTypeKeys.insert(key);
             }
             m_TypeFilterDropdownVisible = false;
+            // Object picker를 다시 열었을 때 일반 Asset Browser의 이전 선택이
+            // 현재 슬롯의 선택처럼 보이면 사용자가 아직 고르지 않은 에셋이 강조된다.
+            ClearSelection();
+            m_LastClickedIndex = -1;
             ApplyFilter();
         }
 

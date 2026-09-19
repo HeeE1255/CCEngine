@@ -1357,20 +1357,13 @@ namespace CCEngine {
                     auto controllerRow = new InspectorFieldRow("AnimatorControllerAsset", "Controller", controllerLabel, InspectorFieldRow::Kind::ObjectField);
                     controllerRow->SetAnchorMin(0.0f, 0.0f); controllerRow->SetAnchorMax(1.0f, 0.0f);
                     controllerRow->SetOffsetMin(15.0f, 0.0f); controllerRow->SetOffsetMax(-10.0f, 22.0f);
-                    auto pickAnimatorController = [entity](InspectorFieldRow* row) mutable
+                    auto pickAnimatorController = [entity](InspectorFieldRow*) mutable
                         {
                             if (!entity || !entity.HasComponent<AnimatorComponent>())
                                 return;
-
-                            std::string filepath = PlatformUtils::OpenFile("CC Animator Controller (*.ccanimcontroller)\0*.ccanimcontroller\0");
-                            if (filepath.empty() || AssetDatabase::GetAssetKind(filepath) != AssetKind::AnimatorController)
-                                return;
-
-                            auto& anim = entity.GetComponent<AnimatorComponent>();
-                            anim.ControllerPath = filepath;
-                            anim.ControllerAssetGuid = AssetDatabase::GetGuidFromPath(filepath);
-                            AnimatorControllerAsset::LoadFromFile(filepath, anim);
-                            row->SetValue(std::filesystem::path(filepath).filename().string());
+                            // Inspector는 EditorLayer의 창 구조를 직접 알지 않는다.
+                            // 요청 플래그만 남기면 EditorLayer가 Material/Clip과 같은 공용 Asset Picker를 연다.
+                            entity.GetComponent<AnimatorComponent>().EditorPickControllerRequested = true;
                         };
                     // 슬롯 본문은 선택창을 열지 않는다.
                     // 더블클릭은 Graph 열기, 오른쪽 o 버튼은 Controller 선택으로 역할을 분리해야
@@ -1392,19 +1385,28 @@ namespace CCEngine {
                         InspectorFieldRow::Kind::ObjectField);
                     avatarRow->SetAnchorMin(0.0f, 0.0f); avatarRow->SetAnchorMax(1.0f, 0.0f);
                     avatarRow->SetOffsetMin(15.0f, 0.0f); avatarRow->SetOffsetMax(-10.0f, 22.0f);
-                    avatarRow->SetOnClick([entity](InspectorFieldRow* row) mutable
+                    auto pickAvatar = [entity](InspectorFieldRow*) mutable
                         {
                             if (!entity || !entity.HasComponent<AnimatorComponent>())
                                 return;
-
-                            std::string filepath = PlatformUtils::OpenFile("CC Avatar (*.ccavatar)\0*.ccavatar\0");
-                            if (filepath.empty() || AssetDatabase::GetAssetKind(filepath) != AssetKind::Avatar)
+                            entity.GetComponent<AnimatorComponent>().EditorPickAvatarRequested = true;
+                        };
+                    avatarRow->SetOnObjectButtonClick(pickAvatar);
+                    avatarRow->SetOnClick([entity, avatarPath](InspectorFieldRow*) mutable
+                        {
+                            if (!entity || !entity.HasComponent<AnimatorComponent>() || !avatarPath.empty())
                                 return;
-
+                            entity.GetComponent<AnimatorComponent>().EditorPickAvatarRequested = true;
+                        });
+                    avatarRow->SetOnDoubleClick([entity](InspectorFieldRow*) mutable
+                        {
+                            if (!entity || !entity.HasComponent<AnimatorComponent>())
+                                return;
                             auto& anim = entity.GetComponent<AnimatorComponent>();
-                            anim.AvatarPath = filepath;
-                            anim.AvatarGuid = AssetDatabase::GetGuidFromPath(filepath);
-                            row->SetValue(std::filesystem::path(filepath).filename().string());
+                            if (anim.AvatarPath.empty() && anim.AvatarGuid.empty())
+                                anim.EditorPickAvatarRequested = true;
+                            else
+                                anim.EditorOpenAvatarRequested = true;
                         });
                     item->AddChild(avatarRow);
 

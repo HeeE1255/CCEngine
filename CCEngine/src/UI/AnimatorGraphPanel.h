@@ -22,6 +22,10 @@ namespace CCEngine::UI
         void SetOnStateSelected(std::function<void(Entity, int, int)> callback) { m_OnStateSelected = std::move(callback); }
         void SetOnTransitionSelected(std::function<void(Entity, int, int)> callback) { m_OnTransitionSelected = std::move(callback); }
         bool TryAcceptAssetDrop(const std::string& filepath, const std::string& assetType, float mouseX, float mouseY);
+        bool RequestUndoShortcut();
+        bool RequestRedoShortcut();
+        bool ConsumeUndoShortcutEvent();
+        bool ConsumeRedoShortcutEvent();
 
         virtual void OnRender() override;
         virtual bool OnEvent(Event& e) override;
@@ -55,6 +59,7 @@ namespace CCEngine::UI
             None,
             AddState,
             ReplaceState,
+            SpecialNode,
             Transition,
             BlendTreeAddChild,
             BlendTreeReplaceChild
@@ -105,6 +110,8 @@ namespace CCEngine::UI
         CCEngine::AnimatorComponent* GetAnimator() const;
         StateNodeRect GetStateRect(int stateIndex) const;
         StateNodeRect GetEndpointRect(int stateIndex) const;
+        int GetSpecialNodeAt(float mouseX, float mouseY) const;
+        DirectX::XMFLOAT2* GetSpecialNodePosition(CCEngine::AnimatorComponent::Layer& layer, int stateIndex) const;
         DirectX::XMFLOAT2 GetRectConnectionPoint(const StateNodeRect& rect, DirectX::XMFLOAT2 toward) const;
         std::pair<DirectX::XMFLOAT2, DirectX::XMFLOAT2> GetTransitionEndpoints(int fromStateIndex, int toStateIndex, int transitionIndex = -1) const;
         int GetStateAt(float mouseX, float mouseY) const;
@@ -183,6 +190,10 @@ namespace CCEngine::UI
         void ClampAnimatorSelection(CCEngine::AnimatorComponent& animator) const;
         void ResetRuntime(CCEngine::AnimatorComponent& animator) const;
         void PropagateSharedControllerEdit(CCEngine::AnimatorComponent& editedAnimator) const;
+        void BeginGraphEdit(const CCEngine::AnimatorComponent& animator);
+        void RecordPendingGraphEdit();
+        void CancelGraphEdit();
+        void FinalizeGraphEdit(CCEngine::AnimatorComponent& animator);
         void CommitGraphEdit(CCEngine::AnimatorComponent& animator);
         void CaptureCommittedAnimator(const CCEngine::AnimatorComponent& animator);
         bool UndoGraphEdit(CCEngine::AnimatorComponent& animator);
@@ -200,7 +211,10 @@ namespace CCEngine::UI
         SidebarPage m_SidebarPage = SidebarPage::Layers;
         int m_SelectedStateIndex = -1;
         int m_DraggingStateIndex = -1;
+        int m_DraggingSpecialNodeIndex = -1;
+        int m_SelectedSpecialNodeIndex = -1;
         bool m_IsDraggingState = false;
+        bool m_HasGraphDragEdit = false;
         bool m_IsPanningGraph = false;
         bool m_IsBoxSelecting = false;
         bool m_IsScrubbingTimeline = false;
@@ -264,9 +278,13 @@ namespace CCEngine::UI
         float m_TimelineW = 0.0f;
         float m_TimelineH = 0.0f;
         CCEngine::AnimatorComponent m_LastCommittedAnimator;
+        CCEngine::AnimatorComponent m_PendingGraphEditSnapshot;
         std::vector<CCEngine::AnimatorComponent> m_UndoStack;
         std::vector<CCEngine::AnimatorComponent> m_RedoStack;
         bool m_HasCommittedAnimator = false;
+        bool m_HasPendingGraphEditSnapshot = false;
+        bool m_UndoShortcutHandledByEvent = false;
+        bool m_RedoShortcutHandledByEvent = false;
 
         float m_TitleContentTop = 0.0f;
         float m_ToolbarHeight = 34.0f;

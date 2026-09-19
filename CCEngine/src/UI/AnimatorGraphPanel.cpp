@@ -35,6 +35,7 @@ namespace CCEngine::UI
         constexpr DirectX::XMFLOAT4 AccentOrange = { 0.78f, 0.48f, 0.16f, 1.0f };
         constexpr DirectX::XMFLOAT4 AccentTeal = { 0.30f, 0.62f, 0.62f, 1.0f };
         constexpr DirectX::XMFLOAT4 AccentRed = { 0.62f, 0.14f, 0.16f, 1.0f };
+        constexpr int EntryNodeIndex = -4;
 
         void DrawBorder(float x, float y, float w, float h, const DirectX::XMFLOAT4& color, float t = 1.0f)
         {
@@ -135,13 +136,13 @@ namespace CCEngine::UI
             return "(Missing State)";
         }
 
-        DirectX::XMFLOAT2 GetSpecialAnimatorNodeGraphPosition(int stateIndex)
+        DirectX::XMFLOAT2 GetSpecialAnimatorNodeGraphPosition(const AnimatorComponent::Layer& layer, int stateIndex)
         {
             if (stateIndex == AnimatorComponent::Transition::AnyStateIndex)
-                return { 120.0f, 320.0f };
+                return layer.AnyStateNodePosition;
             if (stateIndex == AnimatorComponent::Transition::ExitStateIndex)
-                return { 120.0f, 460.0f };
-            return { 120.0f, 180.0f };
+                return layer.ExitNodePosition;
+            return layer.EntryNodePosition;
         }
 
         const AnimatorComponent::Parameter* FindAnimatorParameter(const AnimatorComponent& animator, const std::string& name)
@@ -741,6 +742,7 @@ namespace CCEngine::UI
         m_UndoStack.clear();
         m_RedoStack.clear();
         m_HasCommittedAnimator = false;
+        m_HasPendingGraphEditSnapshot = false;
         m_GraphViewMode = GraphViewMode::StateMachine;
         m_SelectedBlendChildIndex = -1;
         m_DraggingBlendChildIndex = -1;
@@ -834,6 +836,32 @@ namespace CCEngine::UI
         return true;
     }
 
+    bool AnimatorGraphPanel::RequestUndoShortcut()
+    {
+        AnimatorComponent* animator = GetAnimator();
+        return IsVisible() && animator && UndoGraphEdit(*animator);
+    }
+
+    bool AnimatorGraphPanel::RequestRedoShortcut()
+    {
+        AnimatorComponent* animator = GetAnimator();
+        return IsVisible() && animator && RedoGraphEdit(*animator);
+    }
+
+    bool AnimatorGraphPanel::ConsumeUndoShortcutEvent()
+    {
+        const bool handled = m_UndoShortcutHandledByEvent;
+        m_UndoShortcutHandledByEvent = false;
+        return handled;
+    }
+
+    bool AnimatorGraphPanel::ConsumeRedoShortcutEvent()
+    {
+        const bool handled = m_RedoShortcutHandledByEvent;
+        m_RedoShortcutHandledByEvent = false;
+        return handled;
+    }
+
     AnimatorComponent* AnimatorGraphPanel::GetAnimator() const
     {
         Entity entity = m_TargetEntity;
@@ -907,7 +935,9 @@ namespace CCEngine::UI
                 }
 
                 const DirectX::XMFLOAT2 before = ScreenToGraph(mouseX, mouseY);
-                m_Zoom = (std::clamp)(m_Zoom + scroll.GetYOffset() * 0.10f, 0.55f, 1.60f);
+                // 배율을 곱셈 방식으로 바꾸면 확대/축소 속도가 현재 배율에 비례해 자연스럽다.
+                // 노드 크기도 같은 m_Zoom을 사용하므로 단순히 노드 사이 거리만 변하지 않는다.
+                m_Zoom = (std::clamp)(m_Zoom * std::pow(1.12f, scroll.GetYOffset()), 0.35f, 2.0f);
                 const DirectX::XMFLOAT2 after = ScreenToGraph(mouseX, mouseY);
                 m_ViewOffsetX += after.x - before.x;
                 m_ViewOffsetY += after.y - before.y;
@@ -980,6 +1010,7 @@ namespace CCEngine::UI
                         return true;
                     const int transitionIndex = GetTransitionAt(e.GetX(), e.GetY());
                     const int stateIndex = GetStateAt(e.GetX(), e.GetY());
+                    const int specialNodeIndex = GetSpecialNodeAt(e.GetX(), e.GetY());
                     if (transitionIndex >= 0)
                     {
                         layer->SelectedTransitionIndex = transitionIndex;
@@ -994,6 +1025,11 @@ namespace CCEngine::UI
                         m_SelectedTransitionIndex = -1;
                         layer->SelectedTransitionIndex = -1;
                         OpenContextMenu(ContextMenuMode::ReplaceState, e.GetX(), e.GetY(), stateIndex, -1);
+                    }
+                    else if (specialNodeIndex == EntryNodeIndex || specialNodeIndex == AnimatorComponent::Transition::AnyStateIndex)
+                    {
+                        m_SelectedSpecialNodeIndex = specialNodeIndex;
+                        OpenContextMenu(ContextMenuMode::SpecialNode, e.GetX(), e.GetY(), specialNodeIndex, -1);
                     }
                     else
                     {
@@ -1095,6 +1131,7 @@ namespace CCEngine::UI
             const int transitionIndex = GetTransitionAt(e.GetX(), e.GetY());
             if (transitionIndex >= 0)
             {
+                m_SelectedSpecialNodeIndex = -1;
                 m_SelectedStateIndices.clear();
                 m_SelectedTransitionIndex = transitionIndex;
                 layer->SelectedTransitionIndex = transitionIndex;
@@ -1108,6 +1145,7 @@ namespace CCEngine::UI
             int stateIndex = GetStateAt(e.GetX(), e.GetY());
             if (stateIndex >= 0 && stateIndex < (int)layer->States.size())
             {
+                m_SelectedSpecialNodeIndex = -1;
                 if (!IsStateSelected(stateIndex))
                     SelectOnlyState(*animator, stateIndex);
                 else
@@ -1125,9 +1163,27 @@ namespace CCEngine::UI
 
                 DirectX::XMFLOAT2 graphMouse = ScreenToGraph(e.GetX(), e.GetY());
                 m_DraggingStateIndex = stateIndex;
+                BeginGraphEdit(*animator);
                 m_IsDraggingState = true;
+                m_HasGraphDragEdit = false;
                 m_DragOffsetX = graphMouse.x - layer->States[stateIndex].GraphPosition.x;
                 m_DragOffsetY = graphMouse.y - layer->States[stateIndex].GraphPosition.y;
+                Widget::BeginMouseInteraction(this);
+            }
+            else if (const int specialNodeIndex = GetSpecialNodeAt(e.GetX(), e.GetY()); specialNodeIndex != -1)
+            {
+                ClearStateSelection(*animator);
+                m_SelectedSpecialNodeIndex = specialNodeIndex;
+                m_DraggingSpecialNodeIndex = specialNodeIndex;
+                BeginGraphEdit(*animator);
+                m_IsDraggingState = true;
+                m_HasGraphDragEdit = false;
+                DirectX::XMFLOAT2 graphMouse = ScreenToGraph(e.GetX(), e.GetY());
+                if (DirectX::XMFLOAT2* pos = GetSpecialNodePosition(*layer, specialNodeIndex))
+                {
+                    m_DragOffsetX = graphMouse.x - pos->x;
+                    m_DragOffsetY = graphMouse.y - pos->y;
+                }
                 Widget::BeginMouseInteraction(this);
             }
             else
@@ -1135,6 +1191,7 @@ namespace CCEngine::UI
                 // 빈 그래프 영역에서 왼쪽 드래그를 시작하면 박스 선택 모드로 들어간다.
                 // 선택 박스는 화면 좌표로 그리고, 판정할 때만 노드 사각형과 겹침을 계산한다.
                 ClearStateSelection(*animator);
+                m_SelectedSpecialNodeIndex = -1;
                 m_IsBoxSelecting = true;
                 m_BoxSelectStart = { e.GetX(), e.GetY() };
                 m_BoxSelectEnd = m_BoxSelectStart;
@@ -1167,12 +1224,35 @@ namespace CCEngine::UI
             if (AnimatorComponent* animator = GetAnimator())
             {
                 auto* layer = GetActiveLayer(*animator);
-                if (layer && m_DraggingStateIndex >= 0 && m_DraggingStateIndex < (int)layer->States.size())
+                if (layer && m_DraggingSpecialNodeIndex != -1)
+                {
+                    DirectX::XMFLOAT2 graphMouse = ScreenToGraph(e.GetX(), e.GetY());
+                    if (DirectX::XMFLOAT2* pos = GetSpecialNodePosition(*layer, m_DraggingSpecialNodeIndex))
+                    {
+                        const float nextX = graphMouse.x - m_DragOffsetX;
+                        const float nextY = graphMouse.y - m_DragOffsetY;
+                        const bool changed = std::abs(nextX - pos->x) > 0.0001f || std::abs(nextY - pos->y) > 0.0001f;
+                        if (changed && !m_HasGraphDragEdit)
+                        {
+                            RecordPendingGraphEdit();
+                            m_HasGraphDragEdit = true;
+                        }
+                        pos->x = nextX;
+                        pos->y = nextY;
+                    }
+                }
+                else if (layer && m_DraggingStateIndex >= 0 && m_DraggingStateIndex < (int)layer->States.size())
                 {
                     DirectX::XMFLOAT2 graphMouse = ScreenToGraph(e.GetX(), e.GetY());
                     auto& pos = layer->States[m_DraggingStateIndex].GraphPosition;
                     const float dx = graphMouse.x - m_DragOffsetX - pos.x;
                     const float dy = graphMouse.y - m_DragOffsetY - pos.y;
+                    const bool changed = std::abs(dx) > 0.0001f || std::abs(dy) > 0.0001f;
+                    if (changed && !m_HasGraphDragEdit)
+                    {
+                        RecordPendingGraphEdit();
+                        m_HasGraphDragEdit = true;
+                    }
                     pos.x = graphMouse.x - m_DragOffsetX;
                     pos.y = graphMouse.y - m_DragOffsetY;
                     if (IsStateSelected(m_DraggingStateIndex))
@@ -1252,13 +1332,28 @@ namespace CCEngine::UI
                             // 마커를 그린 축 영역과 같은 좌표계로 값을 계산한다.
                             // 그리는 영역과 입력 영역이 다르면 드래그할 때 값이 마우스를 따라오지 않는다.
                             const float ratio = std::clamp((e.GetX() - axisX) / axisW, 0.0f, 1.0f);
-                            child.Threshold = ratio * 2.0f - 1.0f;
+                            const float nextThreshold = ratio * 2.0f - 1.0f;
+                            const bool changed = std::abs(nextThreshold - child.Threshold) > 0.0001f;
+                            if (changed && !m_HasGraphDragEdit)
+                            {
+                                RecordPendingGraphEdit();
+                                m_HasGraphDragEdit = true;
+                            }
+                            child.Threshold = nextThreshold;
                         }
                         else if (state.Tree.TreeType == AnimatorComponent::State::BlendTree::Type::TwoD ||
                             state.Tree.TreeType == AnimatorComponent::State::BlendTree::Type::TwoDFreeform)
                         {
-                            child.Position.x = std::clamp(((e.GetX() - axisX) / axisW) * 2.0f - 1.0f, -1.0f, 1.0f);
-                            child.Position.y = std::clamp(1.0f - ((e.GetY() - axisY) / axisH) * 2.0f, -1.0f, 1.0f);
+                            const float nextX = std::clamp(((e.GetX() - axisX) / axisW) * 2.0f - 1.0f, -1.0f, 1.0f);
+                            const float nextY = std::clamp(1.0f - ((e.GetY() - axisY) / axisH) * 2.0f, -1.0f, 1.0f);
+                            const bool changed = std::abs(nextX - child.Position.x) > 0.0001f || std::abs(nextY - child.Position.y) > 0.0001f;
+                            if (changed && !m_HasGraphDragEdit)
+                            {
+                                RecordPendingGraphEdit();
+                                m_HasGraphDragEdit = true;
+                            }
+                            child.Position.x = nextX;
+                            child.Position.y = nextY;
                         }
                     }
                 }
@@ -1292,17 +1387,27 @@ namespace CCEngine::UI
 
         if ((m_IsDraggingState && e.GetButton() == 0) || (m_IsPanningGraph && e.GetButton() == 2) || (m_IsBoxSelecting && e.GetButton() == 0) || (m_IsScrubbingTimeline && e.GetButton() == 0) || (m_IsDraggingBlendChild && e.GetButton() == 0))
         {
-            if (m_IsDraggingState || m_IsBoxSelecting || m_IsScrubbingTimeline || m_IsDraggingBlendChild)
+            if ((m_IsDraggingState || m_IsDraggingBlendChild) && m_HasGraphDragEdit)
             {
                 if (AnimatorComponent* animator = GetAnimator())
-                    CommitGraphEdit(*animator);
+                {
+                    FinalizeGraphEdit(*animator);
+                }
             }
+            else
+            {
+                CancelGraphEdit();
+            }
+            // 선택 상자와 타임라인 스크럽은 편집 데이터가 아니다. 이를 Undo 기록으로 넣으면
+            // 사용자가 캔버스를 한 번 누른 것만으로 첫 Ctrl+Z가 눈에 보이지 않는 가짜 기록을 소비한다.
             m_IsDraggingState = false;
+            m_HasGraphDragEdit = false;
             m_IsPanningGraph = false;
             m_IsBoxSelecting = false;
             m_IsScrubbingTimeline = false;
             m_IsDraggingBlendChild = false;
             m_DraggingStateIndex = -1;
+            m_DraggingSpecialNodeIndex = -1;
             m_DraggingBlendChildIndex = -1;
             Widget::EndMouseInteraction(this);
             e.Handled = true;
@@ -1376,18 +1481,29 @@ namespace CCEngine::UI
             return true;
         }
 
-        const bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+        const bool ctrl = e.IsControlDown();
+        const bool shift = e.IsShiftDown();
         if (ctrl && e.GetKeyCode() == 'Z')
         {
-            if (AnimatorComponent* animator = GetAnimator())
-                UndoGraphEdit(*animator);
+            if (shift)
+            {
+                RequestRedoShortcut();
+                m_RedoShortcutHandledByEvent = true;
+            }
+            else
+            {
+                RequestUndoShortcut();
+                m_UndoShortcutHandledByEvent = true;
+            }
+            // WM_KEYDOWN 시점에 처리해야 짧게 누른 키가 프레임 폴링 사이에서 유실되지 않는다.
+            // 이벤트를 소비하면 다른 그래프나 입력 위젯이 같은 Ctrl+Z를 중복 처리하지 않는다.
             e.Handled = true;
             return true;
         }
         if (ctrl && e.GetKeyCode() == 'Y')
         {
-            if (AnimatorComponent* animator = GetAnimator())
-                RedoGraphEdit(*animator);
+            RequestRedoShortcut();
+            m_RedoShortcutHandledByEvent = true;
             e.Handled = true;
             return true;
         }
@@ -1690,21 +1806,29 @@ namespace CCEngine::UI
         UIRenderer::PushClipRect(x, y, w, graphH);
         DrawGrid(x, y, w, graphH);
 
-        DirectX::XMFLOAT2 entry = GraphToScreen({ 120.0f, 180.0f });
-        DirectX::XMFLOAT2 any = GraphToScreen({ 120.0f, 320.0f });
-        DirectX::XMFLOAT2 exit = GraphToScreen({ 120.0f, 460.0f });
+        const AnimatorComponent* drawAnimator = GetAnimator();
+        const auto* drawLayer = drawAnimator ? GetActiveLayer(*drawAnimator) : nullptr;
+        const AnimatorComponent::Layer fallbackLayer{};
+        const auto& specialLayer = drawLayer ? *drawLayer : fallbackLayer;
+        DirectX::XMFLOAT2 entry = GraphToScreen(specialLayer.EntryNodePosition);
+        DirectX::XMFLOAT2 any = GraphToScreen(specialLayer.AnyStateNodePosition);
+        DirectX::XMFLOAT2 exit = GraphToScreen(specialLayer.ExitNodePosition);
 
-        auto drawSmallNode = [&](const char* name, DirectX::XMFLOAT2 p, DirectX::XMFLOAT4 accent)
+        const float smallNodeW = (std::max)(56.0f, 112.0f * m_Zoom);
+        const float smallNodeH = (std::max)(20.0f, 36.0f * m_Zoom);
+        auto drawSmallNode = [&](const char* name, int nodeIndex, DirectX::XMFLOAT2 p, DirectX::XMFLOAT4 accent)
         {
-            UIRenderer::DrawRectFilled(p.x, p.y, 112.0f, 36.0f, { 0.13f, 0.14f, 0.15f, 1.0f });
-            UIRenderer::DrawRectFilled(p.x, p.y, 4.0f, 36.0f, accent);
-            DrawBorder(p.x, p.y, 112.0f, 36.0f, accent);
-            UIRenderer::DrawString(name, p.x + 14.0f, p.y + 24.0f, TextStrong);
+            const bool selected = m_SelectedSpecialNodeIndex == nodeIndex;
+            UIRenderer::DrawRectFilled(p.x, p.y, smallNodeW, smallNodeH, selected ? DirectX::XMFLOAT4{ 0.16f, 0.20f, 0.25f, 1.0f } : DirectX::XMFLOAT4{ 0.13f, 0.14f, 0.15f, 1.0f });
+            UIRenderer::DrawRectFilled(p.x, p.y, (std::max)(2.0f, 4.0f * m_Zoom), smallNodeH, accent);
+            DrawBorder(p.x, p.y, smallNodeW, smallNodeH, selected ? AccentBlue : accent, selected ? 2.0f : 1.0f);
+            if (m_Zoom >= 0.52f)
+                UIRenderer::DrawString(FitText(name, smallNodeW - 16.0f), p.x + 8.0f, p.y + smallNodeH * 0.5f + 7.0f, TextStrong);
         };
 
-        drawSmallNode("Entry", entry, AccentGreen);
-        drawSmallNode("Any State", any, AccentTeal);
-        drawSmallNode("Exit", exit, AccentRed);
+        drawSmallNode("Entry", EntryNodeIndex, entry, AccentGreen);
+        drawSmallNode("Any State", AnimatorComponent::Transition::AnyStateIndex, any, AccentTeal);
+        drawSmallNode("Exit", AnimatorComponent::Transition::ExitStateIndex, exit, AccentRed);
 
         if (AnimatorComponent* animator = GetAnimator())
         {
@@ -1712,7 +1836,7 @@ namespace CCEngine::UI
             if (layer && !layer->States.empty())
             {
                 int entryIndex = std::clamp(layer->EntryStateIndex, 0, (int)layer->States.size() - 1);
-                StateNodeRect entryRect{ AnimatorComponent::Transition::AnyStateIndex, entry.x, entry.y, 112.0f, 36.0f };
+                StateNodeRect entryRect{ EntryNodeIndex, entry.x, entry.y, smallNodeW, smallNodeH };
                 StateNodeRect entryState = GetStateRect(entryIndex);
                 DirectX::XMFLOAT2 from = GetRectConnectionPoint(entryRect, { entryState.X + entryState.W * 0.5f, entryState.Y + entryState.H * 0.5f });
                 DirectX::XMFLOAT2 to = GetRectConnectionPoint(entryState, { entryRect.X + entryRect.W * 0.5f, entryRect.Y + entryRect.H * 0.5f });
@@ -1736,11 +1860,9 @@ namespace CCEngine::UI
                     DrawTransitionArrow(i, layer->Transitions[i], true);
             }
 
-            if (m_IsCreatingTransition &&
-                m_TransitionSourceStateIndex >= 0 &&
-                m_TransitionSourceStateIndex < (int)layer->States.size())
+            if (m_IsCreatingTransition)
             {
-                const StateNodeRect sourceRect = GetStateRect(m_TransitionSourceStateIndex);
+                const StateNodeRect sourceRect = GetEndpointRect(m_TransitionSourceStateIndex);
                 DirectX::XMFLOAT2 to = { m_LastMouseX, m_LastMouseY };
                 DirectX::XMFLOAT2 from = GetRectConnectionPoint(sourceRect, to);
                 const int hoverState = GetStateAt(m_LastMouseX, m_LastMouseY);
@@ -1765,21 +1887,30 @@ namespace CCEngine::UI
                 const bool hover = IsPointInRect(m_LastMouseX, m_LastMouseY, r.X, r.Y, r.W, r.H);
                 const bool entryState = i == layer->EntryStateIndex;
                 DirectX::XMFLOAT4 accent = entryState ? AccentOrange : AccentBlue;
-                UIRenderer::DrawRectFilled(r.X + 4.0f, r.Y + 5.0f, r.W, r.H, { 0.010f, 0.012f, 0.016f, 0.82f });
+                const float headerH = (std::max)(12.0f, 24.0f * m_Zoom);
+                const float accentW = (std::max)(2.0f, 4.0f * m_Zoom);
+                UIRenderer::DrawRectFilled(r.X + 4.0f * m_Zoom, r.Y + 5.0f * m_Zoom, r.W, r.H, { 0.010f, 0.012f, 0.016f, 0.82f });
                 DirectX::XMFLOAT4 nodeFill = selected ? DirectX::XMFLOAT4{ 0.15f, 0.18f, 0.22f, 1.0f } : DirectX::XMFLOAT4{ 0.12f, 0.125f, 0.14f, 1.0f };
                 if (hover && !selected)
                     nodeFill = { 0.16f, 0.17f, 0.19f, 1.0f };
                 UIRenderer::DrawRectFilled(r.X, r.Y, r.W, r.H, nodeFill);
-                UIRenderer::DrawRectFilled(r.X, r.Y, r.W, 24.0f, { 0.16f, 0.165f, 0.18f, 1.0f });
-                UIRenderer::DrawRectFilled(r.X, r.Y, 4.0f, r.H, accent);
+                UIRenderer::DrawRectFilled(r.X, r.Y, r.W, headerH, { 0.16f, 0.165f, 0.18f, 1.0f });
+                UIRenderer::DrawRectFilled(r.X, r.Y, accentW, r.H, accent);
                 DrawBorder(r.X, r.Y, r.W, r.H, selected ? accent : PanelStroke, selected ? 2.0f : 1.0f);
                 // 노드 이름은 저장 데이터 그대로 두고, 화면에 그릴 때만 폭에 맞춰 줄인다.
                 // 긴 클립 이름이 노드 밖으로 삐져나가면 연결선과 다른 노드를 가려 편집성이 떨어진다.
-                UIRenderer::DrawString(FitText(layer->States[i].Name, r.W - 96.0f), r.X + 14.0f, r.Y + 18.0f, TextStrong);
-                UIRenderer::DrawString(entryState ? "ENTRY" : "STATE", r.X + r.W - 74.0f, r.Y + 18.0f, accent);
-                    UIRenderer::DrawString(MotionLabel(layer->States[i]), r.X + 14.0f, r.Y + 47.0f, TextMuted);
+                if (m_Zoom >= 0.52f)
+                {
+                    const float reservedStatusWidth = m_Zoom >= 0.82f ? 86.0f : 18.0f;
+                    UIRenderer::DrawString(FitText(layer->States[i].Name, r.W - reservedStatusWidth), r.X + 8.0f, r.Y + headerH * 0.5f + 7.0f, TextStrong);
+                }
+                if (m_Zoom >= 0.82f)
+                {
+                    UIRenderer::DrawString(entryState ? "ENTRY" : "STATE", r.X + r.W - 74.0f, r.Y + 18.0f * m_Zoom, accent);
+                    UIRenderer::DrawString(FitText(MotionLabel(layer->States[i]), r.W - 24.0f), r.X + 14.0f * m_Zoom, r.Y + 47.0f * m_Zoom, TextMuted);
+                }
 
-                const float flagY = r.Y + 62.0f;
+                const float flagY = r.Y + 62.0f * m_Zoom;
                 auto drawFlag = [&](float fx, const char* label, bool enabled)
                 {
                     UIRenderer::DrawRectFilled(fx, flagY - 11.0f, 12.0f, 12.0f, { 0.085f, 0.090f, 0.100f, 1.0f });
@@ -1788,8 +1919,11 @@ namespace CCEngine::UI
                         UIRenderer::DrawString("v", fx + 3.0f, flagY + 1.0f, AccentGreen);
                     UIRenderer::DrawString(label, fx + 17.0f, flagY + 1.0f, enabled ? AccentGreen : TextMuted);
                 };
-                drawFlag(r.X + 14.0f, "Loop", layer->States[i].Loop);
-                drawFlag(r.X + 86.0f, "Write Def.", layer->States[i].WriteDefaults);
+                if (m_Zoom >= 0.82f)
+                {
+                    drawFlag(r.X + 14.0f * m_Zoom, "Loop", layer->States[i].Loop);
+                    drawFlag(r.X + 86.0f * m_Zoom, "Write Def.", layer->States[i].WriteDefaults);
+                }
             }
 
             if (m_IsBoxSelecting)
@@ -2432,11 +2566,16 @@ namespace CCEngine::UI
         if (!m_IsContextMenuOpen)
             return;
 
-        const bool canBeginTransition = m_ContextMenuMode == ContextMenuMode::ReplaceState && m_ContextStateIndex >= 0;
+        const bool specialNodeMenu = m_ContextMenuMode == ContextMenuMode::SpecialNode;
+        const bool canBeginTransition =
+            (m_ContextMenuMode == ContextMenuMode::ReplaceState && m_ContextStateIndex >= 0) ||
+            (specialNodeMenu && (m_ContextStateIndex == EntryNodeIndex || m_ContextStateIndex == AnimatorComponent::Transition::AnyStateIndex));
         if (AnimatorComponent* animator = GetAnimator())
         {
             const auto* layer = GetActiveLayer(*animator);
-            const bool validContextState = layer && m_ContextStateIndex < (int)layer->States.size();
+            const bool validContextState = layer &&
+                (specialNodeMenu || m_ContextMenuMode == ContextMenuMode::Transition ||
+                    m_ContextStateIndex < (int)layer->States.size());
             if (!validContextState)
                 return;
         }
@@ -2445,6 +2584,8 @@ namespace CCEngine::UI
         float menuH = 8.0f;
         if (m_ContextMenuMode == ContextMenuMode::Transition)
             menuH += 4.0f * itemH;
+        else if (specialNodeMenu)
+            menuH += 2.0f * itemH;
         else
             menuH += 2.0f * itemH + 8.0f + (canBeginTransition ? itemH : 0.0f);
 
@@ -2458,6 +2599,13 @@ namespace CCEngine::UI
             const char* items[] = { "Toggle Exit Time", "Add Condition", "Sort By Priority", "Delete Transition" };
             for (int i = 0; i < 4; ++i)
                 UIRenderer::DrawString(items[i], menuX + 10.0f, menuY + 22.0f + (float)i * itemH, i == 3 ? DirectX::XMFLOAT4{ 0.95f, 0.58f, 0.60f, 1.0f } : TextStrong);
+            return;
+        }
+
+        if (specialNodeMenu)
+        {
+            UIRenderer::DrawString(m_ContextStateIndex == EntryNodeIndex ? "Entry Actions" : "Any State Actions", menuX + 10.0f, menuY + 22.0f, TextMuted);
+            UIRenderer::DrawString("Make Transition", menuX + 10.0f, menuY + 46.0f, AccentGreen);
             return;
         }
 
@@ -3174,7 +3322,9 @@ namespace CCEngine::UI
             {
                 m_SelectedBlendChildIndex = i;
                 m_DraggingBlendChildIndex = i;
+                BeginGraphEdit(*animator);
                 m_IsDraggingBlendChild = true;
+                m_HasGraphDragEdit = false;
                 Widget::BeginMouseInteraction(this);
                 return true;
             }
@@ -3414,14 +3564,17 @@ namespace CCEngine::UI
         if (!animator || !readLayer)
             return false;
 
-        const bool canBeginTransition = m_ContextMenuMode == ContextMenuMode::ReplaceState &&
-            m_ContextStateIndex >= 0 &&
-            m_ContextStateIndex < (int)readLayer->States.size();
+        const bool specialNodeMenu = m_ContextMenuMode == ContextMenuMode::SpecialNode;
+        const bool canBeginTransition =
+            (m_ContextMenuMode == ContextMenuMode::ReplaceState && m_ContextStateIndex >= 0 && m_ContextStateIndex < (int)readLayer->States.size()) ||
+            (specialNodeMenu && (m_ContextStateIndex == EntryNodeIndex || m_ContextStateIndex == AnimatorComponent::Transition::AnyStateIndex));
         const float itemH = 24.0f;
         const float menuW = 230.0f;
         float menuH = 8.0f;
         if (m_ContextMenuMode == ContextMenuMode::Transition)
             menuH += 4.0f * itemH;
+        else if (specialNodeMenu)
+            menuH += 2.0f * itemH;
         else
             menuH += 2.0f * itemH + 8.0f + (canBeginTransition ? itemH : 0.0f);
 
@@ -3475,6 +3628,14 @@ namespace CCEngine::UI
         if (canBeginTransition && IsPointInRect(mouseX, mouseY, menuX, menuY + 30.0f, menuW, itemH))
         {
             BeginTransitionCreation(m_ContextStateIndex);
+            CloseContextMenu();
+            return true;
+        }
+
+        if (specialNodeMenu)
+        {
+            if (canBeginTransition && IsPointInRect(mouseX, mouseY, menuX, menuY + 28.0f, menuW, itemH))
+                BeginTransitionCreation(m_ContextStateIndex);
             CloseContextMenu();
             return true;
         }
@@ -3556,7 +3717,9 @@ namespace CCEngine::UI
     {
         AnimatorComponent* animator = GetAnimator();
         auto* layer = animator ? GetActiveLayer(*animator) : nullptr;
-        if (!animator || !layer || sourceStateIndex < 0 || sourceStateIndex >= (int)layer->States.size())
+        const bool regularState = layer && sourceStateIndex >= 0 && sourceStateIndex < (int)layer->States.size();
+        const bool supportedSpecial = sourceStateIndex == EntryNodeIndex || sourceStateIndex == AnimatorComponent::Transition::AnyStateIndex;
+        if (!animator || !layer || (!regularState && !supportedSpecial))
             return;
 
         // Transition 편집은 두 단계 입력이다.
@@ -3565,7 +3728,16 @@ namespace CCEngine::UI
         // 이렇게 해야 이전 선택 상태나 마지막 생성 state에 끌려가지 않고, 사용자가 지정한 A -> B 방향이 그대로 저장된다.
         m_IsCreatingTransition = true;
         m_TransitionSourceStateIndex = sourceStateIndex;
-        SelectOnlyState(*animator, sourceStateIndex);
+        if (regularState)
+        {
+            m_SelectedSpecialNodeIndex = -1;
+            SelectOnlyState(*animator, sourceStateIndex);
+        }
+        else
+        {
+            ClearStateSelection(*animator);
+            m_SelectedSpecialNodeIndex = sourceStateIndex;
+        }
         m_SelectedTransitionIndex = -1;
         layer->SelectedTransitionIndex = -1;
         Widget::SetKeyboardFocus(this);
@@ -3626,6 +3798,8 @@ namespace CCEngine::UI
         if (!layer)
             return;
 
+        BeginGraphEdit(*animator);
+
         auto makeUniqueName = [&layer]()
         {
             const std::string base = "New State";
@@ -3660,6 +3834,7 @@ namespace CCEngine::UI
         CommitGraphEdit(*animator);
         ResetRuntime(*animator);
         NotifyStateSelected(*animator, m_SelectedStateIndex);
+        Widget::SetKeyboardFocus(this);
     }
 
     void AnimatorGraphPanel::AddStateFromClipIndex(int clipIndex, const std::string& clipName, const DirectX::XMFLOAT2& graphPosition)
@@ -3670,6 +3845,8 @@ namespace CCEngine::UI
         auto* layer = GetActiveLayer(*animator);
         if (!layer)
             return;
+
+        BeginGraphEdit(*animator);
 
         AnimatorComponent::State state;
         state.Name = clipName.empty() ? ("State " + std::to_string(layer->States.size() + 1)) : clipName;
@@ -4541,17 +4718,26 @@ namespace CCEngine::UI
     {
         AnimatorComponent* animator = GetAnimator();
         auto* layer = animator ? GetActiveLayer(*animator) : nullptr;
-        if (!animator || fromStateIndex < 0 || toStateIndex < 0 || fromStateIndex == toStateIndex ||
-            !layer || fromStateIndex >= (int)layer->States.size() || toStateIndex >= (int)layer->States.size())
+        if (!animator || !layer || toStateIndex < 0 || toStateIndex >= (int)layer->States.size())
             return;
 
-        auto exists = std::find_if(layer->Transitions.begin(), layer->Transitions.end(), [fromStateIndex, toStateIndex](const AnimatorComponent::Transition& transition)
+        if (fromStateIndex == EntryNodeIndex)
         {
-            return transition.FromStateIndex == fromStateIndex && transition.ToStateIndex == toStateIndex;
-        });
-        if (exists != layer->Transitions.end())
+            // Entry의 연결은 런타임 Transition이 아니라 레이어가 처음 재생할 기본 State다.
+            // 별도 Transition으로 저장하면 조건 평가 대상이 되어 시작 상태 의미가 깨진다.
+            layer->EntryStateIndex = toStateIndex;
+            layer->ActiveStateIndex = toStateIndex;
+            m_SelectedSpecialNodeIndex = EntryNodeIndex;
+            CommitGraphEdit(*animator);
+            return;
+        }
+
+        const bool regularSource = fromStateIndex >= 0 && fromStateIndex < (int)layer->States.size();
+        if ((!regularSource && fromStateIndex != AnimatorComponent::Transition::AnyStateIndex) || fromStateIndex == toStateIndex)
             return;
 
+        // 같은 두 State 사이에도 조건과 우선순위가 다른 Transition을 여러 개 둘 수 있다.
+        // 중복 목적지만 보고 생성을 막으면 사용자는 연결에 실패했다고 느끼고 복합 조건도 표현할 수 없다.
         AnimatorComponent::Transition transition;
         transition.FromStateIndex = fromStateIndex;
         transition.ToStateIndex = toStateIndex;
@@ -4560,6 +4746,8 @@ namespace CCEngine::UI
         layer->SelectedTransitionIndex = m_SelectedTransitionIndex;
         m_SelectedStateIndices.clear();
         CommitGraphEdit(*animator);
+        NotifyTransitionSelected(*animator, m_SelectedTransitionIndex);
+        Widget::SetKeyboardFocus(this);
     }
 
     void AnimatorGraphPanel::DeleteSelectedState()
@@ -4927,12 +5115,51 @@ namespace CCEngine::UI
         m_HasCommittedAnimator = true;
     }
 
+    void AnimatorGraphPanel::BeginGraphEdit(const AnimatorComponent& animator)
+    {
+        // Add와 드래그 편집은 값이 바뀐 뒤 Commit된다. 편집 시작 시점의 복사본을 따로 잡아야
+        // 런타임 선택 변경이나 프레임 갱신이 끼어도 Ctrl+Z가 정확히 조작 직전 상태로 돌아간다.
+        m_PendingGraphEditSnapshot = animator;
+        ClearAnimatorRuntimeCache(m_PendingGraphEditSnapshot);
+        m_HasPendingGraphEditSnapshot = true;
+    }
+
+    void AnimatorGraphPanel::RecordPendingGraphEdit()
+    {
+        if (!m_HasPendingGraphEditSnapshot)
+            return;
+
+        // 드래그 Undo는 MouseButtonReleased까지 기다리지 않는다. 첫 좌표 변경 직전에 기록해야
+        // 창 경계나 캡처 전환으로 릴리즈 이벤트가 다른 경로로 가도 이동 전 상태가 보존된다.
+        m_UndoStack.push_back(m_PendingGraphEditSnapshot);
+        m_RedoStack.clear();
+        m_HasPendingGraphEditSnapshot = false;
+    }
+
+    void AnimatorGraphPanel::CancelGraphEdit()
+    {
+        m_HasPendingGraphEditSnapshot = false;
+    }
+
+    void AnimatorGraphPanel::FinalizeGraphEdit(AnimatorComponent& animator)
+    {
+        // Undo 기록은 첫 실제 이동에서 이미 생성됐다. 릴리즈에서는 최종 좌표 저장과
+        // 공유 Controller 갱신만 수행해 같은 드래그가 두 번 쌓이지 않게 한다.
+        m_HasPendingGraphEditSnapshot = false;
+        CommitAnimatorGraphChange(animator);
+        PropagateSharedControllerEdit(animator);
+        CaptureCommittedAnimator(animator);
+    }
+
     void AnimatorGraphPanel::CommitGraphEdit(AnimatorComponent& animator)
     {
         // Undo는 바뀐 뒤의 값이 아니라, 바뀌기 직전의 확정 상태를 되돌린다.
         // 그래서 마지막 확정 스냅샷을 Undo 스택에 넣고 현재 값을 새 기준점으로 갱신한다.
-        if (m_HasCommittedAnimator)
+        if (m_HasPendingGraphEditSnapshot)
+            m_UndoStack.push_back(m_PendingGraphEditSnapshot);
+        else if (m_HasCommittedAnimator)
             m_UndoStack.push_back(m_LastCommittedAnimator);
+        m_HasPendingGraphEditSnapshot = false;
         m_RedoStack.clear();
         CommitAnimatorGraphChange(animator);
         PropagateSharedControllerEdit(animator);
@@ -4941,8 +5168,20 @@ namespace CCEngine::UI
 
     bool AnimatorGraphPanel::UndoGraphEdit(AnimatorComponent& animator)
     {
+        // 단축키가 마우스 릴리즈와 같은 프레임에 들어와도 복원 좌표가 남은 드래그에
+        // 다시 덮어써지지 않도록 편집 캡처를 먼저 완전히 종료한다.
+        m_IsDraggingState = false;
+        m_IsDraggingBlendChild = false;
+        m_HasGraphDragEdit = false;
+        m_DraggingStateIndex = -1;
+        m_DraggingSpecialNodeIndex = -1;
+        m_DraggingBlendChildIndex = -1;
+        Widget::EndMouseInteraction(this);
+        CancelGraphEdit();
         if (m_UndoStack.empty())
+        {
             return false;
+        }
 
         AnimatorComponent redoSnapshot = animator;
         ClearAnimatorRuntimeCache(redoSnapshot);
@@ -4955,11 +5194,34 @@ namespace CCEngine::UI
         ResetRuntime(animator);
         CaptureCommittedAnimator(animator);
         ClampAnimatorSelection(animator);
+        if (auto* layer = GetActiveLayer(animator))
+        {
+            // 스냅샷에는 그래프 데이터뿐 아니라 당시 선택 상태도 들어 있다.
+            // 복원 후 패널의 별도 선택 캐시까지 동기화해야 사라진 State를 계속 가리키지 않는다.
+            m_SelectedTransitionIndex = layer->SelectedTransitionIndex;
+            m_SelectedStateIndex = m_SelectedTransitionIndex >= 0 ? -1 : layer->ActiveStateIndex;
+            m_SelectedStateIndices.clear();
+            if (m_SelectedStateIndex >= 0 && m_SelectedStateIndex < (int)layer->States.size())
+                m_SelectedStateIndices.push_back(m_SelectedStateIndex);
+            if (m_SelectedTransitionIndex >= 0)
+                NotifyTransitionSelected(animator, m_SelectedTransitionIndex);
+            else
+                NotifyStateSelected(animator, m_SelectedStateIndex);
+        }
+        Widget::SetKeyboardFocus(this);
         return true;
     }
 
     bool AnimatorGraphPanel::RedoGraphEdit(AnimatorComponent& animator)
     {
+        m_IsDraggingState = false;
+        m_IsDraggingBlendChild = false;
+        m_HasGraphDragEdit = false;
+        m_DraggingStateIndex = -1;
+        m_DraggingSpecialNodeIndex = -1;
+        m_DraggingBlendChildIndex = -1;
+        Widget::EndMouseInteraction(this);
+        CancelGraphEdit();
         if (m_RedoStack.empty())
             return false;
 
@@ -4974,6 +5236,19 @@ namespace CCEngine::UI
         ResetRuntime(animator);
         CaptureCommittedAnimator(animator);
         ClampAnimatorSelection(animator);
+        if (auto* layer = GetActiveLayer(animator))
+        {
+            m_SelectedTransitionIndex = layer->SelectedTransitionIndex;
+            m_SelectedStateIndex = m_SelectedTransitionIndex >= 0 ? -1 : layer->ActiveStateIndex;
+            m_SelectedStateIndices.clear();
+            if (m_SelectedStateIndex >= 0 && m_SelectedStateIndex < (int)layer->States.size())
+                m_SelectedStateIndices.push_back(m_SelectedStateIndex);
+            if (m_SelectedTransitionIndex >= 0)
+                NotifyTransitionSelected(animator, m_SelectedTransitionIndex);
+            else
+                NotifyStateSelected(animator, m_SelectedStateIndex);
+        }
+        Widget::SetKeyboardFocus(this);
         return true;
     }
 
@@ -5106,8 +5381,8 @@ namespace CCEngine::UI
         DirectX::XMFLOAT2 screen = GraphToScreen(layer->States[stateIndex].GraphPosition);
         // 줌은 노드 간 거리만이 아니라 노드 자체 크기에도 반영되어야 한다.
         // 최소값은 클릭 가능한 크기만 보장하고, 실제 확대/축소 느낌은 유지한다.
-        const float screenW = (std::max)(118.0f, m_NodeWidth * m_Zoom);
-        const float screenH = (std::max)(48.0f, m_NodeHeight * m_Zoom);
+        const float screenW = (std::max)(76.0f, m_NodeWidth * m_Zoom);
+        const float screenH = (std::max)(36.0f, m_NodeHeight * m_Zoom);
         return { stateIndex, screen.x, screen.y, screenW, screenH };
     }
 
@@ -5116,8 +5391,18 @@ namespace CCEngine::UI
         if (stateIndex >= 0)
             return GetStateRect(stateIndex);
 
-        DirectX::XMFLOAT2 p = GraphToScreen(GetSpecialAnimatorNodeGraphPosition(stateIndex));
-        return { stateIndex, p.x, p.y, 112.0f, 36.0f };
+        const AnimatorComponent* animator = GetAnimator();
+        const auto* layer = animator ? GetActiveLayer(*animator) : nullptr;
+        if (!layer)
+            return {};
+        DirectX::XMFLOAT2 p = GraphToScreen(GetSpecialAnimatorNodeGraphPosition(*layer, stateIndex));
+        return {
+            stateIndex,
+            p.x,
+            p.y,
+            (std::max)(56.0f, 112.0f * m_Zoom),
+            (std::max)(20.0f, 36.0f * m_Zoom)
+        };
     }
 
     DirectX::XMFLOAT2 AnimatorGraphPanel::GetRectConnectionPoint(const StateNodeRect& rect, DirectX::XMFLOAT2 toward) const
@@ -5180,6 +5465,36 @@ namespace CCEngine::UI
             to.y += ny * offset;
         }
 
+        if (layer && transitionIndex >= 0 && transitionIndex < (int)layer->Transitions.size())
+        {
+            int parallelCount = 0;
+            int parallelOrdinal = 0;
+            for (int i = 0; i < (int)layer->Transitions.size(); ++i)
+            {
+                const auto& candidate = layer->Transitions[i];
+                if (candidate.FromStateIndex != fromStateIndex || candidate.ToStateIndex != toStateIndex)
+                    continue;
+                if (i < transitionIndex)
+                    ++parallelOrdinal;
+                ++parallelCount;
+            }
+
+            if (parallelCount > 1)
+            {
+                const float dx = to.x - from.x;
+                const float dy = to.y - from.y;
+                const float len = (std::max)(0.001f, std::sqrt(dx * dx + dy * dy));
+                const float offset = (parallelOrdinal - (parallelCount - 1) * 0.5f) * 7.0f;
+                const float nx = -dy / len;
+                const float ny = dx / len;
+                // 같은 방향의 복수 Transition도 겹치지 않아 각각 선택하고 조건을 편집할 수 있어야 한다.
+                from.x += nx * offset;
+                from.y += ny * offset;
+                to.x += nx * offset;
+                to.y += ny * offset;
+            }
+        }
+
         return { from, to };
     }
 
@@ -5199,12 +5514,46 @@ namespace CCEngine::UI
         return -1;
     }
 
+    int AnimatorGraphPanel::GetSpecialNodeAt(float mouseX, float mouseY) const
+    {
+        const AnimatorComponent* animator = GetAnimator();
+        const auto* layer = animator ? GetActiveLayer(*animator) : nullptr;
+        if (!layer)
+            return -1;
+
+        const int nodes[] = { EntryNodeIndex, AnimatorComponent::Transition::AnyStateIndex, AnimatorComponent::Transition::ExitStateIndex };
+        for (int nodeIndex : nodes)
+        {
+            const StateNodeRect rect = GetEndpointRect(nodeIndex);
+            if (IsPointInRect(mouseX, mouseY, rect.X, rect.Y, rect.W, rect.H))
+                return nodeIndex;
+        }
+        return -1;
+    }
+
+    DirectX::XMFLOAT2* AnimatorGraphPanel::GetSpecialNodePosition(AnimatorComponent::Layer& layer, int stateIndex) const
+    {
+        if (stateIndex == EntryNodeIndex)
+            return &layer.EntryNodePosition;
+        if (stateIndex == AnimatorComponent::Transition::AnyStateIndex)
+            return &layer.AnyStateNodePosition;
+        if (stateIndex == AnimatorComponent::Transition::ExitStateIndex)
+            return &layer.ExitNodePosition;
+        return nullptr;
+    }
+
     int AnimatorGraphPanel::GetTransitionAt(float mouseX, float mouseY) const
     {
         const AnimatorComponent* animator = GetAnimator();
         const auto* layer = animator ? GetActiveLayer(*animator) : nullptr;
         if (!animator || !layer)
             return -1;
+
+        int nearestTransition = -1;
+        float nearestDistance = (std::numeric_limits<float>::max)();
+        // 선은 시각적으로 2~4px이어도 편집용 선택 폭은 더 넓어야 한다.
+        // 확대/축소 상태와 고해상도 화면에서도 한 픽셀을 정확히 겨냥하지 않아도 선택되게 한다.
+        const float hitRadius = (std::clamp)(12.0f * m_Zoom, 10.0f, 18.0f);
 
         for (int i = (int)layer->Transitions.size() - 1; i >= 0; --i)
         {
@@ -5214,10 +5563,26 @@ namespace CCEngine::UI
                 continue;
 
             auto [from, to] = GetTransitionEndpoints(transition.FromStateIndex, transition.ToStateIndex, i);
-            if (DistancePointToSegment(mouseX, mouseY, from, to) <= 8.0f)
-                return i;
+            float distance = DistancePointToSegment(mouseX, mouseY, from, to);
+
+            // 조건/경고 라벨도 전이의 일부다. 라벨을 눌렀는데 뒤 캔버스가 선택되는 일을 막는다.
+            const bool hasIssues = !ValidateTransition(*animator, *layer, transition).empty();
+            if (!transition.Conditions.empty() || hasIssues)
+            {
+                const float labelW = hasIssues ? 92.0f : 84.0f;
+                const float labelX = (from.x + to.x) * 0.5f - labelW * 0.5f;
+                const float labelY = (from.y + to.y) * 0.5f - 11.0f;
+                if (IsPointInRect(mouseX, mouseY, labelX, labelY, labelW, 21.0f))
+                    distance = 0.0f;
+            }
+
+            if (distance <= hitRadius && distance < nearestDistance)
+            {
+                nearestDistance = distance;
+                nearestTransition = i;
+            }
         }
-        return -1;
+        return nearestTransition;
     }
 
     std::vector<AnimationClipInfo> AnimatorGraphPanel::InspectSourceClips(const AnimatorComponent& animator) const

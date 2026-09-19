@@ -378,6 +378,24 @@ namespace CCEngine {
             return widget && s_KeyboardFocusOwner == widget;
         }
 
+        bool Widget::DispatchKeyToKeyboardFocus(Widget* root, KeyPressedEvent& event)
+        {
+            if (!root || !s_KeyboardFocusOwner || !s_KeyboardFocusOwner->IsVisible())
+                return false;
+
+            Widget* focusPath = s_KeyboardFocusOwner;
+            while (focusPath && focusPath != root)
+                focusPath = focusPath->GetParent();
+            if (focusPath != root)
+                return false;
+
+            // 활성 OS 창의 RootUI 아래에 있는 포커스 위젯에만 직접 전달한다.
+            // 다른 보조 창의 이전 포커스로 키가 새는 것을 막는다.
+            const bool handled = s_KeyboardFocusOwner->OnKeyPressed(event);
+            event.Handled = event.Handled || handled;
+            return event.Handled;
+        }
+
         void Widget::SetCurrentRenderWindow(Window* window)
         {
             s_CurrentRenderWindow = window;

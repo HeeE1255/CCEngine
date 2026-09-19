@@ -301,6 +301,9 @@ namespace CCEngine
                     if (m_Kind == Kind::Stepper && !IsPointInsideStepperButton(e.GetX(), e.GetY()))
                         return false;
                     m_IsPressed = true;
+                    // Press와 Release가 다른 패널로 갈라지면 보이는 버튼과 실제 실행 대상이 달라진다.
+                    // 한 행이 클릭 수명 전체를 소유하게 해 보조 Inspector 창에서도 입력 좌표를 안정화한다.
+                    Widget::BeginMouseInteraction(this);
                     e.Handled = true;
                     return true;
                 }
@@ -311,8 +314,12 @@ namespace CCEngine
                         return false;
                     const bool fire = m_IsPressed && IsPointInside(e.GetX(), e.GetY());
                     m_IsPressed = false;
+                    Widget::EndMouseInteraction(this);
                     if (!fire)
-                        return e.Handled;
+                    {
+                        e.Handled = true;
+                        return true;
+                    }
 
                     if (m_Kind == Kind::Stepper)
                     {
@@ -1412,13 +1419,26 @@ namespace CCEngine
             }
 
             addSection("Motion");
-            addField("AnimatorStateMotion", "Motion", InspectorMotionTypeName(state.Motion));
-            addField("AnimatorStateMotionSource", "Source", sourcePath.empty() ? "None" : sourcePath.filename().string());
 
-            auto openClipSelection = [this]()
+            auto selectClipSlot = [this]()
                 {
                     m_AnimatorStateClipSlotSelected = true;
                     Widget::SetKeyboardFocus(this);
+                    if (Widget* clipSlot = FindVisibleDescendantByName(this, "AnimatorStateClipSlot"))
+                    {
+                        if (auto* row = dynamic_cast<AnimatorStateInspectorRow*>(clipSlot))
+                            row->SetSelected(true);
+                    }
+                };
+
+            // Motion/Source/Clip은 서로 다른 값처럼 보여도 같은 Motion 슬롯을 설명한다.
+            // 어느 행을 눌러도 Backspace 대상이 되게 해야 Inspector의 넓은 행 전체가 일관되게 동작한다.
+            addField("AnimatorStateMotion", "Motion", InspectorMotionTypeName(state.Motion), selectClipSlot);
+            addField("AnimatorStateMotionSource", "Source", sourcePath.empty() ? "None" : sourcePath.filename().string(), selectClipSlot);
+
+            auto openClipSelection = [this, selectClipSlot]()
+                {
+                    selectClipSlot();
                     if (m_OnAnimatorClipPickRequested)
                         m_OnAnimatorClipPickRequested(m_SelectedEntity, m_SelectedAnimatorLayerIndex, m_SelectedAnimatorStateIndex);
                     else
@@ -3547,7 +3567,13 @@ namespace CCEngine
                 if (me.GetButton() == 0 && m_HasSelectedAnimatorState && m_AnimatorStateClipSlotSelected)
                 {
                     Widget* clipSlot = FindVisibleDescendantByName(this, "AnimatorStateClipSlot");
-                    if (!clipSlot || !clipSlot->IsPointInside(me.GetX(), me.GetY()))
+                    Widget* motionRow = FindVisibleDescendantByName(this, "AnimatorStateMotion");
+                    Widget* sourceRow = FindVisibleDescendantByName(this, "AnimatorStateMotionSource");
+                    const bool onMotionSlot =
+                        (clipSlot && clipSlot->IsPointInside(me.GetX(), me.GetY())) ||
+                        (motionRow && motionRow->IsPointInside(me.GetX(), me.GetY())) ||
+                        (sourceRow && sourceRow->IsPointInside(me.GetX(), me.GetY()));
+                    if (!onMotionSlot)
                     {
                         m_AnimatorStateClipSlotSelected = false;
                         RequestRebuild();

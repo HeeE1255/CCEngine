@@ -34,6 +34,7 @@ namespace CCEngine
 
             void SetRootDirectory(const std::filesystem::path& rootDirectory);
             void Refresh(bool forceAssetScan = false);
+            const std::filesystem::path& GetRootDirectory() const { return m_RootDirectory; }
             const std::filesystem::path& GetCurrentAssetDirectory() const { return m_CurrentDirectory; }
             bool IsDropTargetPoint(float mouseX, float mouseY) const { return IsContentPoint(mouseX, mouseY); }
             bool ImportExternalPaths(const std::vector<std::filesystem::path>& sourcePaths, float mouseX, float mouseY);

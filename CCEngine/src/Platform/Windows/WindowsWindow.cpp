@@ -19,6 +19,9 @@ namespace CCEngine
 { 
 	namespace
 	{
+		bool s_ControlKeyDown = false;
+		bool s_ShiftKeyDown = false;
+
 		bool IsWindowInputEnabled(WindowsWindow* window)
 		{
 			return !Application::Get() || !window || Application::Get()->IsInputEnabledForWindow(window);
@@ -67,14 +70,31 @@ namespace CCEngine
 		}
 		case WM_KEYDOWN:
 		{
+			if (wParam == VK_CONTROL || wParam == VK_LCONTROL || wParam == VK_RCONTROL)
+				s_ControlKeyDown = true;
+			if (wParam == VK_SHIFT || wParam == VK_LSHIFT || wParam == VK_RSHIFT)
+				s_ShiftKeyDown = true;
 			if (!IsWindowInputEnabled(window))
 				return 0;
 
 			if (window && window->GetRootUI())
 			{
-				CCEngine::KeyPressedEvent e((int)wParam);
-				window->GetRootUI()->OnEvent(e);
+				// 비동기 키 상태 조회는 자동 입력과 빠른 chord에서 이미 풀린 값을 돌려줄 수 있다.
+				// WM_KEYDOWN/UP 순서로 유지한 modifier를 이벤트에 실어 수신 시점의 조합을 보존한다.
+				CCEngine::KeyPressedEvent e((int)wParam, s_ControlKeyDown, s_ShiftKeyDown);
+				// 키는 현재 포커스 위젯에 먼저 전달한다. 처리되지 않은 키만 UI 트리를 순회해
+				// 전역 단축키나 포커스가 필요 없는 패널이 받을 수 있게 한다.
+				if (!CCEngine::UI::Widget::DispatchKeyToKeyboardFocus(window->GetRootUI(), e))
+					window->GetRootUI()->OnEvent(e);
 			}
+			return 0;
+		}
+		case WM_KEYUP:
+		{
+			if (wParam == VK_CONTROL || wParam == VK_LCONTROL || wParam == VK_RCONTROL)
+				s_ControlKeyDown = false;
+			if (wParam == VK_SHIFT || wParam == VK_LSHIFT || wParam == VK_RSHIFT)
+				s_ShiftKeyDown = false;
 			return 0;
 		}
 		case WM_CHAR:

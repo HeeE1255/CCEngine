@@ -474,6 +474,11 @@ namespace CCEngine
             int ActiveStateIndex = -1;
             int EntryStateIndex = -1;
             int SelectedTransitionIndex = -1;
+            // 특수 노드는 State 배열의 항목이 아니지만 그래프 편집 위치는 레이어별로 보존해야 한다.
+            // 고정 좌표로 그리면 레이어를 바꾸거나 큰 그래프를 정리할 때 Entry/Any State/Exit만 움직일 수 없다.
+            DirectX::XMFLOAT2 EntryNodePosition = { 120.0f, 180.0f };
+            DirectX::XMFLOAT2 AnyStateNodePosition = { 120.0f, 320.0f };
+            DirectX::XMFLOAT2 ExitNodePosition = { 120.0f, 460.0f };
             bool Exited = false;
             // 아래 값들은 저장용 설정이 아니라 재생 중에만 쓰는 상태다.
             // State 전환과 Cross Fade는 이전 State 시간과 새 State 시간을 따로 들고 있어야 자연스럽게 섞을 수 있다.
@@ -533,6 +538,9 @@ namespace CCEngine
 
         // 에디터 전용 신호다. Inspector는 요청만 남기고, 실제 창 생성은 EditorLayer가 처리한다.
         bool EditorOpenGraphRequested = false;
+        bool EditorPickControllerRequested = false;
+        bool EditorOpenAvatarRequested = false;
+        bool EditorPickAvatarRequested = false;
 
         // RuntimeClip은 실행 중에만 쓰는 캐시다.
         // 씬 파일에는 경로/GUID와 ClipIndex만 저장하고, 실제 클립 데이터는 필요할 때 다시 읽는다.

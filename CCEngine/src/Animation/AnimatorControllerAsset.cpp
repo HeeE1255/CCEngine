@@ -314,6 +314,9 @@ namespace CCEngine
                 { "ActiveStateIndex", layer.ActiveStateIndex },
                 { "EntryStateIndex", layer.EntryStateIndex },
                 { "SelectedTransitionIndex", layer.SelectedTransitionIndex },
+                { "EntryNodePosition", Float2ToJson(layer.EntryNodePosition) },
+                { "AnyStateNodePosition", Float2ToJson(layer.AnyStateNodePosition) },
+                { "ExitNodePosition", Float2ToJson(layer.ExitNodePosition) },
                 { "States", nlohmann::json::array() },
                 { "Transitions", nlohmann::json::array() }
             };
@@ -410,6 +413,12 @@ namespace CCEngine
                 layer.ActiveStateIndex = layerData.value("ActiveStateIndex", -1);
                 layer.EntryStateIndex = layerData.value("EntryStateIndex", layer.ActiveStateIndex);
                 layer.SelectedTransitionIndex = layerData.value("SelectedTransitionIndex", -1);
+                if (layerData.contains("EntryNodePosition") && layerData["EntryNodePosition"].is_array())
+                    layer.EntryNodePosition = JsonToFloat2(layerData["EntryNodePosition"]);
+                if (layerData.contains("AnyStateNodePosition") && layerData["AnyStateNodePosition"].is_array())
+                    layer.AnyStateNodePosition = JsonToFloat2(layerData["AnyStateNodePosition"]);
+                if (layerData.contains("ExitNodePosition") && layerData["ExitNodePosition"].is_array())
+                    layer.ExitNodePosition = JsonToFloat2(layerData["ExitNodePosition"]);
 
                 if (layerData.contains("States") && layerData["States"].is_array())
                 {

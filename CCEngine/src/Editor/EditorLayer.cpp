@@ -1066,7 +1066,35 @@ namespace CCEngine {
         if (!m_RootUI)
             return;
 
-        // 메뉴와 팝업은 일반 창보다 높은 레이어로 취급한다.
+        auto bringRootBranchToFront = [this](UI::Widget* widget)
+        {
+            if (!widget || !widget->IsVisible())
+                return;
+
+            // 중첩 DockRoot에서는 패널과 최상위 그룹만 올려도 중간 형제 그룹의 그리기 순서가 남는다.
+            // 패널부터 RootUI 직계 자식까지 각 단계에서 올려야 화면에 보이는 순서와 입력 순서가 일치한다.
+            UI::Widget* branch = widget;
+            while (branch && branch != m_RootUI)
+            {
+                branch->BringToFront();
+                branch = branch->GetParent();
+            }
+        };
+
+        // 그래프/선택창은 Scene View보다 늦게 그려져야 같은 순서로 입력도 먼저 받는다.
+        // 렌더 순서만 따로 고치면 보이는 창과 클릭되는 창이 달라지므로 두 문제를 한 번에 해결한다.
+        if (m_MaterialGraphPanel && m_MaterialGraphPanel->IsVisible() && !m_MaterialGraphPanel->GetOwnerWindow())
+            bringRootBranchToFront(m_MaterialGraphPanel);
+        if (m_AnimatorGraphPanel && m_AnimatorGraphPanel->IsVisible() && !m_AnimatorGraphPanel->GetOwnerWindow())
+            bringRootBranchToFront(m_AnimatorGraphPanel);
+        if (m_AssetPickerPanel && m_AssetPickerPanel->IsVisible() && !m_AssetPickerPanel->GetOwnerWindow())
+            bringRootBranchToFront(m_AssetPickerPanel);
+
+        // 공용 툴바는 Scene/Game View의 제목 표시줄보다 위에 있어야 한다.
+        // Collider/Root Motion/Play QA 버튼이 창 제목 뒤에 가려지면 기능 자체에 접근할 수 없다.
+        if (m_ToolbarPanel) m_ToolbarPanel->BringToFront();
+
+        // 메뉴와 팝업은 모든 일반 창과 툴바보다 높은 최상위 레이어로 취급한다.
         // 움직인 패널이 BringToFront 되어도 드롭다운이 그 아래에 깔리면 안 된다.
         if (m_TitleBarPanel) m_TitleBarPanel->BringToFront();
         if (m_MenuBarPanel) m_MenuBarPanel->BringToFront();
@@ -2290,6 +2318,20 @@ namespace CCEngine {
                         break;
                     }
                     current = { current.GetComponent<RelationshipComponent>().Parent, m_ActiveScene };
+                }
+            }
+
+            if (targets.empty())
+            {
+                // Scope: Selected인데 Animator가 선택되지 않았다고 디버그 화면을 완전히 비우면
+                // 사용자는 옵션이 고장 났다고 판단하기 쉽다. 선택 대상이 없을 때만 활성 Animator
+                // 전체를 안전한 폴백으로 사용하고, 하나라도 선택되면 선택 범위를 그대로 존중한다.
+                auto view = m_ActiveScene->GetRegistry().view<AnimatorComponent>();
+                for (auto entityID : view)
+                {
+                    Entity entity{ entityID, m_ActiveScene };
+                    if (m_ActiveScene->IsEntityActiveInHierarchy(entity))
+                        targets.push_back(entity);
                 }
             }
         }
@@ -3810,13 +3852,6 @@ namespace CCEngine {
         if (TryApplyPendingAssetPick(assetPath, assetType))
             return;
 
-        if (assetType == "animatorcontroller" && m_HierarchyPanel)
-        {
-            Entity selected = m_HierarchyPanel->GetSelectedEntity();
-            if (AssignAnimatorControllerToEntity(selected, assetPath, false))
-                return;
-        }
-
         if (m_HierarchyPanel)
             m_LastInspectorSelectionRevision = m_HierarchyPanel->GetSelectionRevision();
 
@@ -3831,13 +3866,20 @@ namespace CCEngine {
     {
         if (!entity || !entity.HasComponent<AnimatorComponent>())
             return false;
-        if (controllerPath.empty() || AssetDatabase::GetAssetKind(controllerPath) != AssetKind::AnimatorController)
+        std::string extension = controllerPath.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+        if (controllerPath.empty() ||
+            (AssetDatabase::GetAssetKind(controllerPath) != AssetKind::AnimatorController && extension != ".ccanimcontroller"))
             return false;
 
         auto& animator = entity.GetComponent<AnimatorComponent>();
         animator.ControllerPath = controllerPath.string();
         animator.ControllerAssetGuid = AssetDatabase::GetGuidFromPath(controllerPath);
-        AnimatorControllerAsset::LoadFromFile(controllerPath, animator);
+        if (!AnimatorControllerAsset::LoadFromFile(controllerPath, animator))
+        {
+            ConsoleLog::Error("Failed to load Animator controller: " + controllerPath.string());
+            return false;
+        }
 
         // Controller는 Animator 컴포넌트의 오브젝트 슬롯에 들어가는 공유 에셋이다.
         // 할당 후 Inspector를 Entity 모드로 되돌려야 사용자가 즉시 어떤 Controller가 연결됐는지 볼 수 있다.
@@ -3915,6 +3957,12 @@ namespace CCEngine {
         {
             m_RootUI->AddChild(m_AssetPickerPanel);
         }
+
+        // 별도 Object Picker도 현재 프로젝트의 Asset Browser와 같은 루트를 사용해야 한다.
+        // 생성자 기본값(current_path/assets)에 맡기면 실행 디렉터리에 따라 빈 목록이나
+        // 다른 프로젝트의 목록이 보여 슬롯 선택이 겉보기만 동작하는 문제가 생긴다.
+        if (m_AssetBrowserPanel && m_AssetPickerPanel->GetRootDirectory() != m_AssetBrowserPanel->GetRootDirectory())
+            m_AssetPickerPanel->SetRootDirectory(m_AssetBrowserPanel->GetRootDirectory());
 
         auto& mainWindow = CCEngine::Application::Get()->GetWindow();
         const float pickerW = (std::min)(760.0f, (std::max)(420.0f, (float)mainWindow.GetWidth() - 120.0f));
@@ -3997,9 +4045,9 @@ namespace CCEngine {
 
     bool EditorLayer::ApplyAnimatorClipAssetToState(Entity target, int layerIndex, int stateIndex, const std::filesystem::path& assetPath)
     {
-        if (assetPath.empty() || AssetDatabase::GetAssetKind(assetPath) != AssetKind::Model)
+        if (assetPath.empty())
         {
-            ConsoleLog::Warning("Animator clip pick expects a model asset with animation clips.");
+            ConsoleLog::Warning("Animator clip pick expects an animation source asset.");
             return false;
         }
 
@@ -4023,6 +4071,8 @@ namespace CCEngine {
             return false;
         }
 
+        // AssetDatabase가 아직 스캔 중이거나 절대/상대 경로 표기가 달라도 FBX 자체에서
+        // 클립을 읽을 수 있으면 유효한 Motion 소스다. 실제 내용 검사가 타입 캐시보다 확실하다.
         const std::vector<AnimationClipInfo> clips = AnimationClip::InspectClips(assetPath.string());
         if (clips.empty())
         {
@@ -4424,9 +4474,35 @@ namespace CCEngine {
             if (isCtrlPressed && isShiftPressed) SaveSceneAs();
             else if (isCtrlPressed && !isShiftPressed) SaveScene();
         }
+
+        const bool animatorGraphVisible = m_AnimatorGraphPanel && m_AnimatorGraphPanel->IsVisible();
+        const bool animatorUndoHandledByEvent = animatorGraphVisible && m_AnimatorGraphPanel->ConsumeUndoShortcutEvent();
+        const bool animatorRedoHandledByEvent = animatorGraphVisible && m_AnimatorGraphPanel->ConsumeRedoShortcutEvent();
+        bool animatorGraphOwnsShortcut = false;
+        if (animatorGraphVisible)
+        {
+            auto [mouseX, mouseY] = Application::Get()->GetWindow().GetMousePosition();
+            animatorGraphOwnsShortcut = UI::Widget::IsKeyboardFocusOwner(m_AnimatorGraphPanel) ||
+                m_AnimatorGraphPanel->IsPointInside(mouseX, mouseY);
+        }
+
         if (isCtrlPressed && isZPressedNow && !s_IsZPressedLastFrame)
         {
-            if (isShiftPressed)
+            if (animatorGraphOwnsShortcut)
+            {
+                // WM_KEYDOWN이 그래프에 도착했으면 중복 실행하지 않고, 포커스 경로에서 유실됐으면
+                // 프레임 단축키가 같은 Animator Undo를 직접 호출한다. 전역 Scene Undo로 새지 않게 한다.
+                if (isShiftPressed)
+                {
+                    if (!animatorRedoHandledByEvent)
+                        m_AnimatorGraphPanel->RequestRedoShortcut();
+                }
+                else if (!animatorUndoHandledByEvent)
+                {
+                    m_AnimatorGraphPanel->RequestUndoShortcut();
+                }
+            }
+            else if (isShiftPressed)
             {
                 if (!TryRedoAssetOperation())
                     m_UndoManager.Redo();
@@ -4439,7 +4515,12 @@ namespace CCEngine {
         }
         if (isCtrlPressed && isYPressedNow && !s_IsYPressedLastFrame)
         {
-            if (!TryRedoAssetOperation())
+            if (animatorGraphOwnsShortcut)
+            {
+                if (!animatorRedoHandledByEvent)
+                    m_AnimatorGraphPanel->RequestRedoShortcut();
+            }
+            else if (!TryRedoAssetOperation())
                 m_UndoManager.Redo();
         }
         if (isCtrlPressed && isDPressedNow && !s_IsDPressedLastFrame)
@@ -5088,6 +5169,78 @@ namespace CCEngine {
         for (auto handle : view)
         {
             auto& animator = view.get<AnimatorComponent>(handle);
+            if (animator.EditorPickAvatarRequested)
+            {
+                animator.EditorPickAvatarRequested = false;
+                Entity target{ handle, m_ActiveScene };
+                BeginAssetPick("Avatar", { "avatar" },
+                    [this, target](const std::filesystem::path& path, const std::string&) mutable
+                    {
+                        if (!target || !target.HasComponent<AnimatorComponent>() ||
+                            AssetDatabase::GetAssetKind(path) != AssetKind::Avatar)
+                            return false;
+
+                        auto& targetAnimator = target.GetComponent<AnimatorComponent>();
+                        targetAnimator.AvatarPath = path.string();
+                        targetAnimator.AvatarGuid = AssetDatabase::GetGuidFromPath(path);
+
+                        std::filesystem::path controllerPath = targetAnimator.ControllerPath;
+                        if (!targetAnimator.ControllerAssetGuid.empty())
+                        {
+                            const std::filesystem::path guidPath = AssetDatabase::GetPathFromGuid(targetAnimator.ControllerAssetGuid);
+                            if (!guidPath.empty())
+                                controllerPath = guidPath;
+                        }
+                        if (!controllerPath.empty())
+                        {
+                            AnimatorControllerAsset::Normalize(targetAnimator);
+                            if (AnimatorControllerAsset::SaveToFile(controllerPath, targetAnimator))
+                                AssetDatabase::EnsureMetaFile(controllerPath);
+                        }
+
+                        for (UI::InspectorPanel* inspector : m_InspectorPanels)
+                        {
+                            if (inspector && inspector->IsVisible())
+                                inspector->SetSelectedEntity(target);
+                        }
+                        return true;
+                    });
+                break;
+            }
+            if (animator.EditorOpenAvatarRequested)
+            {
+                animator.EditorOpenAvatarRequested = false;
+                std::filesystem::path avatarPath = animator.AvatarPath;
+                if (!animator.AvatarGuid.empty())
+                {
+                    const std::filesystem::path guidPath = AssetDatabase::GetPathFromGuid(animator.AvatarGuid);
+                    if (!guidPath.empty())
+                        avatarPath = guidPath;
+                }
+                if (!avatarPath.empty())
+                {
+                    for (UI::InspectorPanel* inspector : m_InspectorPanels)
+                    {
+                        if (inspector && inspector->IsVisible())
+                        {
+                            inspector->SetSelectedAsset(avatarPath, "avatar");
+                            inspector->BringToFront();
+                        }
+                    }
+                }
+                break;
+            }
+            if (animator.EditorPickControllerRequested)
+            {
+                animator.EditorPickControllerRequested = false;
+                const Entity target{ handle, m_ActiveScene };
+                BeginAssetPick("Animator Controller", { "animatorcontroller" },
+                    [this, target](const std::filesystem::path& path, const std::string&)
+                    {
+                        return AssignAnimatorControllerToEntity(target, path, false);
+                    });
+                break;
+            }
             if (!animator.EditorOpenGraphRequested)
                 continue;
 

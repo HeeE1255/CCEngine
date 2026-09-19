@@ -119,6 +119,7 @@ namespace CCEngine
             static void SetKeyboardFocus(Widget* owner);
             static void ClearKeyboardFocus(Widget* owner = nullptr);
             static bool IsKeyboardFocusOwner(const Widget* widget);
+            static bool DispatchKeyToKeyboardFocus(Widget* root, KeyPressedEvent& event);
             static void SetCurrentRenderWindow(Window* window);
             static Window* GetCurrentRenderWindow();
             static void SetCurrentRenderWindowMouseActive(bool active);
