@@ -175,7 +175,9 @@
     <ClInclude Include="src\Core\ProjectSettings.h" />
     <ClInclude Include="src\Core\Window.h" />
     <ClInclude Include="src\Editor\AssetFileWatcher.h" />
+    <ClInclude Include="src\Editor\AssetPickerService.h" />
     <ClInclude Include="src\Editor\AssetUndoManager.h" />
+    <ClInclude Include="src\Editor\AnimatorEditorService.h" />
     <ClInclude Include="src\Editor\EditorCamera.h" />
     <ClInclude Include="src\Editor\EditorQATestRunner.h" />
     <ClInclude Include="src\Editor\EditorLayer.h" />
@@ -229,8 +231,10 @@
     <ClInclude Include="src\Scripting\ScriptEngine.h" />
     <ClInclude Include="src\Scripting\ScriptMetadata.h" />
     <ClInclude Include="src\UI\AssetBrowserPanel.h" />
+    <ClInclude Include="src\UI\AssetBrowserPickerState.h" />
     <ClInclude Include="src\UI\AssetReferenceValidatorPanel.h" />
     <ClInclude Include="src\UI\AnimatorGraphPanel.h" />
+    <ClInclude Include="src\UI\AnimatorInspectorWidgets.h" />
     <ClInclude Include="src\UI\Button.h" />
     <ClInclude Include="src\UI\ConsolePanel.h" />
     <ClInclude Include="src\UI\DockManager.h" />
@@ -273,7 +277,9 @@
     <ClCompile Include="src\Core\ProjectSettings.cpp" />
     <ClCompile Include="src\Core\Window.cpp" />
     <ClCompile Include="src\Editor\AssetFileWatcher.cpp" />
+    <ClCompile Include="src\Editor\AssetPickerService.cpp" />
     <ClCompile Include="src\Editor\AssetUndoManager.cpp" />
+    <ClCompile Include="src\Editor\AnimatorEditorService.cpp" />
     <ClCompile Include="src\Editor\EditorCamera.cpp" />
     <ClCompile Include="src\Editor\EditorQATestRunner.cpp" />
     <ClCompile Include="src\Editor\EditorLayer.cpp" />
@@ -318,6 +324,7 @@
     <ClCompile Include="src\Scripting\ScriptEngine.cpp" />
     <ClCompile Include="src\Scripting\ScriptMetadata.cpp" />
     <ClCompile Include="src\UI\AssetBrowserPanel.cpp" />
+    <ClCompile Include="src\UI\AssetBrowserPicker.cpp" />
     <ClCompile Include="src\UI\AssetReferenceValidatorPanel.cpp" />
     <ClCompile Include="src\UI\AnimatorGraphPanel.cpp" />
     <ClCompile Include="src\UI\Button.cpp" />
@@ -331,6 +338,7 @@
     <ClCompile Include="src\UI\HierarchyPanel.cpp" />
     <ClCompile Include="src\UI\ImageWidget.cpp" />
     <ClCompile Include="src\UI\InspectorItem.cpp" />
+    <ClCompile Include="src\UI\InspectorAnimator.cpp" />
     <ClCompile Include="src\UI\InspectorPanel.cpp" />
     <ClCompile Include="src\UI\InspectorUtils.cpp" />
     <ClCompile Include="src\UI\KeyBindingInput.cpp" />

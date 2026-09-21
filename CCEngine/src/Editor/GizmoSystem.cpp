@@ -184,6 +184,53 @@ namespace CCEngine {
 
             return {};
         }
+
+        DirectX::XMFLOAT3 TransformPoint(const DirectX::XMFLOAT3& point, DirectX::XMMATRIX matrix)
+        {
+            DirectX::XMFLOAT3 result;
+            DirectX::XMStoreFloat3(&result, DirectX::XMVector3TransformCoord(DirectX::XMLoadFloat3(&point), matrix));
+            return result;
+        }
+
+        float DistanceFromRay(const Math::Ray& ray, const DirectX::XMFLOAT3& point)
+        {
+            DirectX::XMVECTOR origin = DirectX::XMLoadFloat3(&ray.Origin);
+            DirectX::XMVECTOR direction = DirectX::XMVector3Normalize(DirectX::XMLoadFloat3(&ray.Direction));
+            DirectX::XMVECTOR toPoint = DirectX::XMVectorSubtract(DirectX::XMLoadFloat3(&point), origin);
+            float alongRay = (std::max)(0.0f, DirectX::XMVectorGetX(DirectX::XMVector3Dot(toPoint, direction)));
+            DirectX::XMVECTOR closest = DirectX::XMVectorAdd(origin, DirectX::XMVectorScale(direction, alongRay));
+            return DirectX::XMVectorGetX(DirectX::XMVector3Length(DirectX::XMVectorSubtract(DirectX::XMLoadFloat3(&point), closest)));
+        }
+
+        DirectX::XMFLOAT3 GetColliderHandleLocalPosition(const BoxCollider3DComponent& collider, int handle)
+        {
+            DirectX::XMFLOAT3 half = { collider.Size.x * 0.5f, collider.Size.y * 0.5f, collider.Size.z * 0.5f };
+            DirectX::XMFLOAT3 position = collider.Offset;
+            if (handle < 6)
+            {
+                int axis = handle / 2;
+                float sign = (handle % 2) == 0 ? -1.0f : 1.0f;
+                (&position.x)[axis] += sign * (&half.x)[axis];
+            }
+            else
+            {
+                int bits = handle - 6;
+                position.x += (bits & 1 ? 1.0f : -1.0f) * half.x;
+                position.y += (bits & 2 ? 1.0f : -1.0f) * half.y;
+                position.z += (bits & 4 ? 1.0f : -1.0f) * half.z;
+            }
+            return position;
+        }
+    }
+
+    void GizmoSystem::SetMode(GizmoMode mode)
+    {
+        m_Mode = mode;
+        m_IsDragging = false;
+        m_ActiveAxis = -1;
+        m_ActiveColliderHandle = -1;
+        m_HoveredColliderHandle = -1;
+        m_DragTargets.clear();
     }
 
     void GizmoSystem::Init()
@@ -313,6 +360,12 @@ namespace CCEngine {
         if (!activeEntity || m_Mode == GizmoMode::None) return;
         if (!activeEntity.HasComponent<TransformComponent>()) return;
 
+        if (m_Mode == GizmoMode::Collider)
+        {
+            RenderBoxColliderGizmo(activeEntity, viewMatrix);
+            return;
+        }
+
         std::vector<Entity> validSelection = BuildValidGizmoSelection(selectedEntities, activeEntity);
         if (validSelection.empty())
             return;
@@ -418,6 +471,48 @@ namespace CCEngine {
         RenderCommand::SetDepthTest(true);
     }
 
+    void GizmoSystem::RenderBoxColliderGizmo(Entity entity, DirectX::XMMATRIX viewMatrix)
+    {
+        if (!entity.HasComponent<BoxCollider3DComponent>())
+            return;
+
+        const auto& collider = entity.GetComponent<BoxCollider3DComponent>();
+        DirectX::XMMATRIX world = GetWorldTransform(entity);
+        DirectX::XMMATRIX invView = DirectX::XMMatrixInverse(nullptr, viewMatrix);
+        DirectX::XMFLOAT3 cameraPosition;
+        DirectX::XMStoreFloat3(&cameraPosition, invView.r[3]);
+
+        DirectX::XMFLOAT3 corners[8];
+        for (int i = 0; i < 8; ++i)
+            corners[i] = TransformPoint(GetColliderHandleLocalPosition(collider, 6 + i), world);
+
+        static constexpr int edges[12][2] = {
+            {0,1},{2,3},{4,5},{6,7}, {0,2},{1,3},{4,6},{5,7}, {0,4},{1,5},{2,6},{3,7}
+        };
+        static auto cube = MeshFactory::CreateCube();
+        RenderCommand::SetDepthTest(false);
+        for (const auto& edge : edges)
+        {
+            DirectX::XMMATRIX line = BuildBoneLineTransform(corners[edge[0]], corners[edge[1]], 0.018f);
+            Renderer3D::DrawMesh(line, cube, m_GizmoShader, { 0.15f, 0.8f, 0.95f, 1.0f });
+        }
+
+        for (int handle = 0; handle < 14; ++handle)
+        {
+            DirectX::XMFLOAT3 position = TransformPoint(GetColliderHandleLocalPosition(collider, handle), world);
+            DirectX::XMVECTOR delta = DirectX::XMVectorSubtract(DirectX::XMLoadFloat3(&cameraPosition), DirectX::XMLoadFloat3(&position));
+            float size = (std::max)(0.035f, DirectX::XMVectorGetX(DirectX::XMVector3Length(delta)) * 0.018f);
+            bool highlighted = handle == m_ActiveColliderHandle || handle == m_HoveredColliderHandle;
+            DirectX::XMFLOAT4 color = highlighted
+                ? DirectX::XMFLOAT4{ 1.0f, 0.82f, 0.18f, 1.0f }
+                : (handle < 6 ? DirectX::XMFLOAT4{ 0.2f, 0.75f, 1.0f, 1.0f } : DirectX::XMFLOAT4{ 0.92f, 0.92f, 0.92f, 1.0f });
+            DirectX::XMMATRIX transform = DirectX::XMMatrixScaling(size, size, size) *
+                DirectX::XMMatrixTranslation(position.x, position.y, position.z);
+            Renderer3D::DrawMesh(transform, cube, m_GizmoShader, color);
+        }
+        RenderCommand::SetDepthTest(true);
+    }
+
     bool GizmoSystem::OnEvent(Event& e, Entity selectedEntity, DirectX::XMMATRIX viewMatrix, DirectX::XMMATRIX projMatrix, float viewportWidth, float viewportHeight, float viewportX, float viewportY)
     {
         std::vector<Entity> singleSelection;
@@ -430,6 +525,9 @@ namespace CCEngine {
     {
         if (!activeEntity || m_Mode == GizmoMode::None) return false;
         if (!activeEntity.HasComponent<TransformComponent>()) return false;
+
+        if (m_Mode == GizmoMode::Collider)
+            return HandleBoxColliderEvent(e, activeEntity, viewMatrix, projMatrix, viewportWidth, viewportHeight, viewportX, viewportY);
 
         std::vector<Entity> validSelection = BuildValidGizmoSelection(selectedEntities, activeEntity);
         if (validSelection.empty())
@@ -698,6 +796,166 @@ namespace CCEngine {
             return false;
         }
 
+        return false;
+    }
+
+    bool GizmoSystem::HandleBoxColliderEvent(Event& e, Entity entity, DirectX::XMMATRIX viewMatrix, DirectX::XMMATRIX projMatrix,
+        float viewportWidth, float viewportHeight, float viewportX, float viewportY)
+    {
+        if (!entity.HasComponent<BoxCollider3DComponent>())
+            return false;
+
+        auto makeRay = [&](float x, float y)
+        {
+            return Math::MathUtils::ScreenPosToWorldRay(x - viewportX, y - viewportY,
+                viewportWidth, viewportHeight, viewMatrix, projMatrix);
+        };
+
+        auto findHandle = [&](const Math::Ray& ray)
+        {
+            const auto& collider = entity.GetComponent<BoxCollider3DComponent>();
+            DirectX::XMMATRIX world = GetWorldTransform(entity);
+            DirectX::XMMATRIX invView = DirectX::XMMatrixInverse(nullptr, viewMatrix);
+            DirectX::XMVECTOR camera = invView.r[3];
+            int bestHandle = -1;
+            float bestRatio = FLT_MAX;
+            for (int handle = 0; handle < 14; ++handle)
+            {
+                DirectX::XMFLOAT3 position = TransformPoint(GetColliderHandleLocalPosition(collider, handle), world);
+                float distanceToCamera = DirectX::XMVectorGetX(DirectX::XMVector3Length(
+                    DirectX::XMVectorSubtract(camera, DirectX::XMLoadFloat3(&position))));
+                float radius = (std::max)(0.06f, distanceToCamera * 0.035f);
+                float ratio = DistanceFromRay(ray, position) / radius;
+                if (ratio <= 1.0f && ratio < bestRatio)
+                {
+                    bestRatio = ratio;
+                    bestHandle = handle;
+                }
+            }
+            return bestHandle;
+        };
+
+        if (e.GetEventType() == EventType::MouseButtonPressed)
+        {
+            auto& mouse = static_cast<MouseButtonPressedEvent&>(e);
+            if (mouse.GetButton() != 0)
+                return false;
+            Math::Ray ray = makeRay(mouse.GetX(), mouse.GetY());
+            int handle = findHandle(ray);
+            if (handle < 0)
+                return false;
+
+            auto& collider = entity.GetComponent<BoxCollider3DComponent>();
+            m_IsDragging = true;
+            m_ActiveColliderHandle = handle;
+            m_HoveredColliderHandle = handle;
+            m_OriginalColliderOffset = collider.Offset;
+            m_OriginalColliderSize = collider.Size;
+            DirectX::XMMATRIX world = GetWorldTransform(entity);
+            DirectX::XMFLOAT3 handleWorld = TransformPoint(GetColliderHandleLocalPosition(collider, handle), world);
+
+            if (handle < 6)
+            {
+                int axis = handle / 2;
+                DirectX::XMVECTOR localAxis = DirectX::XMVectorZero();
+                localAxis = DirectX::XMVectorSetByIndex(localAxis, 1.0f, axis);
+                DirectX::XMVECTOR worldAxisRaw = DirectX::XMVector3TransformNormal(localAxis, world);
+                m_ColliderAxisWorldScale = (std::max)(0.0001f, DirectX::XMVectorGetX(DirectX::XMVector3Length(worldAxisRaw)));
+                DirectX::XMStoreFloat3(&m_ColliderDragAxis, DirectX::XMVector3Normalize(worldAxisRaw));
+                DirectX::XMVECTOR axisVector = DirectX::XMLoadFloat3(&m_ColliderDragAxis);
+                DirectX::XMVECTOR camera = DirectX::XMMatrixInverse(nullptr, viewMatrix).r[3];
+                DirectX::XMVECTOR cameraToHandle = DirectX::XMVector3Normalize(
+                    DirectX::XMVectorSubtract(DirectX::XMLoadFloat3(&handleWorld), camera));
+                DirectX::XMVECTOR normal = DirectX::XMVector3Cross(axisVector, DirectX::XMVector3Cross(cameraToHandle, axisVector));
+                if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(normal)) < 0.0001f)
+                    normal = cameraToHandle;
+                DirectX::XMStoreFloat3(&m_ColliderDragPlaneNormal, DirectX::XMVector3Normalize(normal));
+            }
+            else
+            {
+                DirectX::XMStoreFloat3(&m_ColliderDragPlaneNormal,
+                    DirectX::XMVector3Normalize(DirectX::XMLoadFloat3(&ray.Direction)));
+            }
+
+            float t = 0.0f;
+            if (Math::MathUtils::RayPlaneIntersection(ray, DirectX::XMLoadFloat3(&handleWorld),
+                DirectX::XMLoadFloat3(&m_ColliderDragPlaneNormal), t))
+            {
+                DirectX::XMStoreFloat3(&m_ColliderDragStartHit,
+                    DirectX::XMVectorAdd(DirectX::XMLoadFloat3(&ray.Origin),
+                        DirectX::XMVectorScale(DirectX::XMLoadFloat3(&ray.Direction), t)));
+            }
+            e.Handled = true;
+            return true;
+        }
+
+        if (e.GetEventType() == EventType::MouseMoved)
+        {
+            auto& mouse = static_cast<MouseMovedEvent&>(e);
+            Math::Ray ray = makeRay(mouse.GetX(), mouse.GetY());
+            if (!m_IsDragging)
+            {
+                m_HoveredColliderHandle = findHandle(ray);
+                return false;
+            }
+
+            float t = 0.0f;
+            DirectX::XMVECTOR planePoint = DirectX::XMLoadFloat3(&m_ColliderDragStartHit);
+            if (!Math::MathUtils::RayPlaneIntersection(ray, planePoint,
+                DirectX::XMLoadFloat3(&m_ColliderDragPlaneNormal), t))
+                return true;
+
+            DirectX::XMVECTOR hit = DirectX::XMVectorAdd(DirectX::XMLoadFloat3(&ray.Origin),
+                DirectX::XMVectorScale(DirectX::XMLoadFloat3(&ray.Direction), t));
+            DirectX::XMVECTOR worldDelta = DirectX::XMVectorSubtract(hit, planePoint);
+            DirectX::XMFLOAT3 localDelta{};
+            if (m_ActiveColliderHandle < 6)
+            {
+                int axis = m_ActiveColliderHandle / 2;
+                float delta = DirectX::XMVectorGetX(DirectX::XMVector3Dot(worldDelta,
+                    DirectX::XMLoadFloat3(&m_ColliderDragAxis))) / m_ColliderAxisWorldScale;
+                (&localDelta.x)[axis] = delta;
+            }
+            else
+            {
+                DirectX::XMMATRIX inverseWorld = DirectX::XMMatrixInverse(nullptr, GetWorldTransform(entity));
+                DirectX::XMStoreFloat3(&localDelta, DirectX::XMVector3TransformNormal(worldDelta, inverseWorld));
+            }
+
+            auto& collider = entity.GetComponent<BoxCollider3DComponent>();
+            collider.Offset = m_OriginalColliderOffset;
+            collider.Size = m_OriginalColliderSize;
+            constexpr float minimumSize = 0.01f;
+            for (int axis = 0; axis < 3; ++axis)
+            {
+                bool changesAxis = m_ActiveColliderHandle < 6
+                    ? axis == m_ActiveColliderHandle / 2
+                    : true;
+                if (!changesAxis)
+                    continue;
+                float sign = m_ActiveColliderHandle < 6
+                    ? ((m_ActiveColliderHandle % 2) == 0 ? -1.0f : 1.0f)
+                    : (((m_ActiveColliderHandle - 6) & (1 << axis)) ? 1.0f : -1.0f);
+                float center = (&m_OriginalColliderOffset.x)[axis];
+                float size = (&m_OriginalColliderSize.x)[axis];
+                float opposite = center - sign * size * 0.5f;
+                float moved = center + sign * size * 0.5f + (&localDelta.x)[axis];
+                moved = sign > 0.0f ? (std::max)(moved, opposite + minimumSize)
+                    : (std::min)(moved, opposite - minimumSize);
+                (&collider.Offset.x)[axis] = (moved + opposite) * 0.5f;
+                (&collider.Size.x)[axis] = std::abs(moved - opposite);
+            }
+            e.Handled = true;
+            return true;
+        }
+
+        if (e.GetEventType() == EventType::MouseButtonReleased && m_IsDragging)
+        {
+            m_IsDragging = false;
+            m_ActiveColliderHandle = -1;
+            e.Handled = true;
+            return true;
+        }
         return false;
     }
 }

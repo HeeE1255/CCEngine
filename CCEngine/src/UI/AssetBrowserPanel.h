@@ -5,6 +5,7 @@
 #include "Renderer/Framebuffer.h"
 #include "Renderer/MaterialAsset.h"
 #include "UI/WindowPanel.h"
+#include "UI/AssetBrowserPickerState.h"
 #include <filesystem>
 #include <functional>
 #include <chrono>
@@ -40,7 +41,7 @@ namespace CCEngine
             bool ImportExternalPaths(const std::vector<std::filesystem::path>& sourcePaths, float mouseX, float mouseY);
             void BeginAssetPickerFilter(const std::string& label, const std::vector<std::string>& acceptedTypeKeys);
             void ClearAssetPickerFilter();
-            bool HasAssetPickerFilter() const { return m_HasPickerFilter; }
+            bool HasAssetPickerFilter() const { return m_PickerState.IsActive(); }
 
             void SetOnPrefabSelected(std::function<void(const std::string&)> callback) { m_OnPrefabSelected = callback; }
             void SetOnModelSelected(std::function<void(const std::string&)> callback) { m_OnModelSelected = callback; }
@@ -375,10 +376,8 @@ namespace CCEngine
             SortMode m_SortMode = SortMode::Name;
             bool m_TypeFilterDropdownVisible = false;
             bool m_SortDropdownVisible = false;
-            bool m_HasPickerFilter = false;
             TypeFilter m_PrePickerTypeFilter = TypeFilter::All;
-            std::string m_PickerFilterLabel;
-            std::unordered_set<std::string> m_PickerAcceptedTypeKeys;
+            AssetBrowserPickerState m_PickerState;
             bool m_ExternalWatcherActive = false;
             std::chrono::steady_clock::time_point m_LastExternalFileCheck = {};
 

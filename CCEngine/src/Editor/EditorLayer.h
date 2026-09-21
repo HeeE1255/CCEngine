@@ -7,6 +7,8 @@
 #include "Editor/EditorCamera.h"
 #include "Editor/AssetFileWatcher.h"
 #include "Editor/AssetUndoManager.h"
+#include "Editor/AssetPickerService.h"
+#include "Editor/AnimatorEditorService.h"
 #include "Editor/EditorUndoManager.h"
 #include "Core/ConsoleLog.h"
 #include "Core/ProjectSettings.h"
@@ -34,7 +36,6 @@
 #include "UI/InspectorPanel.h"
 #include "UI/KeyBindingInput.h"
 #include "UI/MaterialGraphPanel.h"
-#include "UI/AnimatorGraphPanel.h"
 #include "GizmoSystem.h"
 
 #include <chrono>
@@ -70,9 +71,6 @@ namespace CCEngine {
         bool ApplyMaterialAssetToEntity(Entity entity, const std::string& filepath);
         bool AssignAnimatorControllerToEntity(Entity entity, const std::filesystem::path& controllerPath, bool openGraph);
         void BeginAssetPick(const std::string& label, const std::vector<std::string>& acceptedTypes, std::function<bool(const std::filesystem::path&, const std::string&)> onPicked);
-        void OpenAssetPickerWindow(const std::string& label, const std::vector<std::string>& acceptedTypes);
-        bool TryApplyPendingAssetPick(const std::filesystem::path& assetPath, const std::string& assetType);
-        void ClearPendingAssetPick(bool clearBrowserFilters);
         void BeginAnimatorClipPick(Entity entity, int layerIndex, int stateIndex);
         bool ApplyAnimatorClipAssetToState(Entity entity, int layerIndex, int stateIndex, const std::filesystem::path& assetPath);
         void SelectAssetForInspection(const std::filesystem::path& assetPath, const std::string& assetType);
@@ -146,6 +144,8 @@ namespace CCEngine {
 
         EditorUndoManager m_UndoManager;
         AssetUndoManager m_AssetUndoManager;
+        AssetPickerService m_AssetPickerService;
+        AnimatorEditorService m_AnimatorEditorService;
         AssetFileWatcher m_AssetFileWatcher;
         bool m_HistoryPanelDirty = false;
         std::string m_LastHistoryPanelSignature;
@@ -208,14 +208,12 @@ namespace CCEngine {
         UI::HierarchyPanel* m_HierarchyPanel = nullptr;
         UI::InspectorPanel* m_InspectorPanel = nullptr;
         UI::AssetBrowserPanel* m_AssetBrowserPanel = nullptr;
-        UI::AssetBrowserPanel* m_AssetPickerPanel = nullptr;
         UI::AssetBrowserPanel* m_ActiveAssetBrowserPanel = nullptr;
         UI::WindowPanel* m_HistoryPanel = nullptr;
         UI::ConsolePanel* m_ConsolePanel = nullptr;
         UI::ProjectSettingsPanel* m_ProjectSettingsPanel = nullptr;
         UI::AssetReferenceValidatorPanel* m_AssetReferenceValidatorPanel = nullptr;
         UI::MaterialGraphPanel* m_MaterialGraphPanel = nullptr;
-        UI::AnimatorGraphPanel* m_AnimatorGraphPanel = nullptr;
         UI::Panel* m_HistoryContentPanel = nullptr;
         UI::VBoxContainer* m_HierarchyContainer = nullptr;
 
@@ -229,6 +227,7 @@ namespace CCEngine {
         UI::Button* m_BtnToolMove = nullptr;
         UI::Button* m_BtnToolRotate = nullptr;
         UI::Button* m_BtnToolScale = nullptr;
+        UI::Button* m_BtnToolCollider = nullptr;
         UI::Button* m_BtnToolSpace = nullptr;
         UI::Button* m_BtnToolPivot = nullptr;
         UI::Button* m_BtnToolSnap = nullptr;
@@ -286,6 +285,7 @@ namespace CCEngine {
         Entity m_PrefabDragEntity = {};
         bool m_IsDraggingPrefabToAssetBrowser = false;
         bool m_IsMultiTransformUndoOpen = false;
+        bool m_IsColliderEditUndoOpen = false;
         uint64_t m_LastInspectorSelectionRevision = 0;
         float m_PrefabDragStartX = 0.0f;
         float m_PrefabDragStartY = 0.0f;
@@ -302,15 +302,6 @@ namespace CCEngine {
         size_t m_RootMotionDebugPathLimit = 128;
         bool m_ShowColliderOutlines = false;
         bool m_ShowMeshColliderWire = false;
-
-        struct PendingAssetPick
-        {
-            std::string Label;
-            std::vector<std::string> AcceptedTypes;
-            std::function<bool(const std::filesystem::path&, const std::string&)> OnPicked;
-            bool Active = false;
-        };
-        PendingAssetPick m_PendingAssetPick;
 
     };
 

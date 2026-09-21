@@ -24,6 +24,7 @@
 #include "Renderer/ModelImporter.h"
 #include "Application.h"
 #include "UI/HierarchyItem.h"
+#include "UI/AnimatorGraphPanel.h"
 #include "UI/InspectorPanel.h"
 #include "UI/InspectorRegistry.h"
 #include "UI/InspectorItem.h"
@@ -705,6 +706,8 @@ namespace CCEngine {
     void EditorLayer::OnDetach()
     {
         m_AssetFileWatcher.Stop();
+        m_AssetPickerService.Shutdown();
+        m_AnimatorEditorService.Shutdown();
 
         if (IsInPlayMode())
         {
@@ -744,12 +747,7 @@ namespace CCEngine {
             }
         }
 
-        if (m_PendingAssetPick.Active && m_AssetPickerPanel && !m_AssetPickerPanel->IsVisible())
-        {
-            // Object picker를 X로 닫으면 선택 대기 상태도 같이 끝내야 한다.
-            // 그렇지 않으면 나중에 일반 Asset Browser에서 고른 에셋이 이전 슬롯에 잘못 들어간다.
-            ClearPendingAssetPick(false);
-        }
+        m_AssetPickerService.Update();
 
         // 외부 컴파일 작업의 완료 결과는 메인 스레드에서 Console로 전달한다.
         if (ScriptCompiler::Update())
@@ -1085,10 +1083,8 @@ namespace CCEngine {
         // 렌더 순서만 따로 고치면 보이는 창과 클릭되는 창이 달라지므로 두 문제를 한 번에 해결한다.
         if (m_MaterialGraphPanel && m_MaterialGraphPanel->IsVisible() && !m_MaterialGraphPanel->GetOwnerWindow())
             bringRootBranchToFront(m_MaterialGraphPanel);
-        if (m_AnimatorGraphPanel && m_AnimatorGraphPanel->IsVisible() && !m_AnimatorGraphPanel->GetOwnerWindow())
-            bringRootBranchToFront(m_AnimatorGraphPanel);
-        if (m_AssetPickerPanel && m_AssetPickerPanel->IsVisible() && !m_AssetPickerPanel->GetOwnerWindow())
-            bringRootBranchToFront(m_AssetPickerPanel);
+        m_AnimatorEditorService.BringEmbeddedPanelToFront(m_RootUI);
+        m_AssetPickerService.BringEmbeddedPanelToFront();
 
         // 공용 툴바는 Scene/Game View의 제목 표시줄보다 위에 있어야 한다.
         // Collider/Root Motion/Play QA 버튼이 창 제목 뒤에 가려지면 기능 자체에 접근할 수 없다.
@@ -1432,7 +1428,18 @@ namespace CCEngine {
                 m_GizmoSystem.OnEvent(e, selectedEntities, selectedEntity, m_Camera.GetViewMatrix(), m_Camera.GetProjectionMatrix(), vpSize.x, vpSize.y, vpPos.x, vpPos.y);
                 bool isDragging = m_GizmoSystem.IsDragging();
 
-                if (!wasDragging && isDragging && selectedEntities.size() > 1 && !m_IsMultiTransformUndoOpen)
+                if (!wasDragging && isDragging && m_GizmoSystem.GetMode() == GizmoMode::Collider && !m_IsColliderEditUndoOpen)
+                {
+                    m_UndoManager.BeginSceneStructureChange("Edit Box Collider");
+                    m_IsColliderEditUndoOpen = true;
+                }
+                else if (wasDragging && !isDragging && m_IsColliderEditUndoOpen)
+                {
+                    m_UndoManager.CommitSceneStructureChange();
+                    m_IsColliderEditUndoOpen = false;
+                }
+
+                if (!wasDragging && isDragging && m_GizmoSystem.GetMode() != GizmoMode::Collider && selectedEntities.size() > 1 && !m_IsMultiTransformUndoOpen)
                 {
                     // 여러 오브젝트가 함께 움직일 때는 개별 Transform 기록 대신 씬 스냅샷으로 묶는다.
                     // 그래야 Ctrl+Z 한 번에 선택 묶음 전체가 같은 시점으로 돌아간다.
@@ -1943,6 +1950,7 @@ namespace CCEngine {
         if (m_BtnToolMove) m_BtnToolMove->SetActive(mode == GizmoMode::Translate);
         if (m_BtnToolRotate) m_BtnToolRotate->SetActive(mode == GizmoMode::Rotate);
         if (m_BtnToolScale) m_BtnToolScale->SetActive(mode == GizmoMode::Scale);
+        if (m_BtnToolCollider) m_BtnToolCollider->SetActive(mode == GizmoMode::Collider);
 
         if (m_BtnToolSpace)
         {
@@ -3849,9 +3857,6 @@ namespace CCEngine {
 
     void EditorLayer::SelectAssetForInspection(const std::filesystem::path& assetPath, const std::string& assetType)
     {
-        if (TryApplyPendingAssetPick(assetPath, assetType))
-            return;
-
         if (m_HierarchyPanel)
             m_LastInspectorSelectionRevision = m_HierarchyPanel->GetSelectionRevision();
 
@@ -3897,133 +3902,21 @@ namespace CCEngine {
 
     void EditorLayer::BeginAssetPick(const std::string& label, const std::vector<std::string>& acceptedTypes, std::function<bool(const std::filesystem::path&, const std::string&)> onPicked)
     {
-        m_PendingAssetPick.Label = label;
-        m_PendingAssetPick.AcceptedTypes = acceptedTypes;
-        for (std::string& type : m_PendingAssetPick.AcceptedTypes)
-            std::transform(type.begin(), type.end(), type.begin(), [](unsigned char c) { return (char)std::tolower(c); });
-        m_PendingAssetPick.OnPicked = std::move(onPicked);
-        m_PendingAssetPick.Active = true;
-
-        OpenAssetPickerWindow(label, m_PendingAssetPick.AcceptedTypes);
-
-        ConsoleLog::Info("Asset Browser picker started: " + label);
-    }
-
-    void EditorLayer::OpenAssetPickerWindow(const std::string& label, const std::vector<std::string>& acceptedTypes)
-    {
-        if (!m_RootUI)
-            return;
-
-        if (!m_AssetPickerPanel)
-        {
-            m_AssetPickerPanel = new UI::AssetBrowserPanel("AssetPickerPanel", "Select Asset");
-            m_AssetPickerPanel->SetDockingEnabled(true);
-            m_AssetPickerPanel->SetAssetUndoManager(&m_AssetUndoManager);
-            m_AssetPickerPanel->SetExternalWatcherActive(m_AssetFileWatcher.IsRunning());
-            m_AssetPickerPanel->SetOnAssetSelected([this](const std::string& path, const std::string& type)
-                {
-                    SelectAssetForInspection(path, type);
-                });
-            m_AssetPickerPanel->SetOnModelSelected([this](const std::string& path)
-                {
-                    SelectAssetForInspection(path, "model");
-                });
-            m_AssetPickerPanel->SetOnPrefabSelected([this](const std::string& path)
-                {
-                    SelectAssetForInspection(path, "prefab");
-                });
-            m_AssetPickerPanel->SetOnSceneSelected([this](const std::string& path)
-                {
-                    SelectAssetForInspection(path, "scene");
-                });
-            m_AssetPickerPanel->SetOnCodeAssetOpened([this](const std::string& path)
-                {
-                    std::filesystem::path assetPath = path;
-                    SelectAssetForInspection(assetPath, AssetDatabase::AssetKindToString(AssetDatabase::GetAssetKind(assetPath)));
-                });
-            m_AssetPickerPanel->SetOnAnimatorControllerOpened([this](const std::string& path)
-                {
-                    SelectAssetForInspection(path, "animatorcontroller");
-                });
-            m_AssetPickerPanel->SetOnAssetDatabaseChanged([this]()
+        const std::filesystem::path rootDirectory = m_AssetBrowserPanel ? m_AssetBrowserPanel->GetRootDirectory() : std::filesystem::path{};
+        m_AssetPickerService.Configure(
+            m_RootUI,
+            &m_AssetUndoManager,
+            m_AssetFileWatcher.IsRunning(),
+            rootDirectory,
+            {
+                [this]()
                 {
                     ClearMissingInspectorAssetSelections();
                     QueueAssetReferenceValidation();
-                });
-            m_AssetPickerPanel->SetOnAssetHistoryChanged([this]() { MarkHistoryPanelDirty(); });
-            m_RootUI->AddChild(m_AssetPickerPanel);
-        }
-        else if (!m_AssetPickerPanel->GetOwnerWindow() && m_AssetPickerPanel->GetParent() != m_RootUI)
-        {
-            m_RootUI->AddChild(m_AssetPickerPanel);
-        }
-
-        // 별도 Object Picker도 현재 프로젝트의 Asset Browser와 같은 루트를 사용해야 한다.
-        // 생성자 기본값(current_path/assets)에 맡기면 실행 디렉터리에 따라 빈 목록이나
-        // 다른 프로젝트의 목록이 보여 슬롯 선택이 겉보기만 동작하는 문제가 생긴다.
-        if (m_AssetBrowserPanel && m_AssetPickerPanel->GetRootDirectory() != m_AssetBrowserPanel->GetRootDirectory())
-            m_AssetPickerPanel->SetRootDirectory(m_AssetBrowserPanel->GetRootDirectory());
-
-        auto& mainWindow = CCEngine::Application::Get()->GetWindow();
-        const float pickerW = (std::min)(760.0f, (std::max)(420.0f, (float)mainWindow.GetWidth() - 120.0f));
-        const float pickerH = (std::min)(520.0f, (std::max)(300.0f, (float)mainWindow.GetHeight() - 120.0f));
-        const float pickerX = ((float)mainWindow.GetWidth() - pickerW) * 0.5f;
-        const float pickerY = ((float)mainWindow.GetHeight() - pickerH) * 0.5f;
-
-        // Object Field picker는 기존 Asset Browser의 필터를 바꾸면 안 된다.
-        // 동시에 일반 에디터 창처럼 도킹/분리/복귀가 가능해야 하므로, 이미 멀티 윈도우로 분리된 상태면
-        // 그 창을 유지하고, 메인 창 내부에 있을 때만 중앙 플로팅 위치를 새로 잡는다.
-        const bool inExternalWindow = m_AssetPickerPanel->GetOwnerWindow() != nullptr;
-        m_AssetPickerPanel->SetDockingEnabled(true);
-        if (!inExternalWindow)
-        {
-            m_AssetPickerPanel->SetOwnerWindow(nullptr);
-            m_AssetPickerPanel->SetAnchorMin(0.0f, 0.0f);
-            m_AssetPickerPanel->SetAnchorMax(0.0f, 0.0f);
-            m_AssetPickerPanel->SetOffsetMin(pickerX, pickerY);
-            m_AssetPickerPanel->SetOffsetMax(pickerX + pickerW, pickerY + pickerH);
-        }
-        m_AssetPickerPanel->SetVisible(true);
-        m_AssetPickerPanel->BeginAssetPickerFilter(label, acceptedTypes);
-        m_AssetPickerPanel->Refresh(false);
-        m_AssetPickerPanel->BringToFront();
-    }
-
-    void EditorLayer::ClearPendingAssetPick(bool clearBrowserFilters)
-    {
-        m_PendingAssetPick = {};
-
-        if (m_AssetPickerPanel)
-        {
-            if (clearBrowserFilters)
-                m_AssetPickerPanel->ClearAssetPickerFilter();
-            if (m_AssetPickerPanel->GetOwnerWindow())
-            {
-                Application::Get()->RequestCloseSecondaryWindowByUI(m_AssetPickerPanel);
-                m_AssetPickerPanel->SetOwnerWindow(nullptr);
-            }
-            m_AssetPickerPanel->SetVisible(false);
-        }
-    }
-
-    bool EditorLayer::TryApplyPendingAssetPick(const std::filesystem::path& assetPath, const std::string& assetType)
-    {
-        if (!m_PendingAssetPick.Active)
-            return false;
-
-        std::string normalizedType = assetType;
-        std::transform(normalizedType.begin(), normalizedType.end(), normalizedType.begin(), [](unsigned char c) { return (char)std::tolower(c); });
-        const bool typeAllowed = std::find(m_PendingAssetPick.AcceptedTypes.begin(), m_PendingAssetPick.AcceptedTypes.end(), normalizedType) != m_PendingAssetPick.AcceptedTypes.end();
-        if (!typeAllowed)
-        {
-            ConsoleLog::Warning("Asset pick expects type for " + m_PendingAssetPick.Label + ", ignored: " + assetType);
-            return true;
-        }
-
-        const bool applied = m_PendingAssetPick.OnPicked ? m_PendingAssetPick.OnPicked(assetPath, normalizedType) : false;
-        if (applied)
-            ClearPendingAssetPick(true);
-        return true;
+                },
+                [this]() { MarkHistoryPanelDirty(); }
+            });
+        m_AssetPickerService.Begin(label, acceptedTypes, std::move(onPicked));
     }
 
     void EditorLayer::BeginAnimatorClipPick(Entity entity, int layerIndex, int stateIndex)
@@ -4245,7 +4138,8 @@ namespace CCEngine {
             mouseY = fallbackMouseY;
         }
 
-        if (m_AnimatorGraphPanel && m_AnimatorGraphPanel->TryAcceptAssetDrop(filepath, assetType, mouseX, mouseY))
+        UI::AnimatorGraphPanel* animatorGraph = m_AnimatorEditorService.GetPanel();
+        if (animatorGraph && animatorGraph->TryAcceptAssetDrop(filepath, assetType, mouseX, mouseY))
             return;
 
         if (assetType == "texture")
@@ -4475,15 +4369,16 @@ namespace CCEngine {
             else if (isCtrlPressed && !isShiftPressed) SaveScene();
         }
 
-        const bool animatorGraphVisible = m_AnimatorGraphPanel && m_AnimatorGraphPanel->IsVisible();
-        const bool animatorUndoHandledByEvent = animatorGraphVisible && m_AnimatorGraphPanel->ConsumeUndoShortcutEvent();
-        const bool animatorRedoHandledByEvent = animatorGraphVisible && m_AnimatorGraphPanel->ConsumeRedoShortcutEvent();
+        UI::AnimatorGraphPanel* animatorGraph = m_AnimatorEditorService.GetPanel();
+        const bool animatorGraphVisible = animatorGraph && animatorGraph->IsVisible();
+        const bool animatorUndoHandledByEvent = animatorGraphVisible && animatorGraph->ConsumeUndoShortcutEvent();
+        const bool animatorRedoHandledByEvent = animatorGraphVisible && animatorGraph->ConsumeRedoShortcutEvent();
         bool animatorGraphOwnsShortcut = false;
         if (animatorGraphVisible)
         {
             auto [mouseX, mouseY] = Application::Get()->GetWindow().GetMousePosition();
-            animatorGraphOwnsShortcut = UI::Widget::IsKeyboardFocusOwner(m_AnimatorGraphPanel) ||
-                m_AnimatorGraphPanel->IsPointInside(mouseX, mouseY);
+            animatorGraphOwnsShortcut = UI::Widget::IsKeyboardFocusOwner(animatorGraph) ||
+                animatorGraph->IsPointInside(mouseX, mouseY);
         }
 
         if (isCtrlPressed && isZPressedNow && !s_IsZPressedLastFrame)
@@ -4495,11 +4390,11 @@ namespace CCEngine {
                 if (isShiftPressed)
                 {
                     if (!animatorRedoHandledByEvent)
-                        m_AnimatorGraphPanel->RequestRedoShortcut();
+                        animatorGraph->RequestRedoShortcut();
                 }
                 else if (!animatorUndoHandledByEvent)
                 {
-                    m_AnimatorGraphPanel->RequestUndoShortcut();
+                    animatorGraph->RequestUndoShortcut();
                 }
             }
             else if (isShiftPressed)
@@ -4518,7 +4413,7 @@ namespace CCEngine {
             if (animatorGraphOwnsShortcut)
             {
                 if (!animatorRedoHandledByEvent)
-                    m_AnimatorGraphPanel->RequestRedoShortcut();
+                    animatorGraph->RequestRedoShortcut();
             }
             else if (!TryRedoAssetOperation())
                 m_UndoManager.Redo();
@@ -5085,78 +4980,35 @@ namespace CCEngine {
 
     void EditorLayer::OpenAnimatorGraphEditorWindow(Entity entity)
     {
-        if (!m_RootUI || !entity || !entity.HasComponent<AnimatorComponent>())
-            return;
-
-        const bool ownerWindowClosed = m_AnimatorGraphPanel &&
-            m_AnimatorGraphPanel->GetOwnerWindow() &&
-            m_AnimatorGraphPanel->GetOwnerWindow()->ShouldClose();
-        const bool orphanedPanel = m_AnimatorGraphPanel &&
-            !m_AnimatorGraphPanel->GetParent() &&
-            !m_AnimatorGraphPanel->GetOwnerWindow();
-
-        if (orphanedPanel)
-        {
-            delete m_AnimatorGraphPanel;
-            m_AnimatorGraphPanel = nullptr;
-        }
-
-        if (!m_AnimatorGraphPanel || ownerWindowClosed)
-        {
-            // 닫힌 보조 윈도우에 붙어 있던 패널 포인터는 다시 쓸 수 없다.
-            // 재오픈 요청 때 새 패널을 만들면 "한 번 닫으면 다시 안 열림" 상태가 남지 않는다.
-            m_AnimatorGraphPanel = new UI::AnimatorGraphPanel("AnimatorGraphEditorPanel");
-            m_AnimatorGraphPanel->SetOnClosed([this]()
-                {
-                    m_AnimatorGraphPanel = nullptr;
-                });
-        }
-
-        m_AnimatorGraphPanel->SetOnStateSelected([this](Entity entity, int layerIndex, int stateIndex)
+        m_AnimatorEditorService.Open(
+            m_RootUI,
+            entity,
             {
-                for (UI::InspectorPanel* inspector : m_InspectorPanels)
+                [this](Entity selectedEntity, int layerIndex, int stateIndex)
                 {
-                    if (inspector && inspector->IsVisible())
+                    for (UI::InspectorPanel* inspector : m_InspectorPanels)
                     {
-                        inspector->SetSelectedAnimatorState(entity, layerIndex, stateIndex);
-                        if (stateIndex >= 0)
-                            inspector->BringToFront();
+                        if (inspector && inspector->IsVisible())
+                        {
+                            inspector->SetSelectedAnimatorState(selectedEntity, layerIndex, stateIndex);
+                            if (stateIndex >= 0)
+                                inspector->BringToFront();
+                        }
+                    }
+                },
+                [this](Entity selectedEntity, int layerIndex, int transitionIndex)
+                {
+                    for (UI::InspectorPanel* inspector : m_InspectorPanels)
+                    {
+                        if (inspector && inspector->IsVisible())
+                        {
+                            inspector->SetSelectedAnimatorTransition(selectedEntity, layerIndex, transitionIndex);
+                            if (transitionIndex >= 0)
+                                inspector->BringToFront();
+                        }
                     }
                 }
             });
-        m_AnimatorGraphPanel->SetOnTransitionSelected([this](Entity entity, int layerIndex, int transitionIndex)
-            {
-                for (UI::InspectorPanel* inspector : m_InspectorPanels)
-                {
-                    if (inspector && inspector->IsVisible())
-                    {
-                        inspector->SetSelectedAnimatorTransition(entity, layerIndex, transitionIndex);
-                        if (transitionIndex >= 0)
-                            inspector->BringToFront();
-                    }
-                }
-            });
-
-        if (m_AnimatorGraphPanel->GetOwnerWindow() && !m_AnimatorGraphPanel->GetOwnerWindow()->ShouldClose())
-        {
-            // 멀티 윈도우에 이미 떠 있는 그래프는 정상 상태다.
-            // parent가 null이라는 이유만으로 새 패널을 만들면 같은 그래프 창이 여러 개 생긴다.
-            m_AnimatorGraphPanel->SetTarget(entity);
-            m_AnimatorGraphPanel->SetVisible(true);
-            UI::Widget::SetKeyboardFocus(m_AnimatorGraphPanel);
-            return;
-        }
-
-        if (m_AnimatorGraphPanel->GetParent() != m_RootUI)
-            m_RootUI->AddChild(m_AnimatorGraphPanel);
-
-        m_AnimatorGraphPanel->SetOwnerWindow(nullptr);
-        m_AnimatorGraphPanel->SetAnchorMin(0.0f, 0.0f);
-        m_AnimatorGraphPanel->SetAnchorMax(0.0f, 0.0f);
-        m_AnimatorGraphPanel->SetOffsetMin(300.0f, 120.0f);
-        m_AnimatorGraphPanel->SetOffsetMax(1120.0f, 700.0f);
-        m_AnimatorGraphPanel->SetDockingEnabled(true);
-        m_AnimatorGraphPanel->SetTarget(entity);
         BringEditorOverlaysToFront();
     }
 
@@ -5433,24 +5285,29 @@ namespace CCEngine {
         m_BtnToolScale->SetOffsetMin(112.0f, -12.0f); m_BtnToolScale->SetOffsetMax(142.0f, 12.0f);
         m_ToolbarPanel->AddChild(m_BtnToolScale);
 
+        m_BtnToolCollider = new UI::Button("BtnToolCollider", "C");
+        m_BtnToolCollider->SetAnchorMin(0.0f, 0.5f); m_BtnToolCollider->SetAnchorMax(0.0f, 0.5f);
+        m_BtnToolCollider->SetOffsetMin(146.0f, -12.0f); m_BtnToolCollider->SetOffsetMax(176.0f, 12.0f);
+        m_ToolbarPanel->AddChild(m_BtnToolCollider);
+
         m_BtnToolSpace = new UI::Button("BtnToolSpace", "Local");
         m_BtnToolSpace->SetAnchorMin(0.0f, 0.5f); m_BtnToolSpace->SetAnchorMax(0.0f, 0.5f);
-        m_BtnToolSpace->SetOffsetMin(154.0f, -12.0f); m_BtnToolSpace->SetOffsetMax(224.0f, 12.0f);
+        m_BtnToolSpace->SetOffsetMin(188.0f, -12.0f); m_BtnToolSpace->SetOffsetMax(258.0f, 12.0f);
         m_ToolbarPanel->AddChild(m_BtnToolSpace);
 
         m_BtnToolPivot = new UI::Button("BtnToolPivot", "Pivot");
         m_BtnToolPivot->SetAnchorMin(0.0f, 0.5f); m_BtnToolPivot->SetAnchorMax(0.0f, 0.5f);
-        m_BtnToolPivot->SetOffsetMin(228.0f, -12.0f); m_BtnToolPivot->SetOffsetMax(298.0f, 12.0f);
+        m_BtnToolPivot->SetOffsetMin(262.0f, -12.0f); m_BtnToolPivot->SetOffsetMax(332.0f, 12.0f);
         m_ToolbarPanel->AddChild(m_BtnToolPivot);
 
         m_BtnToolSnap = new UI::Button("BtnToolSnap", "Snap");
         m_BtnToolSnap->SetAnchorMin(0.0f, 0.5f); m_BtnToolSnap->SetAnchorMax(0.0f, 0.5f);
-        m_BtnToolSnap->SetOffsetMin(302.0f, -12.0f); m_BtnToolSnap->SetOffsetMax(358.0f, 12.0f);
+        m_BtnToolSnap->SetOffsetMin(336.0f, -12.0f); m_BtnToolSnap->SetOffsetMax(392.0f, 12.0f);
         m_ToolbarPanel->AddChild(m_BtnToolSnap);
 
         m_BtnToolFrame = new UI::Button("BtnToolFrame", "Frame");
         m_BtnToolFrame->SetAnchorMin(0.0f, 0.5f); m_BtnToolFrame->SetAnchorMax(0.0f, 0.5f);
-        m_BtnToolFrame->SetOffsetMin(362.0f, -12.0f); m_BtnToolFrame->SetOffsetMax(424.0f, 12.0f);
+        m_BtnToolFrame->SetOffsetMin(396.0f, -12.0f); m_BtnToolFrame->SetOffsetMax(458.0f, 12.0f);
         m_ToolbarPanel->AddChild(m_BtnToolFrame);
 
         m_BtnPhysicsDebug = new UI::Button("BtnPhysicsDebug", "Physics: Off");
@@ -5908,6 +5765,7 @@ namespace CCEngine {
         m_BtnToolMove->SetOnClick([this]() { m_GizmoSystem.SetMode(GizmoMode::Translate); UpdateSceneToolButtons(); });
         m_BtnToolRotate->SetOnClick([this]() { m_GizmoSystem.SetMode(GizmoMode::Rotate); UpdateSceneToolButtons(); });
         m_BtnToolScale->SetOnClick([this]() { m_GizmoSystem.SetMode(GizmoMode::Scale); UpdateSceneToolButtons(); });
+        m_BtnToolCollider->SetOnClick([this]() { m_GizmoSystem.SetMode(GizmoMode::Collider); UpdateSceneToolButtons(); });
         m_BtnToolSpace->SetOnClick([this]() { m_GizmoSystem.ToggleSpace(); UpdateSceneToolButtons(); });
         m_BtnToolPivot->SetOnClick([this]() { m_GizmoSystem.TogglePivotMode(); UpdateSceneToolButtons(); });
         m_BtnToolSnap->SetOnClick([this]() { m_GizmoSystem.ToggleSnapping(); UpdateSceneToolButtons(); });

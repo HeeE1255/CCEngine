@@ -96,7 +96,13 @@
     <ClInclude Include="src\Editor\AssetFileWatcher.h">
       <Filter>src\Editor</Filter>
     </ClInclude>
+    <ClInclude Include="src\Editor\AssetPickerService.h">
+      <Filter>src\Editor</Filter>
+    </ClInclude>
     <ClInclude Include="src\Editor\AssetUndoManager.h">
+      <Filter>src\Editor</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Editor\AnimatorEditorService.h">
       <Filter>src\Editor</Filter>
     </ClInclude>
     <ClInclude Include="src\Editor\EditorCamera.h">
@@ -258,6 +264,9 @@
     <ClInclude Include="src\UI\AssetBrowserPanel.h">
       <Filter>src\UI</Filter>
     </ClInclude>
+    <ClInclude Include="src\UI\AssetBrowserPickerState.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
     <ClInclude Include="src\UI\AssetReferenceValidatorPanel.h">
       <Filter>src\UI</Filter>
     </ClInclude>
@@ -313,6 +322,9 @@
       <Filter>src\UI</Filter>
     </ClInclude>
     <ClInclude Include="src\UI\AnimatorGraphPanel.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
+    <ClInclude Include="src\UI\AnimatorInspectorWidgets.h">
       <Filter>src\UI</Filter>
     </ClInclude>
     <ClInclude Include="src\UI\Panel.h">
@@ -386,7 +398,13 @@
     <ClCompile Include="src\Editor\AssetFileWatcher.cpp">
       <Filter>src\Editor</Filter>
     </ClCompile>
+    <ClCompile Include="src\Editor\AssetPickerService.cpp">
+      <Filter>src\Editor</Filter>
+    </ClCompile>
     <ClCompile Include="src\Editor\AssetUndoManager.cpp">
+      <Filter>src\Editor</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Editor\AnimatorEditorService.cpp">
       <Filter>src\Editor</Filter>
     </ClCompile>
     <ClCompile Include="src\Editor\EditorCamera.cpp">
@@ -521,6 +539,9 @@
     <ClCompile Include="src\UI\AssetBrowserPanel.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
+    <ClCompile Include="src\UI\AssetBrowserPicker.cpp">
+      <Filter>src\UI</Filter>
+    </ClCompile>
     <ClCompile Include="src\UI\AssetReferenceValidatorPanel.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
@@ -555,6 +576,9 @@
       <Filter>src\UI</Filter>
     </ClCompile>
     <ClCompile Include="src\UI\InspectorItem.cpp">
+      <Filter>src\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UI\InspectorAnimator.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
     <ClCompile Include="src\UI\InspectorPanel.cpp">

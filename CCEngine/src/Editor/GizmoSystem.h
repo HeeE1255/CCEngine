@@ -15,7 +15,8 @@ namespace CCEngine {
         None = 0,
         Translate, // 이동 (W)
         Rotate,    // 회전 (E)
-        Scale      // 크기 (R)
+        Scale,     // 크기 (R)
+        Collider   // Collider 형상 편집
     };
 
     enum class GizmoSpace 
@@ -39,7 +40,7 @@ namespace CCEngine {
         void Init();
 
         // 상태 관리
-        void SetMode(GizmoMode mode) { m_Mode = mode; }
+        void SetMode(GizmoMode mode);
         GizmoMode GetMode() const { return m_Mode; }
         bool IsDragging() const { return m_IsDragging; }
 
@@ -72,6 +73,11 @@ namespace CCEngine {
         void ToggleSnapping() { m_SnappingEnabled = !m_SnappingEnabled; }
 
     private:
+        void RenderBoxColliderGizmo(Entity entity, DirectX::XMMATRIX viewMatrix);
+        bool HandleBoxColliderEvent(Event& e, Entity entity,
+            DirectX::XMMATRIX viewMatrix, DirectX::XMMATRIX projMatrix,
+            float viewportWidth, float viewportHeight, float viewportX, float viewportY);
+
         std::shared_ptr<Shader> m_GizmoShader;
 
         GizmoMode m_Mode = GizmoMode::Translate;
@@ -102,6 +108,15 @@ namespace CCEngine {
             DirectX::XMMATRIX ParentWorld = DirectX::XMMatrixIdentity();
         };
         std::vector<DragTarget> m_DragTargets;
+
+        int m_HoveredColliderHandle = -1;
+        int m_ActiveColliderHandle = -1;
+        DirectX::XMFLOAT3 m_OriginalColliderOffset = { 0.0f, 0.0f, 0.0f };
+        DirectX::XMFLOAT3 m_OriginalColliderSize = { 1.0f, 1.0f, 1.0f };
+        DirectX::XMFLOAT3 m_ColliderDragAxis = { 0.0f, 0.0f, 0.0f };
+        DirectX::XMFLOAT3 m_ColliderDragPlaneNormal = { 0.0f, 0.0f, 1.0f };
+        DirectX::XMFLOAT3 m_ColliderDragStartHit = { 0.0f, 0.0f, 0.0f };
+        float m_ColliderAxisWorldScale = 1.0f;
 
     };
 
