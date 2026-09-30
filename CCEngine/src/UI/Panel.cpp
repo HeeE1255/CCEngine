@@ -32,5 +32,10 @@ namespace CCEngine {
             Widget::OnRender();
         }
 
+        bool Panel::OnKeyPressed(KeyPressedEvent& e)
+        {
+            return m_OnKeyPressed ? m_OnKeyPressed(e) : false;
+        }
+
     }
 }

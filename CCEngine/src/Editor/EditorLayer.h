@@ -88,6 +88,7 @@ namespace CCEngine {
         void DeleteSelectedObject();
         void DuplicateSelectedObject();
         void HandleShortcuts();
+        bool HandleGlobalKeyPressed(KeyPressedEvent& e);
         void ConfigureUndoManager();
         UI::AssetBrowserPanel* FindAssetBrowserAt(float mouseX, float mouseY) const;
         void RememberActiveAssetBrowserFromMouse(float mouseX, float mouseY);
@@ -105,6 +106,8 @@ namespace CCEngine {
         void UpdatePlayModeButtons();
         void FrameSelectedEntity();
         void UpdateSceneToolButtons();
+        void ConfigureColliderEditCallbacks(UI::InspectorPanel* inspector);
+        void RefreshColliderEditInspectors();
         void SetCurrentSceneAsProjectStartScene();
         void OpenProjectStartScene();
         void SaveProjectSettings();

@@ -63,6 +63,8 @@ namespace CCEngine::UI
     bool TextInput::OnKeyPressed(KeyPressedEvent& e)
     {
         if (!IsKeyboardFocusOwner(this)) return false;
+        // 입력칸 자체 Undo를 지원하지 않는 동안에는 편집기 전역 단축키를 가로채지 않는다.
+        if (e.IsControlDown()) return false;
         if (e.GetKeyCode() == 8 && !m_Text.empty())
         {
             m_Text.pop_back();

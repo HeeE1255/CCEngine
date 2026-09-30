@@ -154,6 +154,9 @@ namespace CCEngine::UI
         if (!m_IsEditing || !IsKeyboardFocusOwner(this))
             return false;
 
+        if (e.IsControlDown())
+            return false;
+
         if (e.GetKeyCode() == 8 && !m_InputBuffer.empty())
             m_InputBuffer.pop_back();
         else if (e.GetKeyCode() == 13)

@@ -615,6 +615,72 @@ namespace CCEngine {
                 item->AddChild(button);
             }
 
+            void AddColliderEditButton(UI::Widget* parent, UI::InspectorItem* item, Entity entity,
+                UI::InspectorPanel::ColliderEditShape shape)
+            {
+                auto* inspector = dynamic_cast<UI::InspectorPanel*>(parent);
+                auto* button = new UI::Button("BtnEditCollider", "Edit Collider");
+                const bool active = inspector && inspector->IsColliderEditActive(entity, shape);
+                button->SetActive(active);
+                button->SetText(active ? "Editing Collider" : "Edit Collider");
+                button->SetOnClick([inspector, entity, shape]() mutable
+                    {
+                        if (!inspector || !entity)
+                            return;
+
+                        inspector->ToggleColliderEdit(entity, shape);
+                        inspector->RequestRebuild();
+                    });
+                item->AddChild(button);
+            }
+
+            void AddColliderSnapControls(UI::Widget* parent, UI::InspectorItem* item, Entity entity,
+                UI::InspectorPanel::ColliderEditShape shape, const std::string& prefix)
+            {
+                auto* inspector = dynamic_cast<UI::InspectorPanel*>(parent);
+                if (!inspector || !inspector->IsColliderEditActive(entity, shape))
+                    return;
+
+                auto* toggle = new UI::Button(prefix + "SnapToggle",
+                    inspector->IsColliderSnapEnabled() ? "Collider Snap: On" : "Collider Snap: Off");
+                toggle->SetActive(inspector->IsColliderSnapEnabled());
+                toggle->SetOnClick([inspector, toggle]()
+                    {
+                        const bool enabled = !inspector->IsColliderSnapEnabled();
+                        inspector->SetColliderSnapEnabled(enabled);
+                        toggle->SetActive(enabled);
+                        toggle->SetText(enabled ? "Collider Snap: On" : "Collider Snap: Off");
+                    });
+                item->AddChild(toggle);
+
+                auto addStep = [inspector, item, &prefix](UI::InspectorPanel::ColliderSnapValue value,
+                    const std::string& suffix, const std::string& label)
+                    {
+                        UI::InspectorUtils::AddDragFloat(item, prefix + suffix, label,
+                            [inspector, value]() { return inspector->GetColliderSnapStep(value); },
+                            [inspector, value](float step)
+                            {
+                                inspector->SetColliderSnapStep(value, (std::max)(0.001f, std::abs(step)));
+                            });
+                    };
+
+                if (shape == UI::InspectorPanel::ColliderEditShape::Box)
+                {
+                    addStep(UI::InspectorPanel::ColliderSnapValue::Size, "SizeStep", "Size Step");
+                }
+                else if (shape == UI::InspectorPanel::ColliderEditShape::Sphere)
+                {
+                    addStep(UI::InspectorPanel::ColliderSnapValue::Offset, "OffsetStep", "Offset Step");
+                    addStep(UI::InspectorPanel::ColliderSnapValue::Radius, "RadiusStep", "Radius Step");
+                }
+                else
+                {
+                    addStep(UI::InspectorPanel::ColliderSnapValue::Offset, "OffsetStep", "Offset Step");
+                    addStep(UI::InspectorPanel::ColliderSnapValue::Radius, "RadiusStep", "Radius Step");
+                    addStep(UI::InspectorPanel::ColliderSnapValue::Height, "HeightStep", "Height Step");
+                }
+            }
+
             std::string GetScriptFieldValue(const ScriptComponent& script, const ScriptFieldInfo& field)
             {
                 auto it = script.FieldOverrides.find(field.Name);
@@ -2136,6 +2202,9 @@ namespace CCEngine {
                         [entity]() mutable { return entity.GetComponent<BoxCollider3DComponent>().Size; },
                         [entity](DirectX::XMFLOAT3 v) mutable { entity.GetComponent<BoxCollider3DComponent>().Size = v; });
 
+                    AddColliderEditButton(parent, item, entity, UI::InspectorPanel::ColliderEditShape::Box);
+                    AddColliderSnapControls(parent, item, entity, UI::InspectorPanel::ColliderEditShape::Box, "BoxCollider3D");
+
                     auto btnTrigger = new UI::Button("BoxCollider3DTrigger", collider.IsTrigger ? "Is Trigger: On" : "Is Trigger: Off");
                     btnTrigger->SetActive(collider.IsTrigger);
                     btnTrigger->SetOnClick([entity, btnTrigger]() mutable
@@ -2162,6 +2231,9 @@ namespace CCEngine {
                     UI::InspectorUtils::AddDragFloat(item, "SphereCollider3DRadius", "Radius",
                         [entity]() mutable { return entity.GetComponent<SphereCollider3DComponent>().Radius; },
                         [entity](float v) mutable { entity.GetComponent<SphereCollider3DComponent>().Radius = std::max(0.01f, v); });
+
+                    AddColliderEditButton(parent, item, entity, UI::InspectorPanel::ColliderEditShape::Sphere);
+                    AddColliderSnapControls(parent, item, entity, UI::InspectorPanel::ColliderEditShape::Sphere, "SphereCollider3D");
 
                     auto btnTrigger = new UI::Button("SphereCollider3DTrigger", collider.IsTrigger ? "Is Trigger: On" : "Is Trigger: Off");
                     btnTrigger->SetActive(collider.IsTrigger);
@@ -2192,6 +2264,9 @@ namespace CCEngine {
                     UI::InspectorUtils::AddDragFloat(item, "CylinderCollider3DHeight", "Height",
                         [entity]() mutable { return entity.GetComponent<CylinderCollider3DComponent>().Height; },
                         [entity](float v) mutable { entity.GetComponent<CylinderCollider3DComponent>().Height = std::max(0.01f, v); });
+
+                    AddColliderEditButton(parent, item, entity, UI::InspectorPanel::ColliderEditShape::Cylinder);
+                    AddColliderSnapControls(parent, item, entity, UI::InspectorPanel::ColliderEditShape::Cylinder, "CylinderCollider3D");
 
                     auto btnTrigger = new UI::Button("CylinderCollider3DTrigger", collider.IsTrigger ? "Is Trigger: On" : "Is Trigger: Off");
                     btnTrigger->SetActive(collider.IsTrigger);

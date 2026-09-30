@@ -5,6 +5,7 @@
 #include "Events/MouseEvent.h"
 #include "Renderer/Shader.h"
 #include <DirectXMath.h>
+#include <string>
 #include <vector>
 
 namespace CCEngine {
@@ -31,8 +32,28 @@ namespace CCEngine {
         Center
     };
 
+    enum class ColliderEditShape
+    {
+        Auto = 0,
+        Box,
+        Sphere,
+        Cylinder
+    };
+
+    enum class ColliderSnapValue
+    {
+        Offset = 0,
+        Size,
+        Radius,
+        Height
+    };
+
+    CC_API bool RunColliderGizmoRegressionChecks(std::string& message);
+
     class CC_API GizmoSystem 
     {
+        friend CC_API bool RunColliderGizmoRegressionChecks(std::string& message);
+
     public:
         GizmoSystem() = default;
         ~GizmoSystem() = default;
@@ -71,12 +92,31 @@ namespace CCEngine {
         void SetSnappingEnabled(bool enabled) { m_SnappingEnabled = enabled; }
         bool IsSnappingEnabled() const { return m_SnappingEnabled; }
         void ToggleSnapping() { m_SnappingEnabled = !m_SnappingEnabled; }
+        float GetColliderSnapStep(ColliderSnapValue value) const;
+        void SetColliderSnapStep(ColliderSnapValue value, float step);
+        void SetColliderEditTarget(Entity entity, ColliderEditShape shape);
+        void ClearColliderEditTarget();
+        bool IsColliderEditTarget(Entity entity, ColliderEditShape shape) const;
 
     private:
-        void RenderBoxColliderGizmo(Entity entity, DirectX::XMMATRIX viewMatrix);
+        void RenderBoxColliderGizmo(Entity entity, DirectX::XMMATRIX viewMatrix, bool showHandles = true);
         bool HandleBoxColliderEvent(Event& e, Entity entity,
             DirectX::XMMATRIX viewMatrix, DirectX::XMMATRIX projMatrix,
             float viewportWidth, float viewportHeight, float viewportX, float viewportY);
+        void RenderSphereColliderGizmo(Entity entity, DirectX::XMMATRIX viewMatrix, bool showHandles = true);
+        bool HandleSphereColliderEvent(Event& e, Entity entity,
+            DirectX::XMMATRIX viewMatrix, DirectX::XMMATRIX projMatrix,
+            float viewportWidth, float viewportHeight, float viewportX, float viewportY);
+        void RenderCylinderColliderGizmo(Entity entity, DirectX::XMMATRIX viewMatrix, bool showHandles = true);
+        bool HandleCylinderColliderEvent(Event& e, Entity entity,
+            DirectX::XMMATRIX viewMatrix, DirectX::XMMATRIX projMatrix,
+            float viewportWidth, float viewportHeight, float viewportX, float viewportY);
+        ColliderEditShape ResolveColliderEditShape(Entity entity) const;
+        bool HasColliderShape(Entity entity, ColliderEditShape shape) const;
+        void CaptureColliderDragTargets(const std::vector<Entity>& selectedEntities, Entity activeEntity,
+            ColliderEditShape shape);
+        void ApplyColliderDragTargets(ColliderEditShape shape, int handle,
+            const DirectX::XMFLOAT3& localDelta, float axisDelta);
 
         std::shared_ptr<Shader> m_GizmoShader;
 
@@ -87,6 +127,10 @@ namespace CCEngine {
         float m_TranslateSnapStep = 0.5f;
         float m_RotateSnapStepRadians = DirectX::XMConvertToRadians(15.0f);
         float m_ScaleSnapStep = 0.25f;
+        float m_ColliderOffsetSnapStep = 0.1f;
+        float m_ColliderSizeSnapStep = 0.1f;
+        float m_ColliderRadiusSnapStep = 0.1f;
+        float m_ColliderHeightSnapStep = 0.1f;
 
         // 향후 마우스 드래그를 위해 저장해둘 변수들
         bool m_IsDragging = false;
@@ -109,10 +153,28 @@ namespace CCEngine {
         };
         std::vector<DragTarget> m_DragTargets;
 
+        struct ColliderDragTarget
+        {
+            Entity Target;
+            DirectX::XMFLOAT3 OriginalOffset = { 0.0f, 0.0f, 0.0f };
+            DirectX::XMFLOAT3 OriginalSize = { 1.0f, 1.0f, 1.0f };
+            float OriginalRadius = 0.5f;
+            float OriginalHeight = 1.0f;
+        };
+        std::vector<ColliderDragTarget> m_ColliderDragTargets;
+        std::vector<Entity> m_ColliderSelection;
+
         int m_HoveredColliderHandle = -1;
+        Entity m_HoveredColliderEntity;
         int m_ActiveColliderHandle = -1;
+        int m_SelectedColliderHandle = -1;
+        Entity m_SelectedColliderEntity;
+        Entity m_ColliderEditEntity;
+        ColliderEditShape m_ColliderEditShape = ColliderEditShape::Auto;
         DirectX::XMFLOAT3 m_OriginalColliderOffset = { 0.0f, 0.0f, 0.0f };
         DirectX::XMFLOAT3 m_OriginalColliderSize = { 1.0f, 1.0f, 1.0f };
+        float m_OriginalColliderRadius = 0.5f;
+        float m_OriginalColliderHeight = 1.0f;
         DirectX::XMFLOAT3 m_ColliderDragAxis = { 0.0f, 0.0f, 0.0f };
         DirectX::XMFLOAT3 m_ColliderDragPlaneNormal = { 0.0f, 0.0f, 1.0f };
         DirectX::XMFLOAT3 m_ColliderDragStartHit = { 0.0f, 0.0f, 0.0f };

@@ -20,6 +20,9 @@ namespace CCEngine
         class CC_API InspectorPanel : public WindowPanel
         {
         public:
+            enum class ColliderEditShape { Box, Sphere, Cylinder };
+            enum class ColliderSnapValue { Offset, Size, Radius, Height };
+
             InspectorPanel(const std::string& name, const std::string& title);
             ~InspectorPanel() override;
             static void ShutdownSharedCaches();
@@ -57,6 +60,51 @@ namespace CCEngine
             void SetAnimatorClipPickRequestedCallback(std::function<void(Entity, int, int)> callback)
             {
                 m_OnAnimatorClipPickRequested = std::move(callback);
+            }
+            void SetColliderEditCallbacks(
+                std::function<bool(Entity, ColliderEditShape)> isActive,
+                std::function<void(Entity, ColliderEditShape)> toggle)
+            {
+                m_IsColliderEditActive = std::move(isActive);
+                m_OnToggleColliderEdit = std::move(toggle);
+            }
+            void SetColliderSnapCallbacks(
+                std::function<bool()> isEnabled,
+                std::function<void(bool)> setEnabled,
+                std::function<float(ColliderSnapValue)> getStep,
+                std::function<void(ColliderSnapValue, float)> setStep)
+            {
+                m_IsColliderSnapEnabled = std::move(isEnabled);
+                m_SetColliderSnapEnabled = std::move(setEnabled);
+                m_GetColliderSnapStep = std::move(getStep);
+                m_SetColliderSnapStep = std::move(setStep);
+            }
+            bool IsColliderEditActive(Entity entity, ColliderEditShape shape) const
+            {
+                return m_IsColliderEditActive && m_IsColliderEditActive(entity, shape);
+            }
+            void ToggleColliderEdit(Entity entity, ColliderEditShape shape)
+            {
+                if (m_OnToggleColliderEdit)
+                    m_OnToggleColliderEdit(entity, shape);
+            }
+            bool IsColliderSnapEnabled() const
+            {
+                return m_IsColliderSnapEnabled && m_IsColliderSnapEnabled();
+            }
+            void SetColliderSnapEnabled(bool enabled)
+            {
+                if (m_SetColliderSnapEnabled)
+                    m_SetColliderSnapEnabled(enabled);
+            }
+            float GetColliderSnapStep(ColliderSnapValue value) const
+            {
+                return m_GetColliderSnapStep ? m_GetColliderSnapStep(value) : 0.1f;
+            }
+            void SetColliderSnapStep(ColliderSnapValue value, float step)
+            {
+                if (m_SetColliderSnapStep)
+                    m_SetColliderSnapStep(value, step);
             }
             void SetSceneStructureChangeCallbacks(
                 std::function<void(const std::string&)> beginChange,
@@ -165,6 +213,12 @@ namespace CCEngine
             std::function<void(const std::filesystem::path&, RendererHandle)> m_OnMaterialPreviewTextureReady;
             std::function<void(const std::filesystem::path&)> m_OnOpenShaderEditor;
             std::function<void(Entity, int, int)> m_OnAnimatorClipPickRequested;
+            std::function<bool(Entity, ColliderEditShape)> m_IsColliderEditActive;
+            std::function<void(Entity, ColliderEditShape)> m_OnToggleColliderEdit;
+            std::function<bool()> m_IsColliderSnapEnabled;
+            std::function<void(bool)> m_SetColliderSnapEnabled;
+            std::function<float(ColliderSnapValue)> m_GetColliderSnapStep;
+            std::function<void(ColliderSnapValue, float)> m_SetColliderSnapStep;
             bool m_NeedsRebuild = false;
             bool m_MaterialSavePending = false;
             float m_MaterialSaveCountdown = 0.0f;

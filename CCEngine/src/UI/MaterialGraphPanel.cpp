@@ -737,8 +737,8 @@ namespace CCEngine::UI
         if (!IsVisible() || !Widget::IsKeyboardFocusOwner(this))
             return false;
 
-        const bool ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
-        const bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+        const bool ctrl = e.IsControlDown();
+        const bool shift = e.IsShiftDown();
         if (ctrl && e.GetKeyCode() == 'Z')
         {
             if (shift)

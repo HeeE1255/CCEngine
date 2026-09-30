@@ -478,6 +478,161 @@
             "ActiveComponent": {
                 "ActiveSelf": true
             },
+            "BoxCollider3DComponent": {
+                "IsTrigger": false,
+                "Offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "Size": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            },
+            "Entity": 1048586,
+            "MeshComponent": {
+                "BaseColor": [
+                    0.15,
+                    0.45,
+                    0.95,
+                    1.0
+                ],
+                "Type": 1
+            },
+            "TagComponent": {
+                "Tag": "3D Box Collider Pair B"
+            },
+            "TransformComponent": {
+                "QuaternionRotation": [
+                    0.0,
+                    0.2164396196603775,
+                    0.0,
+                    0.9762960071199334
+                ],
+                "Rotation": [
+                    0.0,
+                    0.4363323152065277,
+                    0.0
+                ],
+                "Scale": [
+                    1.1,
+                    1.1,
+                    1.1
+                ],
+                "Translation": [
+                    -3.2,
+                    0.2,
+                    4.0
+                ]
+            }
+        },
+        {
+            "ActiveComponent": {
+                "ActiveSelf": true
+            },
+            "Entity": 1048587,
+            "MeshComponent": {
+                "BaseColor": [
+                    0.9,
+                    0.45,
+                    0.2,
+                    1.0
+                ],
+                "Type": 2
+            },
+            "SphereCollider3DComponent": {
+                "IsTrigger": false,
+                "Offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "Radius": 0.5
+            },
+            "TagComponent": {
+                "Tag": "3D Sphere Collider Pair B"
+            },
+            "TransformComponent": {
+                "QuaternionRotation": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                ],
+                "Rotation": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "Scale": [
+                    1.2,
+                    1.2,
+                    1.2
+                ],
+                "Translation": [
+                    -1.35,
+                    0.2,
+                    4.0
+                ]
+            }
+        },
+        {
+            "ActiveComponent": {
+                "ActiveSelf": true
+            },
+            "CylinderCollider3DComponent": {
+                "Height": 1.0,
+                "IsTrigger": true,
+                "Offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "Radius": 0.5
+            },
+            "Entity": 1048588,
+            "MeshComponent": {
+                "BaseColor": [
+                    0.35,
+                    0.75,
+                    0.35,
+                    1.0
+                ],
+                "Type": 6
+            },
+            "TagComponent": {
+                "Tag": "3D Cylinder Trigger Pair B"
+            },
+            "TransformComponent": {
+                "QuaternionRotation": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                ],
+                "Rotation": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "Scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "Translation": [
+                    0.45,
+                    0.2,
+                    4.0
+                ]
+            }
+        },
+        {
+            "ActiveComponent": {
+                "ActiveSelf": true
+            },
             "Entity": 1048585,
             "MeshCollider3DComponent": {
                 "Convex": false,

@@ -6,17 +6,19 @@ namespace CCEngine
     class CC_API KeyPressedEvent : public Event
     {
     public:
-        explicit KeyPressedEvent(int keyCode, bool controlDown = false, bool shiftDown = false)
-            : m_KeyCode(keyCode), m_ControlDown(controlDown), m_ShiftDown(shiftDown) {}
+        explicit KeyPressedEvent(int keyCode, bool controlDown = false, bool shiftDown = false, bool repeat = false)
+            : m_KeyCode(keyCode), m_ControlDown(controlDown), m_ShiftDown(shiftDown), m_Repeat(repeat) {}
         int GetKeyCode() const { return m_KeyCode; }
         bool IsControlDown() const { return m_ControlDown; }
         bool IsShiftDown() const { return m_ShiftDown; }
+        bool IsRepeat() const { return m_Repeat; }
         EventType GetEventType() const override { return EventType::KeyPressed; }
 
     private:
         int m_KeyCode;
         bool m_ControlDown = false;
         bool m_ShiftDown = false;
+        bool m_Repeat = false;
     };
 
     class CC_API TextInputEvent : public Event

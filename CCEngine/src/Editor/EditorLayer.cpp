@@ -63,6 +63,59 @@ namespace CCEngine {
             double Milliseconds = 0.0;
         };
 
+        bool RunColliderUndoRegressionCheck(std::string& message)
+        {
+            Scene* scene = new Scene();
+            Entity selected = scene->CreateEntity("Collider Undo QA");
+            Entity secondary = scene->CreateEntity("Collider Undo QA Secondary");
+            selected.AddComponent<SphereCollider3DComponent>().Radius = 0.5f;
+            secondary.AddComponent<SphereCollider3DComponent>().Radius = 1.0f;
+
+            EditorUndoManager undo;
+            undo.SetCallbacks({
+                [&scene]() { return scene; },
+                [&scene](Scene* replacement)
+                {
+                    delete scene;
+                    scene = replacement;
+                },
+                [&selected]() { return selected; },
+                [&selected](Entity entity) { selected = entity; },
+                []() { return false; },
+                []() { return false; },
+                []() {}
+            });
+
+            undo.BeginSceneStructureChange("Edit Collider");
+            selected.GetComponent<SphereCollider3DComponent>().Radius = 0.75f;
+            secondary.GetComponent<SphereCollider3DComponent>().Radius = 1.25f;
+            undo.CommitSceneStructureChange();
+            bool recordedOnce = undo.GetSceneUndoStack().size() == 1;
+
+            undo.Undo();
+            Entity undoPrimary = scene->FindEntityByName("Collider Undo QA");
+            Entity undoSecondary = scene->FindEntityByName("Collider Undo QA Secondary");
+            bool undoRestored = undoPrimary && undoSecondary &&
+                std::abs(undoPrimary.GetComponent<SphereCollider3DComponent>().Radius - 0.5f) <= 0.0001f &&
+                std::abs(undoSecondary.GetComponent<SphereCollider3DComponent>().Radius - 1.0f) <= 0.0001f;
+            undo.Redo();
+            Entity redoPrimary = scene->FindEntityByName("Collider Undo QA");
+            Entity redoSecondary = scene->FindEntityByName("Collider Undo QA Secondary");
+            bool redoRestored = redoPrimary && redoSecondary &&
+                std::abs(redoPrimary.GetComponent<SphereCollider3DComponent>().Radius - 0.75f) <= 0.0001f &&
+                std::abs(redoSecondary.GetComponent<SphereCollider3DComponent>().Radius - 1.25f) <= 0.0001f;
+
+            delete scene;
+            if (!recordedOnce || !undoRestored || !redoRestored)
+            {
+                message = "Collider drag was not recorded as one Undo command or did not restore Radius.";
+                return false;
+            }
+
+            message = "One Collider edit Undo/Redo restored both selected objects.";
+            return true;
+        }
+
         double ToMilliseconds(std::chrono::steady_clock::duration duration)
         {
             return std::chrono::duration<double, std::milli>(duration).count();
@@ -693,6 +746,27 @@ namespace CCEngine {
             {
                 bool created = CreateAnimatorStateMachineTestScene();
                 app->SetExitCode(created ? 0 : 1);
+                if (app->HasCommandLineFlag("--exit"))
+                    app->GetWindow().SetShouldClose(true);
+                return;
+            }
+
+            if (app->HasCommandLineFlag("--run-collider-gizmo-qa"))
+            {
+                std::string message;
+                bool passed = RunColliderGizmoRegressionChecks(message);
+                if (passed)
+                {
+                    std::string undoMessage;
+                    passed = RunColliderUndoRegressionCheck(undoMessage);
+                    message += " " + undoMessage;
+                }
+                if (passed)
+                    ConsoleLog::Info("[PASS] ColliderGizmo.Editing - " + message);
+                else
+                    ConsoleLog::Error("[FAIL] ColliderGizmo.Editing - " + message);
+                printf("[%s] ColliderGizmo.Editing - %s\n", passed ? "PASS" : "FAIL", message.c_str());
+                app->SetExitCode(passed ? 0 : 1);
                 if (app->HasCommandLineFlag("--exit"))
                     app->GetWindow().SetShouldClose(true);
                 return;
@@ -1422,6 +1496,14 @@ namespace CCEngine {
 
             if ((isInsideViewport && viewportIsTopmost) || m_GizmoSystem.IsDragging())
             {
+                if (e.GetEventType() == EventType::MouseButtonPressed &&
+                    static_cast<MouseButtonPressedEvent&>(e).GetButton() == 0)
+                {
+                    // 씬 조작을 시작하면 이전 Inspector 입력칸의 포커스를 끝낸다.
+                    // 그래야 바로 이어서 누른 Ctrl+Z/Y가 입력칸에 흡수되지 않는다.
+                    UI::Widget::ClearKeyboardFocus(nullptr);
+                }
+
                 auto selectedEntity = m_HierarchyPanel->GetSelectedEntity();
                 auto selectedEntities = m_HierarchyPanel->GetSelectedEntities();
                 bool wasDragging = m_GizmoSystem.IsDragging();
@@ -1430,7 +1512,7 @@ namespace CCEngine {
 
                 if (!wasDragging && isDragging && m_GizmoSystem.GetMode() == GizmoMode::Collider && !m_IsColliderEditUndoOpen)
                 {
-                    m_UndoManager.BeginSceneStructureChange("Edit Box Collider");
+                    m_UndoManager.BeginSceneStructureChange("Edit Collider");
                     m_IsColliderEditUndoOpen = true;
                 }
                 else if (wasDragging && !isDragging && m_IsColliderEditUndoOpen)
@@ -1972,6 +2054,86 @@ namespace CCEngine {
         UpdatePhysicsDebugButton();
         UpdateRootMotionDebugButton();
         UpdateColliderOutlineButton();
+    }
+
+    void EditorLayer::ConfigureColliderEditCallbacks(UI::InspectorPanel* inspector)
+    {
+        if (!inspector)
+            return;
+
+        auto toGizmoShape = [](UI::InspectorPanel::ColliderEditShape shape)
+        {
+            switch (shape)
+            {
+                case UI::InspectorPanel::ColliderEditShape::Box: return ColliderEditShape::Box;
+                case UI::InspectorPanel::ColliderEditShape::Sphere: return ColliderEditShape::Sphere;
+                case UI::InspectorPanel::ColliderEditShape::Cylinder: return ColliderEditShape::Cylinder;
+                default: return ColliderEditShape::Auto;
+            }
+        };
+
+        auto toGizmoSnapValue = [](UI::InspectorPanel::ColliderSnapValue value)
+        {
+            switch (value)
+            {
+                case UI::InspectorPanel::ColliderSnapValue::Offset: return ColliderSnapValue::Offset;
+                case UI::InspectorPanel::ColliderSnapValue::Size: return ColliderSnapValue::Size;
+                case UI::InspectorPanel::ColliderSnapValue::Radius: return ColliderSnapValue::Radius;
+                case UI::InspectorPanel::ColliderSnapValue::Height: return ColliderSnapValue::Height;
+                default: return ColliderSnapValue::Offset;
+            }
+        };
+
+        inspector->SetColliderEditCallbacks(
+            [this, toGizmoShape](Entity entity, UI::InspectorPanel::ColliderEditShape shape)
+            {
+                return m_GizmoSystem.IsColliderEditTarget(entity, toGizmoShape(shape));
+            },
+            [this, toGizmoShape](Entity entity, UI::InspectorPanel::ColliderEditShape shape)
+            {
+                const ColliderEditShape targetShape = toGizmoShape(shape);
+                const bool wasEditingTarget = m_GizmoSystem.IsColliderEditTarget(entity, targetShape);
+                if (wasEditingTarget)
+                {
+                    m_GizmoSystem.SetMode(GizmoMode::Translate);
+                }
+                else
+                {
+                    m_GizmoSystem.SetMode(GizmoMode::Collider);
+                    m_GizmoSystem.SetColliderEditTarget(entity, targetShape);
+                    // 인스펙터 버튼은 편집 대상을 정할 뿐, 하이어라키의 다중 선택을 바꾸면 안 된다.
+                    // 활성 오브젝트의 손잡이 하나를 움직이면 같은 형상의 선택 대상들이 함께 편집된다.
+                }
+
+                UpdateSceneToolButtons();
+                RefreshColliderEditInspectors();
+            });
+
+        inspector->SetColliderSnapCallbacks(
+            [this]() { return m_GizmoSystem.IsSnappingEnabled(); },
+            [this](bool enabled)
+            {
+                m_GizmoSystem.SetSnappingEnabled(enabled);
+                UpdateSceneToolButtons();
+                RefreshColliderEditInspectors();
+            },
+            [this, toGizmoSnapValue](UI::InspectorPanel::ColliderSnapValue value)
+            {
+                return m_GizmoSystem.GetColliderSnapStep(toGizmoSnapValue(value));
+            },
+            [this, toGizmoSnapValue](UI::InspectorPanel::ColliderSnapValue value, float step)
+            {
+                m_GizmoSystem.SetColliderSnapStep(toGizmoSnapValue(value), step);
+            });
+    }
+
+    void EditorLayer::RefreshColliderEditInspectors()
+    {
+        for (UI::InspectorPanel* inspector : m_InspectorPanels)
+        {
+            if (inspector)
+                inspector->RequestRebuild();
+        }
     }
 
     void EditorLayer::CyclePhysicsDebugViewMode()
@@ -2709,6 +2871,20 @@ namespace CCEngine {
                 result.Name = "Editor.Scene.Exists";
                 result.Passed = m_ActiveScene != nullptr;
                 result.Message = result.Passed ? "Active scene is ready." : "Active scene is null.";
+                return result;
+            });
+
+        runner.AddTest("ColliderGizmo.Editing", []()
+            {
+                EditorQATestResult result;
+                result.Name = "ColliderGizmo.Editing";
+                result.Passed = RunColliderGizmoRegressionChecks(result.Message);
+                if (result.Passed)
+                {
+                    std::string undoMessage;
+                    result.Passed = RunColliderUndoRegressionCheck(undoMessage);
+                    result.Message += " " + undoMessage;
+                }
                 return result;
             });
 
@@ -4307,15 +4483,11 @@ namespace CCEngine {
         bool isShiftPressed = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
         bool isSPressedNow = (GetAsyncKeyState('S') & 0x8000) != 0;
         static bool s_IsOPressedLastFrame = false;
-        static bool s_IsZPressedLastFrame = false;
-        static bool s_IsYPressedLastFrame = false;
         static bool s_IsDPressedLastFrame = false;
         static bool s_IsFPressedLastFrame = false;
         static bool s_IsXPressedLastFrame = false;
         static bool s_IsVPressedLastFrame = false;
         bool isOPressedNow = (GetAsyncKeyState('O') & 0x8000) != 0;
-        bool isZPressedNow = (GetAsyncKeyState('Z') & 0x8000) != 0;
-        bool isYPressedNow = (GetAsyncKeyState('Y') & 0x8000) != 0;
         bool isDPressedNow = (GetAsyncKeyState('D') & 0x8000) != 0;
         bool isFPressedNow = (GetAsyncKeyState('F') & 0x8000) != 0;
         bool isXPressedNow = (GetAsyncKeyState('X') & 0x8000) != 0;
@@ -4324,16 +4496,7 @@ namespace CCEngine {
         if (!isRightMouseDown)
         {
             bool toolChanged = false;
-            if (GetAsyncKeyState('Q') & 0x8000) { m_GizmoSystem.SetMode(GizmoMode::None); toolChanged = true; }
-            if (GetAsyncKeyState('W') & 0x8000) { m_GizmoSystem.SetMode(GizmoMode::Translate); toolChanged = true; }
-            if (GetAsyncKeyState('E') & 0x8000) { m_GizmoSystem.SetMode(GizmoMode::Rotate); toolChanged = true; }
-            if (GetAsyncKeyState('R') & 0x8000) { m_GizmoSystem.SetMode(GizmoMode::Scale); toolChanged = true; }
-
-            if (!isCtrlPressed && isSPressedNow && !m_IsSPressedLastFrame)
-            {
-                m_GizmoSystem.ToggleSnapping();
-                toolChanged = true;
-            }
+            const GizmoMode previousMode = m_GizmoSystem.GetMode();
 
             if (!isCtrlPressed && isXPressedNow && !s_IsXPressedLastFrame)
             {
@@ -4360,7 +4523,11 @@ namespace CCEngine {
             }
 
             if (toolChanged)
+            {
                 UpdateSceneToolButtons();
+                if (previousMode != m_GizmoSystem.GetMode())
+                    RefreshColliderEditInspectors();
+            }
         }
 
         if (isSPressedNow && !m_IsSPressedLastFrame)
@@ -4369,68 +4536,88 @@ namespace CCEngine {
             else if (isCtrlPressed && !isShiftPressed) SaveScene();
         }
 
-        UI::AnimatorGraphPanel* animatorGraph = m_AnimatorEditorService.GetPanel();
-        const bool animatorGraphVisible = animatorGraph && animatorGraph->IsVisible();
-        const bool animatorUndoHandledByEvent = animatorGraphVisible && animatorGraph->ConsumeUndoShortcutEvent();
-        const bool animatorRedoHandledByEvent = animatorGraphVisible && animatorGraph->ConsumeRedoShortcutEvent();
-        bool animatorGraphOwnsShortcut = false;
-        if (animatorGraphVisible)
-        {
-            auto [mouseX, mouseY] = Application::Get()->GetWindow().GetMousePosition();
-            animatorGraphOwnsShortcut = UI::Widget::IsKeyboardFocusOwner(animatorGraph) ||
-                animatorGraph->IsPointInside(mouseX, mouseY);
-        }
-
-        if (isCtrlPressed && isZPressedNow && !s_IsZPressedLastFrame)
-        {
-            if (animatorGraphOwnsShortcut)
-            {
-                // WM_KEYDOWN이 그래프에 도착했으면 중복 실행하지 않고, 포커스 경로에서 유실됐으면
-                // 프레임 단축키가 같은 Animator Undo를 직접 호출한다. 전역 Scene Undo로 새지 않게 한다.
-                if (isShiftPressed)
-                {
-                    if (!animatorRedoHandledByEvent)
-                        animatorGraph->RequestRedoShortcut();
-                }
-                else if (!animatorUndoHandledByEvent)
-                {
-                    animatorGraph->RequestUndoShortcut();
-                }
-            }
-            else if (isShiftPressed)
-            {
-                if (!TryRedoAssetOperation())
-                    m_UndoManager.Redo();
-            }
-            else
-            {
-                if (!TryUndoAssetOperation())
-                    m_UndoManager.Undo();
-            }
-        }
-        if (isCtrlPressed && isYPressedNow && !s_IsYPressedLastFrame)
-        {
-            if (animatorGraphOwnsShortcut)
-            {
-                if (!animatorRedoHandledByEvent)
-                    animatorGraph->RequestRedoShortcut();
-            }
-            else if (!TryRedoAssetOperation())
-                m_UndoManager.Redo();
-        }
         if (isCtrlPressed && isDPressedNow && !s_IsDPressedLastFrame)
         {
             DuplicateSelectedObject();
         }
         if (isCtrlPressed && isOPressedNow && !s_IsOPressedLastFrame) OpenScene();
         s_IsOPressedLastFrame = isOPressedNow;
-        s_IsZPressedLastFrame = isZPressedNow;
-        s_IsYPressedLastFrame = isYPressedNow;
         s_IsDPressedLastFrame = isDPressedNow;
         s_IsFPressedLastFrame = isFPressedNow;
         s_IsXPressedLastFrame = isXPressedNow;
         s_IsVPressedLastFrame = isVPressedNow;
         m_IsSPressedLastFrame = isSPressedNow;
+    }
+
+    bool EditorLayer::HandleGlobalKeyPressed(KeyPressedEvent& e)
+    {
+        if (!e.IsControlDown() && m_ViewportWidget)
+        {
+            auto [mouseX, mouseY] = Application::Get()->GetWindow().GetMousePosition();
+            const bool viewportShortcut = m_ViewportWidget->IsPointInside(mouseX, mouseY) &&
+                (GetAsyncKeyState(VK_RBUTTON) & 0x8000) == 0;
+            if (viewportShortcut)
+            {
+                const GizmoMode previousMode = m_GizmoSystem.GetMode();
+                bool handled = true;
+                switch (e.GetKeyCode())
+                {
+                    case 'Q': m_GizmoSystem.SetMode(GizmoMode::None); break;
+                    case 'W': m_GizmoSystem.SetMode(GizmoMode::Translate); break;
+                    case 'E': m_GizmoSystem.SetMode(GizmoMode::Rotate); break;
+                    case 'R': m_GizmoSystem.SetMode(GizmoMode::Scale); break;
+                    case 'S':
+                        if (!e.IsRepeat())
+                            m_GizmoSystem.ToggleSnapping();
+                        break;
+                    default: handled = false; break;
+                }
+
+                if (handled)
+                {
+                    UpdateSceneToolButtons();
+                    if (previousMode != m_GizmoSystem.GetMode() || e.GetKeyCode() == 'S')
+                        RefreshColliderEditInspectors();
+                    e.Handled = true;
+                    return true;
+                }
+            }
+        }
+
+        if (!e.IsControlDown() || (e.GetKeyCode() != 'Z' && e.GetKeyCode() != 'Y'))
+            return false;
+
+        const bool redo = e.GetKeyCode() == 'Y' || (e.GetKeyCode() == 'Z' && e.IsShiftDown());
+        UI::AnimatorGraphPanel* animatorGraph = m_AnimatorEditorService.GetPanel();
+        bool animatorGraphOwnsShortcut = false;
+        if (animatorGraph && animatorGraph->IsVisible())
+        {
+            auto [mouseX, mouseY] = Application::Get()->GetWindow().GetMousePosition();
+            animatorGraphOwnsShortcut = UI::Widget::IsKeyboardFocusOwner(animatorGraph) ||
+                animatorGraph->IsPointInside(mouseX, mouseY);
+        }
+
+        // 빠른 키 조합은 다음 프레임 전에 키가 풀릴 수 있다. WM_KEYDOWN 이벤트에서 바로 처리해야
+        // 실제 입력과 자동 입력 모두 같은 Undo 한 번으로 정확히 기록된다.
+        if (animatorGraphOwnsShortcut)
+        {
+            if (redo)
+                animatorGraph->RequestRedoShortcut();
+            else
+                animatorGraph->RequestUndoShortcut();
+        }
+        else if (redo)
+        {
+            if (!TryRedoAssetOperation())
+                m_UndoManager.Redo();
+        }
+        else if (!TryUndoAssetOperation())
+        {
+            m_UndoManager.Undo();
+        }
+
+        e.Handled = true;
+        return true;
     }
 
 
@@ -4697,6 +4884,7 @@ namespace CCEngine {
                 {
                     BeginAnimatorClipPick(entity, layerIndex, stateIndex);
                 });
+            ConfigureColliderEditCallbacks(inspector);
             // 새 Inspector를 만들 때 현재 하이어라키 선택을 기본값으로 넣는다.
             // 단, Asset Browser에서 셰이더/머티리얼을 명시적으로 선택한 Inspector는
             // 매 프레임 하이어라키 선택으로 덮어쓰면 안 된다.
@@ -5134,6 +5322,7 @@ namespace CCEngine {
     void EditorLayer::BuildEditorUI()
     {
         m_RootUI = new UI::Panel("Root", { 0.05f, 0.05f, 0.05f, 1.0f });
+        m_RootUI->SetOnKeyPressed([this](KeyPressedEvent& e) { return HandleGlobalKeyPressed(e); });
         m_RootUI->SetAnchorMin(0.0f, 0.0f);
         m_RootUI->SetAnchorMax(1.0f, 1.0f);
         m_RootUI->SetOffsetMin(0.0f, 0.0f);
@@ -5231,6 +5420,7 @@ namespace CCEngine {
             {
                 BeginAnimatorClipPick(entity, layerIndex, stateIndex);
             });
+        ConfigureColliderEditCallbacks(m_InspectorPanel);
         m_RootUI->AddChild(m_InspectorPanel);
         m_InspectorPanels.push_back(m_InspectorPanel);
 
@@ -5761,14 +5951,27 @@ namespace CCEngine {
         m_BtnCreateTorus->SetOnClick([this]() { CreatePrimitiveObject("Torus", (int)MeshComponent::MeshType::Torus); HideObjectContextMenu(); });
         m_BtnDeleteObject->SetOnClick([this]() { DeleteSelectedObject(); HideObjectContextMenu(); });
 
-        m_BtnToolSelect->SetOnClick([this]() { m_GizmoSystem.SetMode(GizmoMode::None); UpdateSceneToolButtons(); });
-        m_BtnToolMove->SetOnClick([this]() { m_GizmoSystem.SetMode(GizmoMode::Translate); UpdateSceneToolButtons(); });
-        m_BtnToolRotate->SetOnClick([this]() { m_GizmoSystem.SetMode(GizmoMode::Rotate); UpdateSceneToolButtons(); });
-        m_BtnToolScale->SetOnClick([this]() { m_GizmoSystem.SetMode(GizmoMode::Scale); UpdateSceneToolButtons(); });
-        m_BtnToolCollider->SetOnClick([this]() { m_GizmoSystem.SetMode(GizmoMode::Collider); UpdateSceneToolButtons(); });
+        auto setSceneTool = [this](GizmoMode mode, bool automaticColliderTarget = false)
+        {
+            m_GizmoSystem.SetMode(mode);
+            if (automaticColliderTarget)
+                m_GizmoSystem.ClearColliderEditTarget();
+            UpdateSceneToolButtons();
+            RefreshColliderEditInspectors();
+        };
+        m_BtnToolSelect->SetOnClick([setSceneTool]() mutable { setSceneTool(GizmoMode::None); });
+        m_BtnToolMove->SetOnClick([setSceneTool]() mutable { setSceneTool(GizmoMode::Translate); });
+        m_BtnToolRotate->SetOnClick([setSceneTool]() mutable { setSceneTool(GizmoMode::Rotate); });
+        m_BtnToolScale->SetOnClick([setSceneTool]() mutable { setSceneTool(GizmoMode::Scale); });
+        m_BtnToolCollider->SetOnClick([setSceneTool]() mutable { setSceneTool(GizmoMode::Collider, true); });
         m_BtnToolSpace->SetOnClick([this]() { m_GizmoSystem.ToggleSpace(); UpdateSceneToolButtons(); });
         m_BtnToolPivot->SetOnClick([this]() { m_GizmoSystem.TogglePivotMode(); UpdateSceneToolButtons(); });
-        m_BtnToolSnap->SetOnClick([this]() { m_GizmoSystem.ToggleSnapping(); UpdateSceneToolButtons(); });
+        m_BtnToolSnap->SetOnClick([this]()
+            {
+                m_GizmoSystem.ToggleSnapping();
+                UpdateSceneToolButtons();
+                RefreshColliderEditInspectors();
+            });
         m_BtnToolFrame->SetOnClick([this]() { FrameSelectedEntity(); });
         m_BtnPhysicsDebug->SetOnClick([this]() { CyclePhysicsDebugViewMode(); });
         m_BtnRootMotionDebug->SetOnClick([this]()
