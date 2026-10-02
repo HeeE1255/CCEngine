@@ -1805,6 +1805,7 @@ namespace CCEngine
             addCandidate("Camera", AddComponentType::Camera, m_SelectedEntity.HasComponent<CameraComponent>());
             addCandidate("Sprite Renderer", AddComponentType::SpriteRenderer, m_SelectedEntity.HasComponent<SpriteRendererComponent>());
             addCandidate("Rigidbody 2D", AddComponentType::Rigidbody2D, m_SelectedEntity.HasComponent<Rigidbody2DComponent>());
+            addCandidate("Rigidbody 3D", AddComponentType::Rigidbody3D, m_SelectedEntity.HasComponent<Rigidbody3DComponent>());
             addCandidate("Box Collider 2D", AddComponentType::BoxCollider2D, m_SelectedEntity.HasComponent<BoxCollider2DComponent>());
             addCandidate("Box Collider 3D", AddComponentType::BoxCollider3D, m_SelectedEntity.HasComponent<BoxCollider3DComponent>());
             addCandidate("Sphere Collider 3D", AddComponentType::SphereCollider3D, m_SelectedEntity.HasComponent<SphereCollider3DComponent>());
@@ -1851,6 +1852,7 @@ namespace CCEngine
                     case AddComponentType::Camera: return "Camera";
                     case AddComponentType::SpriteRenderer: return "Sprite Renderer";
                     case AddComponentType::Rigidbody2D: return "Rigidbody 2D";
+                    case AddComponentType::Rigidbody3D: return "Rigidbody 3D";
                     case AddComponentType::BoxCollider2D: return "Box Collider 2D";
                     case AddComponentType::BoxCollider3D: return "Box Collider 3D";
                     case AddComponentType::SphereCollider3D: return "Sphere Collider 3D";
@@ -1903,6 +1905,7 @@ namespace CCEngine
                 }
                 case AddComponentType::SpriteRenderer: m_SelectedEntity.AddComponent<SpriteRendererComponent>(); break;
                 case AddComponentType::Rigidbody2D: m_SelectedEntity.AddComponent<Rigidbody2DComponent>(); break;
+                case AddComponentType::Rigidbody3D: m_SelectedEntity.AddComponent<Rigidbody3DComponent>(); break;
                 case AddComponentType::BoxCollider2D: m_SelectedEntity.AddComponent<BoxCollider2DComponent>(); break;
                 case AddComponentType::BoxCollider3D: m_SelectedEntity.AddComponent<BoxCollider3DComponent>(); break;
                 case AddComponentType::SphereCollider3D: m_SelectedEntity.AddComponent<SphereCollider3DComponent>(); break;

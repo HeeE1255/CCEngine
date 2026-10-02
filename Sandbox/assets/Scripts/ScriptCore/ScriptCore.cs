@@ -88,6 +88,12 @@ namespace CCEngine
         protected virtual void OnTriggerEnter2D(uint otherEntityID) { }
         protected virtual void OnTriggerStay2D(uint otherEntityID) { }
         protected virtual void OnTriggerExit2D(uint otherEntityID) { }
+        protected virtual void OnCollisionEnter3D(uint otherEntityID) { }
+        protected virtual void OnCollisionStay3D(uint otherEntityID) { }
+        protected virtual void OnCollisionExit3D(uint otherEntityID) { }
+        protected virtual void OnTriggerEnter3D(uint otherEntityID) { }
+        protected virtual void OnTriggerStay3D(uint otherEntityID) { }
+        protected virtual void OnTriggerExit3D(uint otherEntityID) { }
         protected virtual void OnAnimationEvent(string eventName, string argument) { }
 
         internal void InvokeAwake() => Awake();
@@ -110,6 +116,12 @@ namespace CCEngine
                 case 3: OnTriggerEnter2D(otherEntityID); break;
                 case 4: OnTriggerStay2D(otherEntityID); break;
                 case 5: OnTriggerExit2D(otherEntityID); break;
+                case 6: OnCollisionEnter3D(otherEntityID); break;
+                case 7: OnCollisionStay3D(otherEntityID); break;
+                case 8: OnCollisionExit3D(otherEntityID); break;
+                case 9: OnTriggerEnter3D(otherEntityID); break;
+                case 10: OnTriggerStay3D(otherEntityID); break;
+                case 11: OnTriggerExit3D(otherEntityID); break;
             }
         }
 

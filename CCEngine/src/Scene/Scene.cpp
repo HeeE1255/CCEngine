@@ -4,6 +4,7 @@
 #include "Renderer/Renderer2D.h"
 #include "Renderer/Renderer3D.h"
 #include "Scripting/ScriptEngine.h"
+#include "Physics/PhysicsWorld3D.h"
 #include "Animation/AvatarAsset.h"
 #include "Core/AssetDatabase.h"
 #include "Core/ConsoleLog.h"
@@ -1396,6 +1397,9 @@ namespace CCEngine
                 dstRb.FixedRotation = srcRb.FixedRotation;
             }
 
+            if (srcEntity.HasComponent<Rigidbody3DComponent>())
+                dstEntity.AddComponent<Rigidbody3DComponent>(srcEntity.GetComponent<Rigidbody3DComponent>());
+
             if (srcEntity.HasComponent<BoxCollider2DComponent>())
             {
                 auto& srcBc = srcEntity.GetComponent<BoxCollider2DComponent>();
@@ -1851,6 +1855,9 @@ namespace CCEngine
                     dstRb.FixedRotation = srcRb.FixedRotation;
                 }
 
+                if (srcEntity.HasComponent<Rigidbody3DComponent>())
+                    dstEntity.AddComponent<Rigidbody3DComponent>(srcEntity.GetComponent<Rigidbody3DComponent>());
+
                 if (srcEntity.HasComponent<BoxCollider2DComponent>())
                 {
                     auto& srcBc = srcEntity.GetComponent<BoxCollider2DComponent>();
@@ -2193,6 +2200,145 @@ namespace CCEngine
         }
     }
 
+    void Scene::CreatePhysicsWorld3D()
+    {
+        m_PhysicsWorld3D = std::make_unique<PhysicsWorld3D>();
+        auto view = m_Registry.view<TransformComponent>();
+        for (auto entityID : view)
+        {
+            Entity entity{ entityID, this };
+            if (!IsEntityActiveInHierarchy(entity))
+                continue;
+
+            const bool hasBox = entity.HasComponent<BoxCollider3DComponent>();
+            const bool hasSphere = entity.HasComponent<SphereCollider3DComponent>();
+            const bool hasCylinder = entity.HasComponent<CylinderCollider3DComponent>();
+            const bool hasMesh = entity.HasComponent<MeshCollider3DComponent>();
+            if (!hasBox && !hasSphere && !hasCylinder && !hasMesh)
+                continue;
+
+            const auto& transform = entity.GetComponent<TransformComponent>();
+            PhysicsWorld3D::BodyDesc desc;
+            desc.EntityID = static_cast<uint32_t>(entityID);
+            desc.Position = transform.Translation;
+            desc.Rotation = transform.Rotation;
+            desc.Scale = transform.Scale;
+
+            if (entity.HasComponent<Rigidbody3DComponent>())
+            {
+                const auto& rigidbody = entity.GetComponent<Rigidbody3DComponent>();
+                desc.Type = static_cast<PhysicsWorld3D::BodyType>(rigidbody.Type);
+                desc.Mass = rigidbody.Mass;
+                desc.LinearDamping = rigidbody.LinearDamping;
+                desc.AngularDamping = rigidbody.AngularDamping;
+                desc.Friction = rigidbody.Friction;
+                desc.Restitution = rigidbody.Restitution;
+                desc.UseGravity = rigidbody.UseGravity;
+                desc.FixedRotation = rigidbody.FixedRotation;
+                desc.LinearVelocity = rigidbody.LinearVelocity;
+                desc.AngularVelocity = rigidbody.AngularVelocity;
+            }
+
+            if (hasBox)
+            {
+                const auto& collider = entity.GetComponent<BoxCollider3DComponent>();
+                desc.Shape = PhysicsWorld3D::ShapeType::Box;
+                desc.Offset = collider.Offset;
+                desc.Size = collider.Size;
+                desc.IsTrigger = collider.IsTrigger;
+            }
+            else if (hasSphere)
+            {
+                const auto& collider = entity.GetComponent<SphereCollider3DComponent>();
+                desc.Shape = PhysicsWorld3D::ShapeType::Sphere;
+                desc.Offset = collider.Offset;
+                desc.Size = { collider.Radius, collider.Radius, collider.Radius };
+                desc.IsTrigger = collider.IsTrigger;
+            }
+            else if (hasCylinder)
+            {
+                const auto& collider = entity.GetComponent<CylinderCollider3DComponent>();
+                desc.Shape = PhysicsWorld3D::ShapeType::Cylinder;
+                desc.Offset = collider.Offset;
+                desc.Size = { collider.Radius, collider.Height, collider.Radius };
+                desc.IsTrigger = collider.IsTrigger;
+            }
+            else
+            {
+                const auto& collider = entity.GetComponent<MeshCollider3DComponent>();
+                desc.Shape = PhysicsWorld3D::ShapeType::MeshBounds;
+                desc.Offset = collider.Offset;
+                desc.Size = collider.Size;
+                desc.IsTrigger = collider.IsTrigger;
+                // 비볼록 삼각형 메시를 움직이면 연속 충돌과 관성 계산이 필요하다.
+                // 1차 백엔드에서는 잘못된 결과를 내는 대신 정적 bounds로 명확히 제한한다.
+                if (!collider.Convex && desc.Type == PhysicsWorld3D::BodyType::Dynamic)
+                {
+                    ConsoleLog::Warning("Rigidbody3D dynamic MeshCollider requires Convex. Using static bounds for entity " + std::to_string(desc.EntityID));
+                    desc.Type = PhysicsWorld3D::BodyType::Static;
+                }
+            }
+
+            m_PhysicsWorld3D->AddBody(desc);
+        }
+    }
+
+    void Scene::CollectPhysicsEvents3D()
+    {
+        if (!m_PhysicsWorld3D)
+            return;
+
+        for (const PhysicsWorld3D::Event& event : m_PhysicsWorld3D->GetEvents())
+        {
+            entt::entity a = static_cast<entt::entity>(event.EntityA);
+            entt::entity b = static_cast<entt::entity>(event.EntityB);
+            if (!m_Registry.valid(a) || !m_Registry.valid(b) || a == b)
+                continue;
+
+            ScriptPhysicsEvent type;
+            if (event.IsTrigger)
+            {
+                type = event.Phase == PhysicsWorld3D::EventPhase::Enter ? ScriptPhysicsEvent::OnTriggerEnter3D :
+                    event.Phase == PhysicsWorld3D::EventPhase::Stay ? ScriptPhysicsEvent::OnTriggerStay3D : ScriptPhysicsEvent::OnTriggerExit3D;
+            }
+            else
+            {
+                type = event.Phase == PhysicsWorld3D::EventPhase::Enter ? ScriptPhysicsEvent::OnCollisionEnter3D :
+                    event.Phase == PhysicsWorld3D::EventPhase::Stay ? ScriptPhysicsEvent::OnCollisionStay3D : ScriptPhysicsEvent::OnCollisionExit3D;
+            }
+            m_PhysicsEventQueue.push_back({ type, a, b });
+            m_PhysicsEventQueue.push_back({ type, b, a });
+        }
+    }
+
+    void Scene::StepPhysicsWorld3D(float deltaTime)
+    {
+        if (!m_PhysicsWorld3D)
+            return;
+
+        auto rigidbodyView = m_Registry.view<Rigidbody3DComponent, TransformComponent>();
+        rigidbodyView.each([&](auto entityID, auto& rigidbody, auto& transform)
+        {
+            if (rigidbody.Type == Rigidbody3DComponent::BodyType::Kinematic && IsEntityActiveInHierarchy(Entity{ entityID, this }))
+                m_PhysicsWorld3D->SetKinematicTransform(static_cast<uint32_t>(entityID), transform.Translation, transform.Rotation, deltaTime);
+        });
+
+        m_PhysicsWorld3D->Step(deltaTime);
+        rigidbodyView.each([&](auto entityID, auto& rigidbody, auto& transform)
+        {
+            if (rigidbody.Type != Rigidbody3DComponent::BodyType::Dynamic || !IsEntityActiveInHierarchy(Entity{ entityID, this }))
+                return;
+            PhysicsWorld3D::BodyState state;
+            if (!m_PhysicsWorld3D->GetBodyState(static_cast<uint32_t>(entityID), state))
+                return;
+            transform.Translation = state.Position;
+            transform.Rotation = state.Rotation;
+            rigidbody.LinearVelocity = state.LinearVelocity;
+            rigidbody.AngularVelocity = state.AngularVelocity;
+        });
+        CollectPhysicsEvents3D();
+    }
+
     void Scene::DispatchPhysicsEventQueue()
     {
         if (!ScriptEngine::IsRunning() || m_PhysicsEventQueue.empty())
@@ -2257,6 +2403,7 @@ namespace CCEngine
         b2WorldDef worldDef = b2DefaultWorldDef();
         worldDef.gravity = { 0.0f, -9.8f };
         m_PhysicsWorldId = b2CreateWorld(&worldDef);
+        CreatePhysicsWorld3D();
 
         auto view = m_Registry.view<Rigidbody2DComponent>();
         for (auto e : view)
@@ -2380,6 +2527,7 @@ namespace CCEngine
             b2DestroyWorld(m_PhysicsWorldId);
             m_PhysicsWorldId = b2_nullWorldId;
         }
+        m_PhysicsWorld3D.reset();
 
         auto animatorView = m_Registry.view<AnimatorComponent>();
         for (auto e : animatorView)
@@ -2415,10 +2563,12 @@ namespace CCEngine
             SyncScriptEnabledState();
             InvokeScriptStartQueue();
 
-            m_FixedAccumulator += deltaTime;
+            // 창 드래그나 디버거 중단 뒤 큰 delta가 들어와도 물리 catch-up이 무한히 쌓이지 않게 제한한다.
+            m_FixedAccumulator += (std::min)(deltaTime, 0.25f);
             while (m_FixedAccumulator >= m_FixedTimeStep)
             {
                 InvokeScriptUpdatePass(ScriptLifecycleEvent::FixedUpdate, m_FixedTimeStep);
+                StepPhysicsWorld3D(m_FixedTimeStep);
                 m_FixedAccumulator -= m_FixedTimeStep;
             }
 
@@ -2441,8 +2591,9 @@ namespace CCEngine
                     });
 
                 CollectPhysicsEvents();
-                DispatchPhysicsEventQueue();
             }
+
+            DispatchPhysicsEventQueue();
 
             m_Registry.view<NativeScriptComponent>().each([=](auto entityID, auto& nsc)
                 {

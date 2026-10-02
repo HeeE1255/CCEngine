@@ -142,6 +142,28 @@ namespace CCEngine
         BoxCollider2DComponent(const BoxCollider2DComponent&) = default;
     };
 
+    // 3D 강체는 충돌 모양과 분리한다. Collider만 있으면 정적 충돌체로 동작하고,
+    // Rigidbody3D를 추가한 오브젝트만 Dynamic/Kinematic 수명주기를 갖는다.
+    struct Rigidbody3DComponent
+    {
+        enum class BodyType { Static = 0, Dynamic, Kinematic };
+        BodyType Type = BodyType::Static;
+        float Mass = 1.0f;
+        float LinearDamping = 0.05f;
+        float AngularDamping = 0.05f;
+        float Friction = 0.5f;
+        float Restitution = 0.0f;
+        bool UseGravity = true;
+        bool FixedRotation = false;
+
+        // 초기 속도는 저장하고, Play 중 계산된 값은 Stop 시 런타임 Scene과 함께 버린다.
+        DirectX::XMFLOAT3 LinearVelocity = { 0.0f, 0.0f, 0.0f };
+        DirectX::XMFLOAT3 AngularVelocity = { 0.0f, 0.0f, 0.0f };
+
+        Rigidbody3DComponent() = default;
+        Rigidbody3DComponent(const Rigidbody3DComponent&) = default;
+    };
+
     // 3D 박스 충돌체 컴포넌트.
     // 2D 박스와 분리해 둬야 큐브/스피어/원통 같은 3D 메시를 XY 평면 기준으로 잘못 해석하지 않는다.
     struct BoxCollider3DComponent

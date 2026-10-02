@@ -16,6 +16,9 @@
     <Filter Include="src\Events">
       <UniqueIdentifier>{7162C20E-5D1A-045C-C621-DDB7B2F89E4C}</UniqueIdentifier>
     </Filter>
+    <Filter Include="src\Physics">
+      <UniqueIdentifier>{9F8B9316-0B41-0C0C-9435-06E300EA0210}</UniqueIdentifier>
+    </Filter>
     <Filter Include="src\Platform">
       <UniqueIdentifier>{21CA02E5-0D2D-9289-B6B2-CA3FA2F45D0C}</UniqueIdentifier>
     </Filter>
@@ -93,6 +96,9 @@
     <ClInclude Include="src\Core\Window.h">
       <Filter>src\Core</Filter>
     </ClInclude>
+    <ClInclude Include="src\Editor\AnimatorEditorService.h">
+      <Filter>src\Editor</Filter>
+    </ClInclude>
     <ClInclude Include="src\Editor\AssetFileWatcher.h">
       <Filter>src\Editor</Filter>
     </ClInclude>
@@ -102,16 +108,13 @@
     <ClInclude Include="src\Editor\AssetUndoManager.h">
       <Filter>src\Editor</Filter>
     </ClInclude>
-    <ClInclude Include="src\Editor\AnimatorEditorService.h">
-      <Filter>src\Editor</Filter>
-    </ClInclude>
     <ClInclude Include="src\Editor\EditorCamera.h">
       <Filter>src\Editor</Filter>
     </ClInclude>
-    <ClInclude Include="src\Editor\EditorQATestRunner.h">
+    <ClInclude Include="src\Editor\EditorLayer.h">
       <Filter>src\Editor</Filter>
     </ClInclude>
-    <ClInclude Include="src\Editor\EditorLayer.h">
+    <ClInclude Include="src\Editor\EditorQATestRunner.h">
       <Filter>src\Editor</Filter>
     </ClInclude>
     <ClInclude Include="src\Editor\EditorUndoManager.h">
@@ -134,6 +137,9 @@
     </ClInclude>
     <ClInclude Include="src\Events\MouseEvent.h">
       <Filter>src\Events</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Physics\PhysicsWorld3D.h">
+      <Filter>src\Physics</Filter>
     </ClInclude>
     <ClInclude Include="src\Platform\DirectX11\DX11Buffer.h">
       <Filter>src\Platform\DirectX11</Filter>
@@ -177,6 +183,12 @@
     <ClInclude Include="src\Renderer\GraphicsContext.h">
       <Filter>src\Renderer</Filter>
     </ClInclude>
+    <ClInclude Include="src\Renderer\MaterialAsset.h">
+      <Filter>src\Renderer</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Renderer\MaterialPreviewRenderer.h">
+      <Filter>src\Renderer</Filter>
+    </ClInclude>
     <ClInclude Include="src\Renderer\Mesh.h">
       <Filter>src\Renderer</Filter>
     </ClInclude>
@@ -207,16 +219,19 @@
     <ClInclude Include="src\Renderer\Renderer3D.h">
       <Filter>src\Renderer</Filter>
     </ClInclude>
-    <ClInclude Include="src\Renderer\RuntimeShaderLibrary.h">
-      <Filter>src\Renderer</Filter>
-    </ClInclude>
     <ClInclude Include="src\Renderer\RendererAPI.h">
       <Filter>src\Renderer</Filter>
     </ClInclude>
     <ClInclude Include="src\Renderer\RendererHandle.h">
       <Filter>src\Renderer</Filter>
     </ClInclude>
+    <ClInclude Include="src\Renderer\RuntimeShaderLibrary.h">
+      <Filter>src\Renderer</Filter>
+    </ClInclude>
     <ClInclude Include="src\Renderer\Shader.h">
+      <Filter>src\Renderer</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Renderer\ShaderAsset.h">
       <Filter>src\Renderer</Filter>
     </ClInclude>
     <ClInclude Include="src\Renderer\ShaderCompiler.h">
@@ -225,13 +240,13 @@
     <ClInclude Include="src\Renderer\ShaderProperty.h">
       <Filter>src\Renderer</Filter>
     </ClInclude>
-    <ClInclude Include="src\Renderer\VisualShaderAsset.h">
-      <Filter>src\Renderer</Filter>
-    </ClInclude>
     <ClInclude Include="src\Renderer\Texture.h">
       <Filter>src\Renderer</Filter>
     </ClInclude>
     <ClInclude Include="src\Renderer\UIRenderer.h">
+      <Filter>src\Renderer</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Renderer\VisualShaderAsset.h">
       <Filter>src\Renderer</Filter>
     </ClInclude>
     <ClInclude Include="src\Scene\Components.h">
@@ -260,6 +275,12 @@
     </ClInclude>
     <ClInclude Include="src\Scripting\ScriptMetadata.h">
       <Filter>src\Scripting</Filter>
+    </ClInclude>
+    <ClInclude Include="src\UI\AnimatorGraphPanel.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
+    <ClInclude Include="src\UI\AnimatorInspectorWidgets.h">
+      <Filter>src\UI</Filter>
     </ClInclude>
     <ClInclude Include="src\UI\AssetBrowserPanel.h">
       <Filter>src\UI</Filter>
@@ -319,12 +340,6 @@
       <Filter>src\UI</Filter>
     </ClInclude>
     <ClInclude Include="src\UI\MaterialGraphPanel.h">
-      <Filter>src\UI</Filter>
-    </ClInclude>
-    <ClInclude Include="src\UI\AnimatorGraphPanel.h">
-      <Filter>src\UI</Filter>
-    </ClInclude>
-    <ClInclude Include="src\UI\AnimatorInspectorWidgets.h">
       <Filter>src\UI</Filter>
     </ClInclude>
     <ClInclude Include="src\UI\Panel.h">
@@ -395,6 +410,9 @@
     <ClCompile Include="src\Core\Window.cpp">
       <Filter>src\Core</Filter>
     </ClCompile>
+    <ClCompile Include="src\Editor\AnimatorEditorService.cpp">
+      <Filter>src\Editor</Filter>
+    </ClCompile>
     <ClCompile Include="src\Editor\AssetFileWatcher.cpp">
       <Filter>src\Editor</Filter>
     </ClCompile>
@@ -404,16 +422,13 @@
     <ClCompile Include="src\Editor\AssetUndoManager.cpp">
       <Filter>src\Editor</Filter>
     </ClCompile>
-    <ClCompile Include="src\Editor\AnimatorEditorService.cpp">
-      <Filter>src\Editor</Filter>
-    </ClCompile>
     <ClCompile Include="src\Editor\EditorCamera.cpp">
       <Filter>src\Editor</Filter>
     </ClCompile>
-    <ClCompile Include="src\Editor\EditorQATestRunner.cpp">
+    <ClCompile Include="src\Editor\EditorLayer.cpp">
       <Filter>src\Editor</Filter>
     </ClCompile>
-    <ClCompile Include="src\Editor\EditorLayer.cpp">
+    <ClCompile Include="src\Editor\EditorQATestRunner.cpp">
       <Filter>src\Editor</Filter>
     </ClCompile>
     <ClCompile Include="src\Editor\EditorUndoManager.cpp">
@@ -421,6 +436,9 @@
     </ClCompile>
     <ClCompile Include="src\Editor\GizmoSystem.cpp">
       <Filter>src\Editor</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Physics\PhysicsWorld3D.cpp">
+      <Filter>src\Physics</Filter>
     </ClCompile>
     <ClCompile Include="src\Platform\DirectX11\DX11Buffer.cpp">
       <Filter>src\Platform\DirectX11</Filter>
@@ -491,10 +509,10 @@
     <ClCompile Include="src\Renderer\Renderer3D.cpp">
       <Filter>src\Renderer</Filter>
     </ClCompile>
-    <ClCompile Include="src\Renderer\RuntimeShaderLibrary.cpp">
+    <ClCompile Include="src\Renderer\RendererAPI.cpp">
       <Filter>src\Renderer</Filter>
     </ClCompile>
-    <ClCompile Include="src\Renderer\RendererAPI.cpp">
+    <ClCompile Include="src\Renderer\RuntimeShaderLibrary.cpp">
       <Filter>src\Renderer</Filter>
     </ClCompile>
     <ClCompile Include="src\Renderer\Shader.cpp">
@@ -506,13 +524,13 @@
     <ClCompile Include="src\Renderer\ShaderProperty.cpp">
       <Filter>src\Renderer</Filter>
     </ClCompile>
-    <ClCompile Include="src\Renderer\VisualShaderAsset.cpp">
-      <Filter>src\Renderer</Filter>
-    </ClCompile>
     <ClCompile Include="src\Renderer\Texture.cpp">
       <Filter>src\Renderer</Filter>
     </ClCompile>
     <ClCompile Include="src\Renderer\UIRenderer.cpp">
+      <Filter>src\Renderer</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Renderer\VisualShaderAsset.cpp">
       <Filter>src\Renderer</Filter>
     </ClCompile>
     <ClCompile Include="src\Scene\Entity.cpp">
@@ -535,6 +553,9 @@
     </ClCompile>
     <ClCompile Include="src\Scripting\ScriptMetadata.cpp">
       <Filter>src\Scripting</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UI\AnimatorGraphPanel.cpp">
+      <Filter>src\UI</Filter>
     </ClCompile>
     <ClCompile Include="src\UI\AssetBrowserPanel.cpp">
       <Filter>src\UI</Filter>
@@ -575,10 +596,10 @@
     <ClCompile Include="src\UI\ImageWidget.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
-    <ClCompile Include="src\UI\InspectorItem.cpp">
+    <ClCompile Include="src\UI\InspectorAnimator.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
-    <ClCompile Include="src\UI\InspectorAnimator.cpp">
+    <ClCompile Include="src\UI\InspectorItem.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
     <ClCompile Include="src\UI\InspectorPanel.cpp">
@@ -594,9 +615,6 @@
       <Filter>src\UI</Filter>
     </ClCompile>
     <ClCompile Include="src\UI\MaterialGraphPanel.cpp">
-      <Filter>src\UI</Filter>
-    </ClCompile>
-    <ClCompile Include="src\UI\AnimatorGraphPanel.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
     <ClCompile Include="src\UI\Panel.cpp">

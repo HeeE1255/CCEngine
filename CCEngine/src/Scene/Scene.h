@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <memory>
 #include <unordered_set>
 #include <vector>
 #include "entt.hpp"
@@ -12,6 +13,7 @@
 namespace CCEngine
 {
     class Entity; // 전방 선언
+    class PhysicsWorld3D;
     enum class SceneState { Edit = 0, Play = 1, Pause = 2 }; // 씬의 현재 상태를 나타내는 열거형
 
     class CC_API Scene
@@ -93,6 +95,9 @@ namespace CCEngine
         void InvokeScriptUpdatePass(ScriptLifecycleEvent eventType, float deltaTime);
         PhysicsPair MakePhysicsPair(entt::entity a, entt::entity b) const;
         void CollectPhysicsEvents();
+        void CreatePhysicsWorld3D();
+        void StepPhysicsWorld3D(float deltaTime);
+        void CollectPhysicsEvents3D();
         void DispatchPhysicsEventQueue();
         void DestroyRuntimeScript(entt::entity handle);
         void DestroyEntityImmediate(Entity entity);
@@ -106,6 +111,7 @@ namespace CCEngine
         std::unordered_set<PhysicsPair, PhysicsPairHash> m_ActiveTriggerPairs;
 
         b2WorldId m_PhysicsWorldId = b2_nullWorldId; // Box2D 물리 월드의 ID
+        std::unique_ptr<PhysicsWorld3D> m_PhysicsWorld3D;
         float m_PhysicsUnitScale = 1.0f; // 렌더링 유닛 <-> 미터 비율
         float m_FixedTimeStep = 1.0f / 60.0f;
         float m_FixedAccumulator = 0.0f;

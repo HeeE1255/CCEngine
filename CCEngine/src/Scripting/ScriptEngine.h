@@ -27,7 +27,13 @@ namespace CCEngine
         OnCollisionExit2D,
         OnTriggerEnter2D,
         OnTriggerStay2D,
-        OnTriggerExit2D
+        OnTriggerExit2D,
+        OnCollisionEnter3D,
+        OnCollisionStay3D,
+        OnCollisionExit3D,
+        OnTriggerEnter3D,
+        OnTriggerStay3D,
+        OnTriggerExit3D
     };
 
     class CC_API ScriptEngine

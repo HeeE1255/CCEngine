@@ -15,6 +15,7 @@
 #include "Renderer/ShaderAsset.h"
 #include "Renderer/VisualShaderAsset.h"
 #include "Editor/EditorQATestRunner.h"
+#include "Physics/PhysicsWorld3D.h"
 #include "Scene/Components.h"
 #include "Scene/PrefabSerializer.h"
 #include "Scene/SceneSerializer.h"
@@ -2964,6 +2965,138 @@ namespace CCEngine {
 
                 result.Passed = std::abs(originalX - 1.0f) < 0.0001f;
                 result.Message = result.Passed ? "Runtime scene edits stayed isolated from the editor scene." : "Runtime scene edit changed the editor scene.";
+                return result;
+            });
+
+        runner.AddTest("Physics3D.RestitutionBounce", []()
+            {
+                EditorQATestResult result;
+                result.Name = "Physics3D.RestitutionBounce";
+
+                PhysicsWorld3D world;
+
+                PhysicsWorld3D::BodyDesc ground;
+                ground.EntityID = 1;
+                ground.Type = PhysicsWorld3D::BodyType::Static;
+                ground.Shape = PhysicsWorld3D::ShapeType::Box;
+                ground.Position = { 0.0f, -1.25f, 0.0f };
+                ground.Size = { 18.0f, 1.0f, 14.0f };
+                world.AddBody(ground);
+
+                PhysicsWorld3D::BodyDesc sphere;
+                sphere.EntityID = 2;
+                sphere.Type = PhysicsWorld3D::BodyType::Dynamic;
+                sphere.Shape = PhysicsWorld3D::ShapeType::Sphere;
+                sphere.Position = { 0.0f, 4.0f, 0.0f };
+                sphere.Size = { 0.5f, 0.5f, 0.5f };
+                sphere.Restitution = 0.85f;
+                sphere.LinearDamping = 0.02f;
+                world.AddBody(sphere);
+
+                bool contacted = false;
+                bool upwardVelocityAfterContact = false;
+                float reboundPeakY = -1000.0f;
+                for (int frame = 0; frame < 240; ++frame)
+                {
+                    world.Step(1.0f / 60.0f);
+
+                    PhysicsWorld3D::BodyState state;
+                    if (!world.GetBodyState(sphere.EntityID, state))
+                    {
+                        result.Passed = false;
+                        result.Message = "Dynamic sphere body disappeared during simulation.";
+                        return result;
+                    }
+
+                    if (!world.GetEvents().empty())
+                        contacted = true;
+
+                    if (contacted)
+                    {
+                        upwardVelocityAfterContact |= state.LinearVelocity.y > 1.0f;
+                        reboundPeakY = (std::max)(reboundPeakY, state.Position.y);
+                    }
+                }
+
+                // 최종 정지 위치만 보면 중간의 반등을 놓칠 수 있으므로 속도 반전과 최고점을 함께 검사한다.
+                result.Passed = contacted && upwardVelocityAfterContact && reboundPeakY > 1.0f;
+                std::ostringstream message;
+                message << std::fixed << std::setprecision(3)
+                    << "contact=" << (contacted ? "yes" : "no")
+                    << ", upward velocity=" << (upwardVelocityAfterContact ? "yes" : "no")
+                    << ", rebound peak Y=" << reboundPeakY;
+                result.Message = message.str();
+                return result;
+            });
+
+        runner.AddTest("Physics3D.QASceneRestitutionBounce", []()
+            {
+                EditorQATestResult result;
+                result.Name = "Physics3D.QASceneRestitutionBounce";
+
+                Scene editorScene;
+                SceneSerializer serializer(&editorScene);
+                if (!serializer.Deserialize("assets/scenes/Physics3D_QA.ccscene"))
+                {
+                    result.Passed = false;
+                    result.Message = "Could not load Physics3D_QA.ccscene.";
+                    return result;
+                }
+
+                Scene* runtimeScene = Scene::Copy(&editorScene);
+                if (!runtimeScene)
+                {
+                    result.Passed = false;
+                    result.Message = "Could not create the Play Mode scene copy.";
+                    return result;
+                }
+
+                Entity sphere;
+                auto tagged = runtimeScene->GetRegistry().view<TagComponent>();
+                for (auto entityID : tagged)
+                {
+                    if (tagged.get<TagComponent>(entityID).Tag == "QA_Bounce_Sphere_Restitution085")
+                    {
+                        sphere = Entity{ entityID, runtimeScene };
+                        break;
+                    }
+                }
+
+                if (!sphere || !sphere.HasComponent<Rigidbody3DComponent>())
+                {
+                    delete runtimeScene;
+                    result.Passed = false;
+                    result.Message = "QA bounce sphere or Rigidbody3D component was not found.";
+                    return result;
+                }
+
+                runtimeScene->OnRuntimeStart();
+                bool descended = false;
+                bool rebounded = false;
+                float reboundPeakY = -1000.0f;
+                for (int frame = 0; frame < 240; ++frame)
+                {
+                    runtimeScene->OnUpdate(1.0f / 60.0f);
+                    const auto& body = sphere.GetComponent<Rigidbody3DComponent>();
+                    const float y = sphere.GetComponent<TransformComponent>().Translation.y;
+                    descended |= body.LinearVelocity.y < -1.0f;
+                    if (descended && body.LinearVelocity.y > 1.0f)
+                        rebounded = true;
+                    if (rebounded)
+                        reboundPeakY = (std::max)(reboundPeakY, y);
+                }
+
+                const float restitution = sphere.GetComponent<Rigidbody3DComponent>().Restitution;
+                runtimeScene->OnRuntimeStop();
+                delete runtimeScene;
+
+                result.Passed = restitution > 0.84f && rebounded && reboundPeakY > 1.0f;
+                std::ostringstream message;
+                message << std::fixed << std::setprecision(3)
+                    << "restitution=" << restitution
+                    << ", upward velocity=" << (rebounded ? "yes" : "no")
+                    << ", rebound peak Y=" << reboundPeakY;
+                result.Message = message.str();
                 return result;
             });
 

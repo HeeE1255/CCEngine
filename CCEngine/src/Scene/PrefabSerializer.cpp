@@ -522,6 +522,22 @@ namespace CCEngine
                 entityData["Rigidbody2DComponent"]["FixedRotation"] = rb.FixedRotation;
             }
 
+            if (entity.HasComponent<Rigidbody3DComponent>())
+            {
+                const auto& rb = entity.GetComponent<Rigidbody3DComponent>();
+                auto& data = entityData["Rigidbody3DComponent"];
+                data["Type"] = static_cast<int>(rb.Type);
+                data["Mass"] = rb.Mass;
+                data["LinearDamping"] = rb.LinearDamping;
+                data["AngularDamping"] = rb.AngularDamping;
+                data["Friction"] = rb.Friction;
+                data["Restitution"] = rb.Restitution;
+                data["UseGravity"] = rb.UseGravity;
+                data["FixedRotation"] = rb.FixedRotation;
+                data["LinearVelocity"] = Float3ToJson(rb.LinearVelocity);
+                data["AngularVelocity"] = Float3ToJson(rb.AngularVelocity);
+            }
+
             if (entity.HasComponent<BoxCollider2DComponent>())
             {
                 auto& collider = entity.GetComponent<BoxCollider2DComponent>();
@@ -789,6 +805,22 @@ namespace CCEngine
                 auto& rb = entity.HasComponent<Rigidbody2DComponent>() ? entity.GetComponent<Rigidbody2DComponent>() : entity.AddComponent<Rigidbody2DComponent>();
                 rb.Type = static_cast<Rigidbody2DComponent::BodyType>(rbData["Type"].get<int>());
                 rb.FixedRotation = rbData["FixedRotation"].get<bool>();
+            }
+
+            if (entityData.contains("Rigidbody3DComponent"))
+            {
+                const auto& data = entityData["Rigidbody3DComponent"];
+                auto& rb = entity.HasComponent<Rigidbody3DComponent>() ? entity.GetComponent<Rigidbody3DComponent>() : entity.AddComponent<Rigidbody3DComponent>();
+                rb.Type = static_cast<Rigidbody3DComponent::BodyType>(data.value("Type", 0));
+                rb.Mass = (std::max)(0.001f, data.value("Mass", 1.0f));
+                rb.LinearDamping = (std::max)(0.0f, data.value("LinearDamping", 0.05f));
+                rb.AngularDamping = (std::max)(0.0f, data.value("AngularDamping", 0.05f));
+                rb.Friction = std::clamp(data.value("Friction", 0.5f), 0.0f, 1.0f);
+                rb.Restitution = std::clamp(data.value("Restitution", 0.0f), 0.0f, 1.0f);
+                rb.UseGravity = data.value("UseGravity", true);
+                rb.FixedRotation = data.value("FixedRotation", false);
+                if (data.contains("LinearVelocity")) rb.LinearVelocity = JsonToFloat3(data["LinearVelocity"]);
+                if (data.contains("AngularVelocity")) rb.AngularVelocity = JsonToFloat3(data["AngularVelocity"]);
             }
 
             if (entityData.contains("BoxCollider2DComponent"))

@@ -2156,6 +2156,77 @@ namespace CCEngine {
                     AddRemoveComponentButton<Rigidbody2DComponent>(parent, item, entity, "Rigidbody2D");
                 });
 
+            UI::InspectorRegistry::RegisterComponent<Rigidbody3DComponent>(
+                [](UI::Widget* parent, CCEngine::Entity entity, Rigidbody3DComponent& rigidbody)
+                {
+                    auto item = new UI::InspectorItem("Rigidbody3DItem", "Rigidbody 3D");
+                    item->SetAnchorMin(0.0f, 0.0f); item->SetAnchorMax(1.0f, 0.0f);
+                    parent->AddChild(item);
+
+                    auto bodyTypeText = [](Rigidbody3DComponent::BodyType type)
+                    {
+                        switch (type)
+                        {
+                            case Rigidbody3DComponent::BodyType::Dynamic: return "Body Type: Dynamic";
+                            case Rigidbody3DComponent::BodyType::Kinematic: return "Body Type: Kinematic";
+                            default: return "Body Type: Static";
+                        }
+                    };
+                    auto bodyType = new UI::Button("Rigidbody3DBodyType", bodyTypeText(rigidbody.Type));
+                    bodyType->SetOnClick([entity, bodyType, bodyTypeText]() mutable
+                    {
+                        auto& current = entity.GetComponent<Rigidbody3DComponent>();
+                        current.Type = static_cast<Rigidbody3DComponent::BodyType>((static_cast<int>(current.Type) + 1) % 3);
+                        bodyType->SetText(bodyTypeText(current.Type));
+                    });
+                    item->AddChild(bodyType);
+
+                    UI::InspectorUtils::AddDragFloat(item, "Rigidbody3DMass", "Mass",
+                        [entity]() mutable { return entity.GetComponent<Rigidbody3DComponent>().Mass; },
+                        [entity](float value) mutable { entity.GetComponent<Rigidbody3DComponent>().Mass = (std::max)(0.001f, value); });
+                    UI::InspectorUtils::AddDragFloat(item, "Rigidbody3DLinearDamping", "Linear Damping",
+                        [entity]() mutable { return entity.GetComponent<Rigidbody3DComponent>().LinearDamping; },
+                        [entity](float value) mutable { entity.GetComponent<Rigidbody3DComponent>().LinearDamping = (std::max)(0.0f, value); });
+                    UI::InspectorUtils::AddDragFloat(item, "Rigidbody3DAngularDamping", "Angular Damping",
+                        [entity]() mutable { return entity.GetComponent<Rigidbody3DComponent>().AngularDamping; },
+                        [entity](float value) mutable { entity.GetComponent<Rigidbody3DComponent>().AngularDamping = (std::max)(0.0f, value); });
+                    UI::InspectorUtils::AddDragFloat(item, "Rigidbody3DFriction", "Friction",
+                        [entity]() mutable { return entity.GetComponent<Rigidbody3DComponent>().Friction; },
+                        [entity](float value) mutable { entity.GetComponent<Rigidbody3DComponent>().Friction = std::clamp(value, 0.0f, 1.0f); });
+                    UI::InspectorUtils::AddDragFloat(item, "Rigidbody3DRestitution", "Restitution",
+                        [entity]() mutable { return entity.GetComponent<Rigidbody3DComponent>().Restitution; },
+                        [entity](float value) mutable { entity.GetComponent<Rigidbody3DComponent>().Restitution = std::clamp(value, 0.0f, 1.0f); });
+                    UI::InspectorUtils::AddDragFloat3(item, "Rigidbody3DLinearVelocity", "Linear Velocity",
+                        [entity]() mutable { return entity.GetComponent<Rigidbody3DComponent>().LinearVelocity; },
+                        [entity](DirectX::XMFLOAT3 value) mutable { entity.GetComponent<Rigidbody3DComponent>().LinearVelocity = value; });
+                    UI::InspectorUtils::AddDragFloat3(item, "Rigidbody3DAngularVelocity", "Angular Velocity",
+                        [entity]() mutable { return entity.GetComponent<Rigidbody3DComponent>().AngularVelocity; },
+                        [entity](DirectX::XMFLOAT3 value) mutable { entity.GetComponent<Rigidbody3DComponent>().AngularVelocity = value; });
+
+                    auto gravity = new UI::Button("Rigidbody3DUseGravity", rigidbody.UseGravity ? "Use Gravity: On" : "Use Gravity: Off");
+                    gravity->SetActive(rigidbody.UseGravity);
+                    gravity->SetOnClick([entity, gravity]() mutable
+                    {
+                        auto& current = entity.GetComponent<Rigidbody3DComponent>();
+                        current.UseGravity = !current.UseGravity;
+                        gravity->SetActive(current.UseGravity);
+                        gravity->SetText(current.UseGravity ? "Use Gravity: On" : "Use Gravity: Off");
+                    });
+                    item->AddChild(gravity);
+
+                    auto fixedRotation = new UI::Button("Rigidbody3DFixedRotation", rigidbody.FixedRotation ? "Fixed Rotation: On" : "Fixed Rotation: Off");
+                    fixedRotation->SetActive(rigidbody.FixedRotation);
+                    fixedRotation->SetOnClick([entity, fixedRotation]() mutable
+                    {
+                        auto& current = entity.GetComponent<Rigidbody3DComponent>();
+                        current.FixedRotation = !current.FixedRotation;
+                        fixedRotation->SetActive(current.FixedRotation);
+                        fixedRotation->SetText(current.FixedRotation ? "Fixed Rotation: On" : "Fixed Rotation: Off");
+                    });
+                    item->AddChild(fixedRotation);
+                    AddRemoveComponentButton<Rigidbody3DComponent>(parent, item, entity, "Rigidbody3D");
+                });
+
             UI::InspectorRegistry::RegisterComponent<BoxCollider2DComponent>(
                 [](UI::Widget* parent, CCEngine::Entity entity, BoxCollider2DComponent& collider)
                 {

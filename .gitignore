@@ -72,6 +72,8 @@ mono_crash.*
 /Sandbox/assets/scenes/*
 !/Sandbox/assets/scenes/ActiveLifecycleTest.ccscene
 !/Sandbox/assets/scenes/PhysicsDebugTest.ccscene
+!/Sandbox/assets/scenes/Physics3D_QA.ccscene
+!/Sandbox/assets/scenes/Physics3D_QA.ccscene.meta
 !/Sandbox/assets/Scripts/
 !/Sandbox/assets/Scripts/BuildScripts.ps1
 !/Sandbox/assets/Scripts/Build/
@@ -140,6 +142,7 @@ StyleCopReport.xml
 *_h.h
 *.ilk
 *.meta
+!/Sandbox/assets/scenes/Physics3D_QA.ccscene.meta
 *.obj
 *.iobj
 *.pch

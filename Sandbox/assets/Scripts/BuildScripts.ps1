@@ -15,12 +15,17 @@ if (-not (Test-Path $dotnet)) {
     throw ".NET host was not found."
 }
 
+$supportedRuntimeMajor = 8
 $runtimeVersion = Get-ChildItem $runtimeRoot -Directory |
+    Where-Object { ([version]$_.Name).Major -eq $supportedRuntimeMajor } |
     Sort-Object { [version]$_.Name } -Descending |
     Select-Object -First 1
 if (-not $runtimeVersion) {
     throw ".NET 8 x64 runtime was not found."
 }
+
+# 엔진의 runtimeconfig가 .NET 8을 고정하므로 컴파일 참조도 같은 주 버전을 써야 한다.
+# 설치된 최신 버전을 무작정 고르면 .NET 10의 System.Text.Json을 참조해 실행 시 로드에 실패한다.
 
 New-Item -ItemType Directory -Force $buildRoot | Out-Null
 $references = Get-ChildItem $runtimeVersion.FullName -Filter *.dll |

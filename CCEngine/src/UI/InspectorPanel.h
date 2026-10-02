@@ -132,6 +132,7 @@ namespace CCEngine
                 Camera,
                 SpriteRenderer,
                 Rigidbody2D,
+                Rigidbody3D,
                 BoxCollider2D,
                 BoxCollider3D,
                 SphereCollider3D,
