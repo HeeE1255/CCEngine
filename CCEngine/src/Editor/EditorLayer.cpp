@@ -417,6 +417,43 @@ namespace CCEngine {
             drawBillboardLine(thickness, color);
         }
 
+        void DrawWorldGridLine3D(const DirectX::XMFLOAT3& a, const DirectX::XMFLOAT3& b, const DirectX::XMFLOAT3& cameraPosition, float thickness, const DirectX::XMFLOAT4& color)
+        {
+            DirectX::XMVECTOR start = DirectX::XMLoadFloat3(&a);
+            DirectX::XMVECTOR end = DirectX::XMLoadFloat3(&b);
+            DirectX::XMVECTOR line = DirectX::XMVectorSubtract(end, start);
+            float length = DirectX::XMVectorGetX(DirectX::XMVector3Length(line));
+            if (length <= 0.0001f)
+                return;
+
+            DirectX::XMVECTOR center = DirectX::XMVectorScale(DirectX::XMVectorAdd(start, end), 0.5f);
+            DirectX::XMVECTOR lineAxis = DirectX::XMVector3Normalize(line);
+            DirectX::XMVECTOR toCamera = DirectX::XMVectorSubtract(DirectX::XMLoadFloat3(&cameraPosition), center);
+            if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(toCamera)) <= 0.0001f)
+                toCamera = DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+
+            DirectX::XMVECTOR side = DirectX::XMVector3Cross(lineAxis, toCamera);
+            if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(side)) <= 0.0001f)
+                side = DirectX::XMVector3Cross(lineAxis, DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f));
+            if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(side)) <= 0.0001f)
+                side = DirectX::XMVector3Cross(lineAxis, DirectX::XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f));
+            side = DirectX::XMVector3Normalize(side);
+
+            DirectX::XMVECTOR normal = DirectX::XMVector3Normalize(DirectX::XMVector3Cross(side, lineAxis));
+            DirectX::XMFLOAT3 x, y, z, c;
+            DirectX::XMStoreFloat3(&x, DirectX::XMVectorScale(lineAxis, length));
+            DirectX::XMStoreFloat3(&y, DirectX::XMVectorScale(side, thickness));
+            DirectX::XMStoreFloat3(&z, DirectX::XMVectorScale(normal, thickness));
+            DirectX::XMStoreFloat3(&c, center);
+
+            DirectX::XMMATRIX transform(
+                x.x, x.y, x.z, 0.0f,
+                y.x, y.y, y.z, 0.0f,
+                z.x, z.y, z.z, 0.0f,
+                c.x, c.y, c.z, 1.0f);
+            Renderer2D::DrawQuad(transform, color, -1);
+        }
+
         float Length3(const DirectX::XMFLOAT3& v)
         {
             return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
@@ -1024,6 +1061,7 @@ namespace CCEngine {
         m_ActiveScene->OnUpdate(deltaTime);
         m_ActiveScene->OnRender2D(m_Camera);
         m_ActiveScene->OnRender3D(m_Camera);
+        RenderSceneGrid(m_Camera);
 
         // 자체 기즈모 시스템 구현
         auto selectedEntity = m_HierarchyPanel->GetSelectedEntity();
@@ -1175,6 +1213,8 @@ namespace CCEngine {
         if (m_FileDropdownPanel) m_FileDropdownPanel->BringToFront();
         if (m_EditDropdownPanel) m_EditDropdownPanel->BringToFront();
         if (m_WindowDropdownPanel) m_WindowDropdownPanel->BringToFront();
+        if (m_ToolOptionsDropdownPanel) m_ToolOptionsDropdownPanel->BringToFront();
+        if (m_SceneViewDropdownPanel) m_SceneViewDropdownPanel->BringToFront();
         if (m_RootMotionDebugDropdownPanel) m_RootMotionDebugDropdownPanel->BringToFront();
         if (m_ColliderDebugDropdownPanel) m_ColliderDebugDropdownPanel->BringToFront();
     }
@@ -1242,6 +1282,8 @@ namespace CCEngine {
             (m_FileDropdownPanel && m_FileDropdownPanel->IsVisible()) ||
             (m_EditDropdownPanel && m_EditDropdownPanel->IsVisible()) ||
             (m_WindowDropdownPanel && m_WindowDropdownPanel->IsVisible()) ||
+            (m_ToolOptionsDropdownPanel && m_ToolOptionsDropdownPanel->IsVisible()) ||
+            (m_SceneViewDropdownPanel && m_SceneViewDropdownPanel->IsVisible()) ||
             (m_RootMotionDebugDropdownPanel && m_RootMotionDebugDropdownPanel->IsVisible()) ||
             (m_ColliderDebugDropdownPanel && m_ColliderDebugDropdownPanel->IsVisible()) ||
             (m_ObjectContextMenuPanel && m_ObjectContextMenuPanel->IsVisible()) ||
@@ -1288,6 +1330,24 @@ namespace CCEngine {
                     !m_BtnWindowMenu->IsPointInside(mouseEvent.GetX(), mouseEvent.GetY()))
                 {
                     m_WindowDropdownPanel->SetVisible(false);
+                }
+            }
+
+            if (m_ToolOptionsDropdownPanel && m_ToolOptionsDropdownPanel->IsVisible())
+            {
+                if (!m_ToolOptionsDropdownPanel->IsPointInside(mouseEvent.GetX(), mouseEvent.GetY()) &&
+                    (!m_BtnToolOptions || !m_BtnToolOptions->IsPointInside(mouseEvent.GetX(), mouseEvent.GetY())))
+                {
+                    m_ToolOptionsDropdownPanel->SetVisible(false);
+                }
+            }
+
+            if (m_SceneViewDropdownPanel && m_SceneViewDropdownPanel->IsVisible())
+            {
+                if (!m_SceneViewDropdownPanel->IsPointInside(mouseEvent.GetX(), mouseEvent.GetY()) &&
+                    (!m_BtnSceneViewOptions || !m_BtnSceneViewOptions->IsPointInside(mouseEvent.GetX(), mouseEvent.GetY())))
+                {
+                    m_SceneViewDropdownPanel->SetVisible(false);
                 }
             }
 
@@ -2038,20 +2098,24 @@ namespace CCEngine {
         if (m_BtnToolSpace)
         {
             bool isLocal = m_GizmoSystem.GetSpace() == GizmoSpace::Local;
-            m_BtnToolSpace->SetText(isLocal ? "Local" : "World");
+            m_BtnToolSpace->SetText(isLocal ? "Space: Local" : "Space: World");
             m_BtnToolSpace->SetActive(isLocal);
         }
 
         if (m_BtnToolPivot)
         {
             bool isCenter = m_GizmoSystem.GetPivotMode() == GizmoPivotMode::Center;
-            m_BtnToolPivot->SetText(isCenter ? "Center" : "Pivot");
+            m_BtnToolPivot->SetText(isCenter ? "Pivot: Center" : "Pivot: Pivot");
             m_BtnToolPivot->SetActive(isCenter);
         }
 
         if (m_BtnToolSnap)
+        {
+            m_BtnToolSnap->SetText(m_GizmoSystem.IsSnappingEnabled() ? "Snap: On" : "Snap: Off");
             m_BtnToolSnap->SetActive(m_GizmoSystem.IsSnappingEnabled());
+        }
 
+        UpdateSceneGridButton();
         UpdatePhysicsDebugButton();
         UpdateRootMotionDebugButton();
         UpdateColliderOutlineButton();
@@ -2149,11 +2213,11 @@ namespace CCEngine {
             return;
 
         if (m_ShowColliderOutlines)
-            m_BtnColliderOutline->SetText("Collider: Outline");
+            m_BtnColliderOutline->SetText("Collider: Outline >");
         else if (m_ShowMeshColliderWire)
-            m_BtnColliderOutline->SetText("Collider: Wire");
+            m_BtnColliderOutline->SetText("Collider: Wire >");
         else
-            m_BtnColliderOutline->SetText("Collider: Off");
+            m_BtnColliderOutline->SetText("Collider: Off >");
 
         m_BtnColliderOutline->SetActive(m_ShowColliderOutlines || m_ShowMeshColliderWire);
 
@@ -2214,6 +2278,28 @@ namespace CCEngine {
         }
     }
 
+    void EditorLayer::UpdateSceneGridButton()
+    {
+        if (!m_BtnSceneGrid)
+            return;
+
+        switch (m_SceneGridMode)
+        {
+            case SceneGridMode::RGB:
+                m_BtnSceneGrid->SetText("Grid: RGB");
+                m_BtnSceneGrid->SetActive(true);
+                break;
+            case SceneGridMode::Gray:
+                m_BtnSceneGrid->SetText("Grid: Gray");
+                m_BtnSceneGrid->SetActive(true);
+                break;
+            default:
+                m_BtnSceneGrid->SetText("Grid: Off");
+                m_BtnSceneGrid->SetActive(false);
+                break;
+        }
+    }
+
     void EditorLayer::UpdateRootMotionDebugButton()
     {
         if (!m_BtnRootMotionDebug)
@@ -2227,7 +2313,7 @@ namespace CCEngine {
         if (m_BtnRootMotionPathLonger)
             m_BtnRootMotionPathLonger->SetText("Limit +");
         if (m_BtnRootMotionOptions)
-            m_BtnRootMotionOptions->SetText("Options " + std::to_string(m_RootMotionDebugPathLimit));
+            m_BtnRootMotionOptions->SetText("Root Options (" + std::to_string(m_RootMotionDebugPathLimit) + ") >");
         UpdateRootMotionDebugOptionButtons();
     }
 
@@ -2309,6 +2395,64 @@ namespace CCEngine {
     {
         if (m_RootMotionDebugDropdownPanel)
             m_RootMotionDebugDropdownPanel->SetVisible(false);
+    }
+
+    void EditorLayer::RenderSceneGrid(const PerspectiveCamera& camera)
+    {
+        if (m_SceneGridMode == SceneGridMode::Off)
+            return;
+
+        const DirectX::XMFLOAT3 cameraPosition = camera.GetPosition();
+        constexpr float gridStep = 1.0f;
+        const float renderRadius = std::ceil((std::max)(camera.GetFarClip(), 10.0f)) + 2.0f;
+        const int minX = static_cast<int>(std::floor(cameraPosition.x - renderRadius));
+        const int maxX = static_cast<int>(std::ceil(cameraPosition.x + renderRadius));
+        const int minZ = static_cast<int>(std::floor(cameraPosition.z - renderRadius));
+        const int maxZ = static_cast<int>(std::ceil(cameraPosition.z + renderRadius));
+        const float y = 0.002f;
+        constexpr float minorThickness = 0.008f;
+        const bool useRgbAxes = m_SceneGridMode == SceneGridMode::RGB;
+
+        Renderer2D::BeginScene(camera);
+        // 씬 메시가 그리드를 가리도록 깊이 검사를 켠다. 이를 빼면 바닥선이 오브젝트 위로 비쳐 보인다.
+        RenderCommand::SetDepthTest(true);
+
+        // 간격은 항상 1m로 고정한다. 카메라의 Far Clip보다 넓게 생성하면 FOV가 바뀌어도
+        // 화면 안에 그리드의 끝점이 들어오지 않고 GPU 깊이 클리핑에서 자연스럽게 정리된다.
+        for (int xIndex = minX; xIndex <= maxX; ++xIndex)
+        {
+            const float x = static_cast<float>(xIndex) * gridStep;
+            const bool isAxis = xIndex == 0;
+            const bool major = (xIndex % 5) == 0;
+            DirectX::XMFLOAT4 color = major
+                ? DirectX::XMFLOAT4{ 0.48f, 0.49f, 0.52f, 0.48f }
+                : DirectX::XMFLOAT4{ 0.34f, 0.35f, 0.38f, 0.27f };
+            if (isAxis)
+                color = useRgbAxes ? DirectX::XMFLOAT4{ 0.82f, 0.24f, 0.24f, 0.82f } : DirectX::XMFLOAT4{ 0.64f, 0.65f, 0.68f, 0.72f };
+
+            DrawWorldGridLine3D(
+                { x, y, static_cast<float>(minZ) }, { x, y, static_cast<float>(maxZ) }, cameraPosition,
+                minorThickness * (isAxis ? 2.2f : major ? 1.7f : 1.0f), color);
+        }
+
+        for (int zIndex = minZ; zIndex <= maxZ; ++zIndex)
+        {
+            const float z = static_cast<float>(zIndex) * gridStep;
+            const bool isAxis = zIndex == 0;
+            const bool major = (zIndex % 5) == 0;
+            DirectX::XMFLOAT4 color = major
+                ? DirectX::XMFLOAT4{ 0.48f, 0.49f, 0.52f, 0.48f }
+                : DirectX::XMFLOAT4{ 0.34f, 0.35f, 0.38f, 0.27f };
+            if (isAxis)
+                color = useRgbAxes ? DirectX::XMFLOAT4{ 0.24f, 0.48f, 0.90f, 0.82f } : DirectX::XMFLOAT4{ 0.64f, 0.65f, 0.68f, 0.72f };
+
+            DrawWorldGridLine3D(
+                { static_cast<float>(minX), y, z }, { static_cast<float>(maxX), y, z }, cameraPosition,
+                minorThickness * (isAxis ? 2.2f : major ? 1.7f : 1.0f), color);
+        }
+
+        Renderer2D::EndScene();
+        RenderCommand::SetDepthTest(false);
     }
 
     void EditorLayer::RenderPhysicsDebugView(const PerspectiveCamera& camera, const std::vector<Entity>& selectedEntities)
@@ -3328,8 +3472,15 @@ namespace CCEngine {
             {
                 EditorQATestResult result;
                 result.Name = "Editor.UI.Root";
-                result.Passed = m_RootUI != nullptr && m_ViewportWindow != nullptr && m_GameWindow != nullptr;
-                result.Message = result.Passed ? "Root UI and default view windows are ready." : "Default editor UI is incomplete.";
+                const bool defaultWindowsReady = m_RootUI != nullptr && m_ViewportWindow != nullptr && m_GameWindow != nullptr;
+                const bool compactToolbarReady = m_ToolbarPanel != nullptr &&
+                    m_BtnToolOptions != nullptr && m_ToolOptionsDropdownPanel != nullptr &&
+                    m_BtnSceneViewOptions != nullptr && m_SceneViewDropdownPanel != nullptr;
+                const bool sceneGridReady = m_BtnSceneGrid != nullptr && m_SceneGridMode == SceneGridMode::RGB;
+                result.Passed = defaultWindowsReady && compactToolbarReady && sceneGridReady;
+                result.Message = result.Passed
+                    ? "Root UI, compact toolbar dropdowns, and the default scene grid are ready."
+                    : "Default editor windows, toolbar dropdowns, or scene grid are incomplete.";
                 return result;
             });
 
@@ -5588,93 +5739,75 @@ namespace CCEngine {
         m_ToolbarPanel->SetOffsetMin(250.0f, 48.0f); m_ToolbarPanel->SetOffsetMax(-300.0f, 88.0f);
         m_RootUI->AddChild(m_ToolbarPanel);
 
-        m_BtnToolSelect = new UI::Button("BtnToolSelect", "Q");
-        m_BtnToolSelect->SetAnchorMin(0.0f, 0.5f); m_BtnToolSelect->SetAnchorMax(0.0f, 0.5f);
-        m_BtnToolSelect->SetOffsetMin(10.0f, -12.0f); m_BtnToolSelect->SetOffsetMax(40.0f, 12.0f);
-        m_ToolbarPanel->AddChild(m_BtnToolSelect);
+        auto addToolbarButton = [this](const char* name, const char* text, float left, float right)
+        {
+            auto* button = new UI::Button(name, text);
+            button->SetAnchorMin(0.0f, 0.5f);
+            button->SetAnchorMax(0.0f, 0.5f);
+            button->SetOffsetMin(left, -12.0f);
+            button->SetOffsetMax(right, 12.0f);
+            m_ToolbarPanel->AddChild(button);
+            return button;
+        };
 
-        m_BtnToolMove = new UI::Button("BtnToolMove", "W");
-        m_BtnToolMove->SetAnchorMin(0.0f, 0.5f); m_BtnToolMove->SetAnchorMax(0.0f, 0.5f);
-        m_BtnToolMove->SetOffsetMin(44.0f, -12.0f); m_BtnToolMove->SetOffsetMax(74.0f, 12.0f);
-        m_ToolbarPanel->AddChild(m_BtnToolMove);
+        m_BtnToolSelect = addToolbarButton("BtnToolSelect", "Q", 10.0f, 38.0f);
+        m_BtnToolMove = addToolbarButton("BtnToolMove", "W", 40.0f, 68.0f);
+        m_BtnToolRotate = addToolbarButton("BtnToolRotate", "E", 70.0f, 98.0f);
+        m_BtnToolScale = addToolbarButton("BtnToolScale", "R", 100.0f, 128.0f);
+        m_BtnToolCollider = addToolbarButton("BtnToolCollider", "C", 130.0f, 158.0f);
+        m_BtnToolOptions = addToolbarButton("BtnToolOptions", "Tool v", 170.0f, 244.0f);
+        m_BtnSceneViewOptions = addToolbarButton("BtnSceneViewOptions", "View v", 250.0f, 324.0f);
 
-        m_BtnToolRotate = new UI::Button("BtnToolRotate", "E");
-        m_BtnToolRotate->SetAnchorMin(0.0f, 0.5f); m_BtnToolRotate->SetAnchorMax(0.0f, 0.5f);
-        m_BtnToolRotate->SetOffsetMin(78.0f, -12.0f); m_BtnToolRotate->SetOffsetMax(108.0f, 12.0f);
-        m_ToolbarPanel->AddChild(m_BtnToolRotate);
+        auto addDropdownButton = [](UI::Panel* panel, const char* name, const char* text, float top, float left = 0.0f, float right = 0.0f)
+        {
+            auto* button = new UI::Button(name, text);
+            button->SetAnchorMin(0.0f, 0.0f);
+            button->SetAnchorMax(1.0f, 0.0f);
+            button->SetOffsetMin(left, top);
+            button->SetOffsetMax(right, top + 26.0f);
+            panel->AddChild(button);
+            return button;
+        };
 
-        m_BtnToolScale = new UI::Button("BtnToolScale", "R");
-        m_BtnToolScale->SetAnchorMin(0.0f, 0.5f); m_BtnToolScale->SetAnchorMax(0.0f, 0.5f);
-        m_BtnToolScale->SetOffsetMin(112.0f, -12.0f); m_BtnToolScale->SetOffsetMax(142.0f, 12.0f);
-        m_ToolbarPanel->AddChild(m_BtnToolScale);
+        m_ToolOptionsDropdownPanel = new UI::Panel("ToolOptionsDropdown", { 0.18f, 0.18f, 0.18f, 1.0f });
+        m_ToolOptionsDropdownPanel->SetVisible(false);
+        m_ToolOptionsDropdownPanel->SetBlockMouseEvents(true);
+        m_ToolOptionsDropdownPanel->SetAnchorMin(0.0f, 0.0f);
+        m_ToolOptionsDropdownPanel->SetAnchorMax(0.0f, 0.0f);
+        m_ToolOptionsDropdownPanel->SetOffsetMin(420.0f, 88.0f);
+        m_ToolOptionsDropdownPanel->SetOffsetMax(570.0f, 192.0f);
+        m_RootUI->AddChild(m_ToolOptionsDropdownPanel);
 
-        m_BtnToolCollider = new UI::Button("BtnToolCollider", "C");
-        m_BtnToolCollider->SetAnchorMin(0.0f, 0.5f); m_BtnToolCollider->SetAnchorMax(0.0f, 0.5f);
-        m_BtnToolCollider->SetOffsetMin(146.0f, -12.0f); m_BtnToolCollider->SetOffsetMax(176.0f, 12.0f);
-        m_ToolbarPanel->AddChild(m_BtnToolCollider);
+        m_BtnToolSpace = addDropdownButton(m_ToolOptionsDropdownPanel, "BtnToolSpace", "Space: Local", 0.0f);
+        m_BtnToolPivot = addDropdownButton(m_ToolOptionsDropdownPanel, "BtnToolPivot", "Pivot: Pivot", 26.0f);
+        m_BtnToolSnap = addDropdownButton(m_ToolOptionsDropdownPanel, "BtnToolSnap", "Snap: Off", 52.0f);
+        m_BtnToolFrame = addDropdownButton(m_ToolOptionsDropdownPanel, "BtnToolFrame", "Frame Selected", 78.0f);
 
-        m_BtnToolSpace = new UI::Button("BtnToolSpace", "Local");
-        m_BtnToolSpace->SetAnchorMin(0.0f, 0.5f); m_BtnToolSpace->SetAnchorMax(0.0f, 0.5f);
-        m_BtnToolSpace->SetOffsetMin(188.0f, -12.0f); m_BtnToolSpace->SetOffsetMax(258.0f, 12.0f);
-        m_ToolbarPanel->AddChild(m_BtnToolSpace);
+        m_SceneViewDropdownPanel = new UI::Panel("SceneViewDropdown", { 0.18f, 0.18f, 0.18f, 1.0f });
+        m_SceneViewDropdownPanel->SetVisible(false);
+        m_SceneViewDropdownPanel->SetBlockMouseEvents(true);
+        m_SceneViewDropdownPanel->SetAnchorMin(0.0f, 0.0f);
+        m_SceneViewDropdownPanel->SetAnchorMax(0.0f, 0.0f);
+        m_SceneViewDropdownPanel->SetOffsetMin(500.0f, 88.0f);
+        m_SceneViewDropdownPanel->SetOffsetMax(700.0f, 270.0f);
+        m_RootUI->AddChild(m_SceneViewDropdownPanel);
 
-        m_BtnToolPivot = new UI::Button("BtnToolPivot", "Pivot");
-        m_BtnToolPivot->SetAnchorMin(0.0f, 0.5f); m_BtnToolPivot->SetAnchorMax(0.0f, 0.5f);
-        m_BtnToolPivot->SetOffsetMin(262.0f, -12.0f); m_BtnToolPivot->SetOffsetMax(332.0f, 12.0f);
-        m_ToolbarPanel->AddChild(m_BtnToolPivot);
-
-        m_BtnToolSnap = new UI::Button("BtnToolSnap", "Snap");
-        m_BtnToolSnap->SetAnchorMin(0.0f, 0.5f); m_BtnToolSnap->SetAnchorMax(0.0f, 0.5f);
-        m_BtnToolSnap->SetOffsetMin(336.0f, -12.0f); m_BtnToolSnap->SetOffsetMax(392.0f, 12.0f);
-        m_ToolbarPanel->AddChild(m_BtnToolSnap);
-
-        m_BtnToolFrame = new UI::Button("BtnToolFrame", "Frame");
-        m_BtnToolFrame->SetAnchorMin(0.0f, 0.5f); m_BtnToolFrame->SetAnchorMax(0.0f, 0.5f);
-        m_BtnToolFrame->SetOffsetMin(396.0f, -12.0f); m_BtnToolFrame->SetOffsetMax(458.0f, 12.0f);
-        m_ToolbarPanel->AddChild(m_BtnToolFrame);
-
-        m_BtnPhysicsDebug = new UI::Button("BtnPhysicsDebug", "Physics: Off");
-        m_BtnPhysicsDebug->SetAnchorMin(0.0f, 0.5f); m_BtnPhysicsDebug->SetAnchorMax(0.0f, 0.5f);
-        m_BtnPhysicsDebug->SetOffsetMin(432.0f, -12.0f); m_BtnPhysicsDebug->SetOffsetMax(580.0f, 12.0f);
-        m_ToolbarPanel->AddChild(m_BtnPhysicsDebug);
-
-        m_BtnRootMotionDebug = new UI::Button("BtnRootMotionDebug", "Root Motion: Off");
-        m_BtnRootMotionDebug->SetAnchorMin(0.0f, 0.5f); m_BtnRootMotionDebug->SetAnchorMax(0.0f, 0.5f);
-        m_BtnRootMotionDebug->SetOffsetMin(588.0f, -12.0f); m_BtnRootMotionDebug->SetOffsetMax(724.0f, 12.0f);
-        m_ToolbarPanel->AddChild(m_BtnRootMotionDebug);
-
-        m_BtnRootMotionOptions = new UI::Button("BtnRootMotionOptions", "Options");
-        m_BtnRootMotionOptions->SetAnchorMin(0.0f, 0.5f); m_BtnRootMotionOptions->SetAnchorMax(0.0f, 0.5f);
-        m_BtnRootMotionOptions->SetOffsetMin(728.0f, -12.0f); m_BtnRootMotionOptions->SetOffsetMax(824.0f, 12.0f);
-        m_ToolbarPanel->AddChild(m_BtnRootMotionOptions);
-
-        m_BtnRootMotionClear = new UI::Button("BtnRootMotionClear", "Clear");
-        m_BtnRootMotionClear->SetAnchorMin(0.0f, 0.5f); m_BtnRootMotionClear->SetAnchorMax(0.0f, 0.5f);
-        m_BtnRootMotionClear->SetOffsetMin(828.0f, -12.0f); m_BtnRootMotionClear->SetOffsetMax(880.0f, 12.0f);
-        m_ToolbarPanel->AddChild(m_BtnRootMotionClear);
-
-        m_BtnRootMotionPathShorter = new UI::Button("BtnRootMotionPathShorter", "Path -");
-        m_BtnRootMotionPathShorter->SetAnchorMin(0.0f, 0.5f); m_BtnRootMotionPathShorter->SetAnchorMax(0.0f, 0.5f);
-        m_BtnRootMotionPathShorter->SetOffsetMin(884.0f, -12.0f); m_BtnRootMotionPathShorter->SetOffsetMax(952.0f, 12.0f);
-        m_ToolbarPanel->AddChild(m_BtnRootMotionPathShorter);
-
-        m_BtnRootMotionPathLonger = new UI::Button("BtnRootMotionPathLonger", "Path +");
-        m_BtnRootMotionPathLonger->SetAnchorMin(0.0f, 0.5f); m_BtnRootMotionPathLonger->SetAnchorMax(0.0f, 0.5f);
-        m_BtnRootMotionPathLonger->SetOffsetMin(956.0f, -12.0f); m_BtnRootMotionPathLonger->SetOffsetMax(1024.0f, 12.0f);
-        m_ToolbarPanel->AddChild(m_BtnRootMotionPathLonger);
-
-        m_BtnColliderOutline = new UI::Button("BtnColliderOutline", "Collider: Off");
-        m_BtnColliderOutline->SetAnchorMin(0.0f, 0.5f); m_BtnColliderOutline->SetAnchorMax(0.0f, 0.5f);
-        m_BtnColliderOutline->SetOffsetMin(1032.0f, -12.0f); m_BtnColliderOutline->SetOffsetMax(1168.0f, 12.0f);
-        m_ToolbarPanel->AddChild(m_BtnColliderOutline);
+        m_BtnSceneGrid = addDropdownButton(m_SceneViewDropdownPanel, "BtnSceneGrid", "Grid: RGB", 0.0f);
+        m_BtnPhysicsDebug = addDropdownButton(m_SceneViewDropdownPanel, "BtnPhysicsDebug", "Physics: Off", 26.0f);
+        m_BtnColliderOutline = addDropdownButton(m_SceneViewDropdownPanel, "BtnColliderOutline", "Collider: Off >", 52.0f);
+        m_BtnRootMotionDebug = addDropdownButton(m_SceneViewDropdownPanel, "BtnRootMotionDebug", "Root Motion: Off", 78.0f);
+        m_BtnRootMotionOptions = addDropdownButton(m_SceneViewDropdownPanel, "BtnRootMotionOptions", "Root Options >", 104.0f);
+        m_BtnRootMotionClear = addDropdownButton(m_SceneViewDropdownPanel, "BtnRootMotionClear", "Clear Root Path", 130.0f);
+        m_BtnRootMotionPathShorter = addDropdownButton(m_SceneViewDropdownPanel, "BtnRootMotionPathShorter", "Limit -", 156.0f, 0.0f, -100.0f);
+        m_BtnRootMotionPathLonger = addDropdownButton(m_SceneViewDropdownPanel, "BtnRootMotionPathLonger", "Limit +", 156.0f, 100.0f, 0.0f);
 
         m_RootMotionDebugDropdownPanel = new UI::Panel("RootMotionDebugDropdown", { 0.18f, 0.18f, 0.18f, 1.0f });
         m_RootMotionDebugDropdownPanel->SetVisible(false);
         m_RootMotionDebugDropdownPanel->SetBlockMouseEvents(true);
         m_RootMotionDebugDropdownPanel->SetAnchorMin(0.0f, 0.0f);
         m_RootMotionDebugDropdownPanel->SetAnchorMax(0.0f, 0.0f);
-        m_RootMotionDebugDropdownPanel->SetOffsetMin(728.0f, 88.0f);
-        m_RootMotionDebugDropdownPanel->SetOffsetMax(930.0f, 218.0f);
+        m_RootMotionDebugDropdownPanel->SetOffsetMin(700.0f, 192.0f);
+        m_RootMotionDebugDropdownPanel->SetOffsetMax(902.0f, 322.0f);
         m_RootUI->AddChild(m_RootMotionDebugDropdownPanel);
 
         m_BtnRootMotionScopeMode = new UI::Button("BtnRootMotionScopeMode", "Scope: Selected");
@@ -5707,8 +5840,8 @@ namespace CCEngine {
         m_ColliderDebugDropdownPanel->SetBlockMouseEvents(true);
         m_ColliderDebugDropdownPanel->SetAnchorMin(0.0f, 0.0f);
         m_ColliderDebugDropdownPanel->SetAnchorMax(0.0f, 0.0f);
-        m_ColliderDebugDropdownPanel->SetOffsetMin(1032.0f, 88.0f);
-        m_ColliderDebugDropdownPanel->SetOffsetMax(1204.0f, 140.0f);
+        m_ColliderDebugDropdownPanel->SetOffsetMin(700.0f, 140.0f);
+        m_ColliderDebugDropdownPanel->SetOffsetMax(872.0f, 192.0f);
         m_RootUI->AddChild(m_ColliderDebugDropdownPanel);
 
         m_BtnColliderOutlineMode = new UI::Button("BtnColliderOutlineMode", "Outline: Off");
@@ -5721,19 +5854,19 @@ namespace CCEngine {
         m_BtnMeshColliderWireMode->SetOffsetMin(0.0f, 26.0f); m_BtnMeshColliderWireMode->SetOffsetMax(0.0f, 52.0f);
         m_ColliderDebugDropdownPanel->AddChild(m_BtnMeshColliderWireMode);
 
-        m_BtnPlay = new UI::Button("BtnPlay", "Play");
-        m_BtnPlay->SetAnchorMin(1.0f, 0.5f); m_BtnPlay->SetAnchorMax(1.0f, 0.5f);
-        m_BtnPlay->SetOffsetMin(-220.0f, -12.0f); m_BtnPlay->SetOffsetMax(-160.0f, 12.0f);
+        m_BtnPlay = new UI::Button("BtnPlay", ">");
+        m_BtnPlay->SetAnchorMin(0.5f, 0.5f); m_BtnPlay->SetAnchorMax(0.5f, 0.5f);
+        m_BtnPlay->SetOffsetMin(-50.0f, -12.0f); m_BtnPlay->SetOffsetMax(-18.0f, 12.0f);
         m_ToolbarPanel->AddChild(m_BtnPlay);
 
-        m_BtnPause = new UI::Button("BtnPause", "Pause");
-        m_BtnPause->SetAnchorMin(1.0f, 0.5f); m_BtnPause->SetAnchorMax(1.0f, 0.5f);
-        m_BtnPause->SetOffsetMin(-150.0f, -12.0f); m_BtnPause->SetOffsetMax(-80.0f, 12.0f);
+        m_BtnPause = new UI::Button("BtnPause", "||");
+        m_BtnPause->SetAnchorMin(0.5f, 0.5f); m_BtnPause->SetAnchorMax(0.5f, 0.5f);
+        m_BtnPause->SetOffsetMin(-16.0f, -12.0f); m_BtnPause->SetOffsetMax(16.0f, 12.0f);
         m_ToolbarPanel->AddChild(m_BtnPause);
 
-        m_BtnStop = new UI::Button("BtnStop", "Stop");
-        m_BtnStop->SetAnchorMin(1.0f, 0.5f); m_BtnStop->SetAnchorMax(1.0f, 0.5f);
-        m_BtnStop->SetOffsetMin(-70.0f, -12.0f); m_BtnStop->SetOffsetMax(-10.0f, 12.0f);
+        m_BtnStop = new UI::Button("BtnStop", "[]");
+        m_BtnStop->SetAnchorMin(0.5f, 0.5f); m_BtnStop->SetAnchorMax(0.5f, 0.5f);
+        m_BtnStop->SetOffsetMin(18.0f, -12.0f); m_BtnStop->SetOffsetMax(50.0f, 12.0f);
         m_ToolbarPanel->AddChild(m_BtnStop);
 
         m_ViewportWindow = new UI::WindowPanel("ViewportWindowUI", "Scene View");
@@ -6014,6 +6147,8 @@ namespace CCEngine {
                 m_FileDropdownPanel->SetVisible(!m_FileDropdownPanel->IsVisible());
                 m_EditDropdownPanel->SetVisible(false);
                 m_WindowDropdownPanel->SetVisible(false);
+                m_ToolOptionsDropdownPanel->SetVisible(false);
+                m_SceneViewDropdownPanel->SetVisible(false);
                 HideRootMotionDebugDropdown();
                 HideColliderDebugDropdown();
                 BringEditorOverlaysToFront();
@@ -6023,6 +6158,8 @@ namespace CCEngine {
                 m_EditDropdownPanel->SetVisible(!m_EditDropdownPanel->IsVisible());
                 m_FileDropdownPanel->SetVisible(false);
                 m_WindowDropdownPanel->SetVisible(false);
+                m_ToolOptionsDropdownPanel->SetVisible(false);
+                m_SceneViewDropdownPanel->SetVisible(false);
                 HideRootMotionDebugDropdown();
                 HideColliderDebugDropdown();
                 BringEditorOverlaysToFront();
@@ -6032,6 +6169,8 @@ namespace CCEngine {
                 m_WindowDropdownPanel->SetVisible(!m_WindowDropdownPanel->IsVisible());
                 m_FileDropdownPanel->SetVisible(false);
                 m_EditDropdownPanel->SetVisible(false);
+                m_ToolOptionsDropdownPanel->SetVisible(false);
+                m_SceneViewDropdownPanel->SetVisible(false);
                 HideRootMotionDebugDropdown();
                 HideColliderDebugDropdown();
                 BringEditorOverlaysToFront();
@@ -6097,15 +6236,62 @@ namespace CCEngine {
         m_BtnToolRotate->SetOnClick([setSceneTool]() mutable { setSceneTool(GizmoMode::Rotate); });
         m_BtnToolScale->SetOnClick([setSceneTool]() mutable { setSceneTool(GizmoMode::Scale); });
         m_BtnToolCollider->SetOnClick([setSceneTool]() mutable { setSceneTool(GizmoMode::Collider, true); });
-        m_BtnToolSpace->SetOnClick([this]() { m_GizmoSystem.ToggleSpace(); UpdateSceneToolButtons(); });
-        m_BtnToolPivot->SetOnClick([this]() { m_GizmoSystem.TogglePivotMode(); UpdateSceneToolButtons(); });
+        m_BtnToolOptions->SetOnClick([this]()
+            {
+                m_ToolOptionsDropdownPanel->SetVisible(!m_ToolOptionsDropdownPanel->IsVisible());
+                m_SceneViewDropdownPanel->SetVisible(false);
+                m_FileDropdownPanel->SetVisible(false);
+                m_EditDropdownPanel->SetVisible(false);
+                m_WindowDropdownPanel->SetVisible(false);
+                HideRootMotionDebugDropdown();
+                HideColliderDebugDropdown();
+                BringEditorOverlaysToFront();
+            });
+        m_BtnSceneViewOptions->SetOnClick([this]()
+            {
+                m_SceneViewDropdownPanel->SetVisible(!m_SceneViewDropdownPanel->IsVisible());
+                m_ToolOptionsDropdownPanel->SetVisible(false);
+                m_FileDropdownPanel->SetVisible(false);
+                m_EditDropdownPanel->SetVisible(false);
+                m_WindowDropdownPanel->SetVisible(false);
+                HideRootMotionDebugDropdown();
+                HideColliderDebugDropdown();
+                BringEditorOverlaysToFront();
+            });
+        m_BtnToolSpace->SetOnClick([this]()
+            {
+                m_GizmoSystem.ToggleSpace();
+                UpdateSceneToolButtons();
+                m_ToolOptionsDropdownPanel->SetVisible(false);
+            });
+        m_BtnToolPivot->SetOnClick([this]()
+            {
+                m_GizmoSystem.TogglePivotMode();
+                UpdateSceneToolButtons();
+                m_ToolOptionsDropdownPanel->SetVisible(false);
+            });
         m_BtnToolSnap->SetOnClick([this]()
             {
                 m_GizmoSystem.ToggleSnapping();
                 UpdateSceneToolButtons();
                 RefreshColliderEditInspectors();
+                m_ToolOptionsDropdownPanel->SetVisible(false);
             });
-        m_BtnToolFrame->SetOnClick([this]() { FrameSelectedEntity(); });
+        m_BtnToolFrame->SetOnClick([this]()
+            {
+                FrameSelectedEntity();
+                m_ToolOptionsDropdownPanel->SetVisible(false);
+            });
+        m_BtnSceneGrid->SetOnClick([this]()
+            {
+                switch (m_SceneGridMode)
+                {
+                    case SceneGridMode::RGB: m_SceneGridMode = SceneGridMode::Gray; break;
+                    case SceneGridMode::Gray: m_SceneGridMode = SceneGridMode::Off; break;
+                    default: m_SceneGridMode = SceneGridMode::RGB; break;
+                }
+                UpdateSceneGridButton();
+            });
         m_BtnPhysicsDebug->SetOnClick([this]() { CyclePhysicsDebugViewMode(); });
         m_BtnRootMotionDebug->SetOnClick([this]()
             {

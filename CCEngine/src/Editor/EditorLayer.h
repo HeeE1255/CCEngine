@@ -55,6 +55,13 @@ namespace CCEngine {
         virtual void OnImGuiRender() override;
 
     private:
+        enum class SceneGridMode
+        {
+            Off,
+            RGB,
+            Gray
+        };
+
         void SaveScene();
         void SaveSceneAs();
         void OpenScene();
@@ -126,8 +133,10 @@ namespace CCEngine {
         void BringEditorOverlaysToFront();
         void RenderPhysicsDebugView(const PerspectiveCamera& camera, const std::vector<Entity>& selectedEntities);
         void RenderRootMotionDebugView(const PerspectiveCamera& camera, const std::vector<Entity>& selectedEntities);
+        void RenderSceneGrid(const PerspectiveCamera& camera);
         void CyclePhysicsDebugViewMode();
         void UpdatePhysicsDebugButton();
+        void UpdateSceneGridButton();
         void UpdateRootMotionDebugButton();
         void UpdateRootMotionDebugOptionButtons();
         void ClearRootMotionDebugPaths();
@@ -235,6 +244,11 @@ namespace CCEngine {
         UI::Button* m_BtnToolPivot = nullptr;
         UI::Button* m_BtnToolSnap = nullptr;
         UI::Button* m_BtnToolFrame = nullptr;
+        UI::Button* m_BtnToolOptions = nullptr;
+        UI::Panel* m_ToolOptionsDropdownPanel = nullptr;
+        UI::Button* m_BtnSceneViewOptions = nullptr;
+        UI::Panel* m_SceneViewDropdownPanel = nullptr;
+        UI::Button* m_BtnSceneGrid = nullptr;
         UI::Button* m_BtnPhysicsDebug = nullptr;
         UI::Button* m_BtnRootMotionDebug = nullptr;
         UI::Button* m_BtnRootMotionOptions = nullptr;
@@ -296,6 +310,7 @@ namespace CCEngine {
         float m_LastViewportRightClickX = 0.0f;
         float m_LastViewportRightClickY = 0.0f;
         int m_PhysicsDebugViewMode = 0; // 0: Off, 1/2: 2D Selected/All, 3/4: 3D Selected/All, 5/6: Both Selected/All
+        SceneGridMode m_SceneGridMode = SceneGridMode::RGB;
         bool m_ShowRootMotionDebug = false;
         bool m_RootMotionDebugAllAnimators = false;
         bool m_ShowRootMotionPath = true;

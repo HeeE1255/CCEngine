@@ -24,6 +24,8 @@ namespace CCEngine
         // (선택) 현재 카메라의 설정값을 가져오는 Getter들
         float GetFOV() const { return m_FOV; }
         float GetAspectRatio() const { return m_AspectRatio; }
+        float GetNearClip() const { return m_NearClip; }
+        float GetFarClip() const { return m_FarClip; }
         DirectX::XMFLOAT3 GetPosition() const { return m_Position; }
 
     private:
