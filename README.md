@@ -44,21 +44,6 @@ The RHI (Rendering Hardware Interface) separates common rendering code from grap
 
 처음 사용하는 분은 [사용자 설명서](docs/CCEngine_User_Guide.md)부터 읽어 주세요. 스크립트 작성은 [C# 스크립팅](docs/CCEngine_Scripting.md), 로그 확인은 [로그와 문제 확인](docs/SCRIPTING_DEBUG_LOGS.md)에서 안내합니다.
 
-## Current Scope
-
-The repository includes the engine source, Sandbox editor application, public sample scripts, shaders, font asset, and small test scenes.
-
-Included Sandbox assets:
-
-- `Sandbox/assets/Scripts/`
-- `Sandbox/assets/fonts/NotoSansKR-VariableFont_wght.ttf`
-- `Sandbox/assets/shaders/*.hlsl`
-- `Sandbox/assets/scenes/Collision_Test.ccscene`
-- `Sandbox/assets/scenes/Animator_Test.ccscene`
-- `Sandbox/assets/scenes/Physics3D_QA.ccscene`
-
-Large third-party model/texture packs are intentionally not included because of redistribution restrictions.
-
 ## Requirements
 
 - Windows
@@ -111,8 +96,6 @@ Useful test scenes:
 - `assets/scenes/Animator_Test.ccscene`
 - `assets/scenes/Physics3D_QA.ccscene`
 
-The Animator scene may reference local licensed assets that are not included in the repository.
-
 ## C# Script Build
 
 C# gameplay scripts are source-controlled, but generated script DLLs are not committed.
@@ -145,37 +128,6 @@ Current guide files:
 `docs/CCEngine_Scripting_Guide.pptx` and `docs/CCEngine_Scripting_Guidebook.pptx` are earlier learning materials. Use the Markdown guides above for current API names and workflows.
 
 The `docs/` folder is intended to be pushed to GitHub when it contains public portfolio documentation.
-
-## Local-Only Workspace
-
-Private notes, temporary QA files, screenshots, and scratch files should go under:
-
-```text
-local/
-```
-
-This folder is ignored by Git and will not be pushed.
-
-Suggested usage:
-
-- `local/qa/`
-- `local/screenshots/`
-- `local/notes/`
-- `local/scratch/`
-
-## Asset Policy
-
-Only redistributable or engine-owned sample assets should be committed.
-
-Do not commit:
-
-- licensed character/model packs
-- private test images
-- generated thumbnails
-- editor cache/trash files
-- build intermediate files
-
-The `.gitignore` is configured to keep `Sandbox/assets/Chocolate rice/` and other local-only test assets out of Git.
 
 ## Notes
 
@@ -227,10 +179,4 @@ C# 샘플은 `Sandbox`에서 `.\assets\Scripts\BuildScripts.ps1`을 실행해 �
 - [로그와 문제 확인](docs/SCRIPTING_DEBUG_LOGS.md): Console과 물리 이벤트 로그.
 - `Sandbox/assets/scenes/`: `Collision_Test`, `Animator_Test`, `Physics3D_QA` 테스트 씬.
 
-기존 PPTX 학습 자료보다 위 Markdown 설명서의 API와 작업 순서를 우선합니다. Animator 테스트 씬에는 저장소에 없는 로컬 라이선스 에셋 참조가 있을 수 있습니다.
-
-### 공개 범위
-
-엔진 소스, 공개 도구, 설명서, 재배포 가능한 샘플과 테스트 씬은 Git에 포함합니다. `local/` 하위 전체, QA 시트/결과/스크린샷, 개인 메모, 빌드 산출물과 캐시는 제외합니다. QA 도구의 소스 코드와 QA 실행 결과물은 구분합니다.
-
-`Sandbox/assets/Chocolate rice/`의 `mayo.fbx`를 비롯한 라이선스 제한 모델과 텍스처는 업로드하지 않습니다. 공개 저장소만 복제하면 해당 외부 에셋까지 제공되는 것은 아닙니다.
+기존 PPTX 학습 자료보다 위 Markdown 설명서의 API와 작업 순서를 우선합니다.
