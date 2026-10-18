@@ -5,7 +5,11 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Sandbox", "Sandbox\Sandbox.
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Box2D", "CCEngine\vendor\box2d\Box2D.vcxproj", "{A434E80C-1049-10BE-D9CA-B31D459E0CEF}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "CCBuild", "CCBuild\CCBuild.vcxproj", "{9B6C73CA-074C-F265-1064-7D3C7CC258C7}"
+EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "CCEngine", "CCEngine\CCEngine.vcxproj", "{81AA601F-6D77-BB2A-9690-A9D282BCF0B8}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "CCGame", "CCGame\CCGame.vcxproj", "{A5AA0DA9-914C-387F-7A07-4CD36648BFCF}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -26,12 +30,24 @@ Global
 		{A434E80C-1049-10BE-D9CA-B31D459E0CEF}.Dist|x64.Build.0 = Dist|x64
 		{A434E80C-1049-10BE-D9CA-B31D459E0CEF}.Release|x64.ActiveCfg = Release|x64
 		{A434E80C-1049-10BE-D9CA-B31D459E0CEF}.Release|x64.Build.0 = Release|x64
+		{9B6C73CA-074C-F265-1064-7D3C7CC258C7}.Debug|x64.ActiveCfg = Debug|x64
+		{9B6C73CA-074C-F265-1064-7D3C7CC258C7}.Debug|x64.Build.0 = Debug|x64
+		{9B6C73CA-074C-F265-1064-7D3C7CC258C7}.Dist|x64.ActiveCfg = Dist|x64
+		{9B6C73CA-074C-F265-1064-7D3C7CC258C7}.Dist|x64.Build.0 = Dist|x64
+		{9B6C73CA-074C-F265-1064-7D3C7CC258C7}.Release|x64.ActiveCfg = Release|x64
+		{9B6C73CA-074C-F265-1064-7D3C7CC258C7}.Release|x64.Build.0 = Release|x64
 		{81AA601F-6D77-BB2A-9690-A9D282BCF0B8}.Debug|x64.ActiveCfg = Debug|x64
 		{81AA601F-6D77-BB2A-9690-A9D282BCF0B8}.Debug|x64.Build.0 = Debug|x64
 		{81AA601F-6D77-BB2A-9690-A9D282BCF0B8}.Dist|x64.ActiveCfg = Dist|x64
 		{81AA601F-6D77-BB2A-9690-A9D282BCF0B8}.Dist|x64.Build.0 = Dist|x64
 		{81AA601F-6D77-BB2A-9690-A9D282BCF0B8}.Release|x64.ActiveCfg = Release|x64
 		{81AA601F-6D77-BB2A-9690-A9D282BCF0B8}.Release|x64.Build.0 = Release|x64
+		{A5AA0DA9-914C-387F-7A07-4CD36648BFCF}.Debug|x64.ActiveCfg = Debug|x64
+		{A5AA0DA9-914C-387F-7A07-4CD36648BFCF}.Debug|x64.Build.0 = Debug|x64
+		{A5AA0DA9-914C-387F-7A07-4CD36648BFCF}.Dist|x64.ActiveCfg = Dist|x64
+		{A5AA0DA9-914C-387F-7A07-4CD36648BFCF}.Dist|x64.Build.0 = Dist|x64
+		{A5AA0DA9-914C-387F-7A07-4CD36648BFCF}.Release|x64.ActiveCfg = Release|x64
+		{A5AA0DA9-914C-387F-7A07-4CD36648BFCF}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

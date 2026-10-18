@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $buildRoot = Join-Path $scriptRoot "Build"
 $coreSource = Join-Path $scriptRoot "ScriptCore\ScriptCore.cs"
-$gameSources = Get-ChildItem (Join-Path $scriptRoot "Game") -Filter *.cs -Recurse
+$gameSources = Get-ChildItem (Join-Path $scriptRoot "Game") -Filter *.cs -Recurse | Sort-Object FullName
 $csc = "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\Roslyn\csc.exe"
 $dotnet = "C:\Program Files\dotnet\dotnet.exe"
 $runtimeRoot = "C:\Program Files\dotnet\shared\Microsoft.NETCore.App"
@@ -32,15 +32,16 @@ $references = Get-ChildItem $runtimeVersion.FullName -Filter *.dll |
     Where-Object {
         ($_.Name -like "System.*.dll" -and $_.Name -ne "System.IO.Compression.Native.dll") -or
         $_.Name -in @("System.Private.CoreLib.dll", "mscorlib.dll", "netstandard.dll")
-    } |
+    } | Sort-Object Name |
     ForEach-Object { "/reference:$($_.FullName)" }
+$pathMap = "/pathmap:$scriptRoot=/_/Scripts"
 
 # SDK가 없는 개발 PC에서도 같은 참조 어셈블리 집합으로 재현 가능하게 컴파일 옵션을 고정한다.
-& $csc /nologo /target:library /unsafe /langversion:latest /nostdlib+ `
+& $csc /nologo /target:library /unsafe /langversion:latest /nostdlib+ /deterministic+ $pathMap `
     @references "/out:$buildRoot\CCEngine.ScriptCore.dll" $coreSource
 if ($LASTEXITCODE -ne 0) { throw "Failed to build CCEngine.ScriptCore.dll." }
 
-& $csc /nologo /target:library /langversion:latest /nostdlib+ `
+& $csc /nologo /target:library /langversion:latest /nostdlib+ /deterministic+ $pathMap `
     @references "/reference:$buildRoot\CCEngine.ScriptCore.dll" `
     "/out:$buildRoot\GameScripts.dll" @($gameSources.FullName)
 if ($LASTEXITCODE -ne 0) { throw "Failed to build GameScripts.dll." }
@@ -97,6 +98,7 @@ static object ReadEditorInfo(FieldInfo field)
     object? drag = field.GetCustomAttributes(false).FirstOrDefault(attribute => attribute.GetType().Name == "DragAttribute");
     object? step = field.GetCustomAttributes(false).FirstOrDefault(attribute => attribute.GetType().Name == "StepAttribute");
     bool readOnly = field.GetCustomAttributes(false).Any(attribute => attribute.GetType().Name == "ReadOnlyAttribute");
+    object? assetReference = field.GetCustomAttributes(false).FirstOrDefault(attribute => attribute.GetType().Name == "AssetReferenceAttribute");
 
     string display = "Input";
     float? min = null;
@@ -123,7 +125,10 @@ static object ReadEditorInfo(FieldInfo field)
     if (readOnly)
         display = "ReadOnly";
 
-    return new { Display = display, Min = min, Max = max, Step = stepValue, ReadOnly = readOnly };
+    string assetType = assetReference == null
+        ? string.Empty
+        : Convert.ToString(assetReference.GetType().GetProperty("AssetType")!.GetValue(assetReference), CultureInfo.InvariantCulture) ?? "Any";
+    return new { Display = display, Min = min, Max = max, Step = stepValue, ReadOnly = readOnly, AssetReference = assetReference != null, AssetType = assetType };
 }
 
 string outputPath = args[0];
@@ -168,7 +173,7 @@ File.WriteAllText(outputPath, JsonSerializer.Serialize(new { Classes = classes }
 "@ | Set-Content -LiteralPath $manifestRuntimeConfig -Encoding UTF8
 
 # 스크립트 DLL을 직접 읽어서 필드 목록을 만든다. 소스 텍스트를 파싱하지 않아 실제 컴파일 결과와 항상 맞는다.
-& $csc /nologo /target:exe /langversion:latest /nostdlib+ `
+& $csc /nologo /target:exe /langversion:latest /nostdlib+ /deterministic+ $pathMap `
     @references "/reference:$buildRoot\CCEngine.ScriptCore.dll" `
     "/out:$manifestExe" $manifestSource
 if ($LASTEXITCODE -ne 0) { throw "Failed to build the C# script manifest generator." }

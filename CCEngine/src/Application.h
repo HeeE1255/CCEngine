@@ -15,10 +15,12 @@ namespace CCEngine
         // RHI와 에디터 QA처럼 실행 모드를 바꾸는 옵션은 앱 시작 때 한 번만 받는다.
         // 실행 중 전역 문자열을 다시 파싱하지 않도록 Application이 원본 인자를 보관한다.
         Application(const std::vector<std::string>& commandLineArgs = {});
+        Application(const std::vector<std::string>& commandLineArgs, const WindowProps& windowProps);
         virtual ~Application();
 
         void Run();
         virtual void OnUpdate();
+        virtual void OnMainFrameReady() {}
         void OnEvent(Event& e);
 
         // ==========================================
@@ -30,6 +32,7 @@ namespace CCEngine
 
         // 엔진 어디서든 현재 윈도우 창 객체에 접근할 수 있도록 해주는 유틸리티 함수
         inline Window& GetWindow() { return *m_Window; }
+        inline bool IsMainWindow(const Window* window) const { return window && window == m_Window.get(); }
         inline const std::vector<Window*>& GetSecondaryWindows() const { return m_SecondaryWindows; }
         void ActivateInputWindow(Window* window);
         void SetModalInputWindow(Window* window);
@@ -58,7 +61,7 @@ namespace CCEngine
         static Application* s_Instance;
 
 		std::unique_ptr<Window> m_Window; // 메인 창 (스왑체인과 렌더 타겟이 있는 창)
-		std::vector<Window*> m_SecondaryWindows; // 서브 창들 (스왑체인과 렌더 타겟이 없는 창, UI 용도)
+		std::vector<Window*> m_SecondaryWindows; // 장치는 공유하고 출력 스왑체인은 각자 소유한다.
         Window* m_ActiveInputWindow = nullptr;
         std::vector<Window*> m_ModalInputWindows;
         std::vector<std::string> m_CommandLineArgs;

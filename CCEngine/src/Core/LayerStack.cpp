@@ -4,7 +4,15 @@
 namespace CCEngine {
     LayerStack::~LayerStack()
     {
-        for (Layer* layer : m_Layers)
+        Clear();
+    }
+
+    void LayerStack::Clear()
+    {
+        std::vector<Layer*> layers;
+        layers.swap(m_Layers);
+        m_LayerInsertIndex = 0;
+        for (Layer* layer : layers)
         {
             layer->OnDetach();
             delete layer;

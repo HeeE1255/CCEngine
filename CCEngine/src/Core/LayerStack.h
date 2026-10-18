@@ -9,6 +9,7 @@ namespace CCEngine {
     public:
         LayerStack() = default;
         ~LayerStack();
+        void Clear();
 
         void PushLayer(Layer* layer);
         void PushOverlay(Layer* overlay);

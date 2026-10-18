@@ -36,6 +36,8 @@ namespace CCEngine
         float Max = 1.0f;
         float Step = 1.0f;
         bool ReadOnly = false;
+        bool AssetReference = false;
+        std::string AssetType;
     };
 
     struct ScriptClassInfo

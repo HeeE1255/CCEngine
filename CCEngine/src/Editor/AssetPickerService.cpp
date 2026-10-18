@@ -33,14 +33,18 @@ namespace CCEngine
         }
     }
 
-    void AssetPickerService::Begin(const std::string& label, const std::vector<std::string>& acceptedTypes, PickCallback onPicked)
+    void AssetPickerService::Begin(const std::string& label, const std::vector<std::string>& acceptedTypes, PickCallback onPicked, ClosedCallback onClosed)
     {
+        if (m_Request.Active)
+            Cancel(true);
+
         m_Request = {};
         m_Request.Label = label;
         m_Request.AcceptedTypes.reserve(acceptedTypes.size());
         for (const std::string& type : acceptedTypes)
             m_Request.AcceptedTypes.push_back(NormalizeType(type));
         m_Request.OnPicked = std::move(onPicked);
+        m_Request.OnClosed = std::move(onClosed);
         m_Request.Active = true;
 
         OpenPanel();
@@ -59,18 +63,22 @@ namespace CCEngine
 
     void AssetPickerService::Cancel(bool clearFilter)
     {
+        ClosedCallback onClosed = std::move(m_Request.OnClosed);
         m_Request = {};
-        if (!m_Panel)
-            return;
-
-        if (clearFilter)
-            m_Panel->ClearAssetPickerFilter();
-        if (m_Panel->GetOwnerWindow())
+        if (m_Panel)
         {
-            Application::Get()->RequestCloseSecondaryWindowByUI(m_Panel);
-            m_Panel->SetOwnerWindow(nullptr);
+            if (clearFilter)
+                m_Panel->ClearAssetPickerFilter();
+            if (m_Panel->GetOwnerWindow())
+            {
+                Application::Get()->RequestCloseSecondaryWindowByUI(m_Panel);
+                m_Panel->SetOwnerWindow(nullptr);
+            }
+            m_Panel->SetVisible(false);
         }
-        m_Panel->SetVisible(false);
+
+        if (onClosed)
+            onClosed();
     }
 
     void AssetPickerService::Shutdown()

@@ -1,11 +1,8 @@
-#pragma once
 #include "Renderer/Texture.h"
 #include "Renderer/RendererAPI.h"
 
 // 각 플랫폼별 백엔드 헤더 포함
 #include "Platform/DirectX11/DX11Texture.h"
-#include "Platform/OpenGL/OpenGLTexture.h"
-#include "Platform/Vulkan/VulkanTexture.h"
 
 #include <iostream>
 
@@ -13,6 +10,7 @@ namespace CCEngine
 {
     Texture2D* Texture2D::Create(const std::string& path)
     {
+        RendererAPI::RequireAvailable(RendererAPI::GetAPI());
         // 엔진 사령탑에게 현재 선택된 그래픽스 API가 무엇인지 물어보고 분기 처리!
         switch (RendererAPI::GetAPI())
         {
@@ -24,10 +22,10 @@ namespace CCEngine
             return new DX11Texture2D(path);
 
         case RendererAPI::API::OpenGL:
-            return new OpenGLTexture2D(path);
+            return nullptr;
 
         case RendererAPI::API::Vulkan:
-            return new VulkanTexture2D(path);
+            return nullptr;
         }
 
         std::cout << "Unknown RendererAPI!" << std::endl;
@@ -36,6 +34,7 @@ namespace CCEngine
 
     Texture2D* Texture2D::Create(uint32_t width, uint32_t height)
     {
+        RendererAPI::RequireAvailable(RendererAPI::GetAPI());
         switch (RendererAPI::GetAPI())
         {
         case RendererAPI::API::None:
@@ -46,10 +45,10 @@ namespace CCEngine
             return new DX11Texture2D(width, height);
 
         case RendererAPI::API::OpenGL:
-            return new OpenGLTexture2D(width, height);
+            return nullptr;
 
         case RendererAPI::API::Vulkan:
-            return new VulkanTexture2D(width, height);
+            return nullptr;
         }
 
         std::cout << "Unknown RendererAPI!" << std::endl;
@@ -58,6 +57,7 @@ namespace CCEngine
 
     Texture2D* Texture2D::Create(uint32_t width, uint32_t height, void* data)
     {
+        RendererAPI::RequireAvailable(RendererAPI::GetAPI());
         switch (RendererAPI::GetAPI())
         {
         case RendererAPI::API::None:

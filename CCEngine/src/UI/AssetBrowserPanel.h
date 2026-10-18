@@ -35,6 +35,7 @@ namespace CCEngine
 
             void SetRootDirectory(const std::filesystem::path& rootDirectory);
             void Refresh(bool forceAssetScan = false);
+            bool RevealAsset(const std::filesystem::path& assetPath);
             const std::filesystem::path& GetRootDirectory() const { return m_RootDirectory; }
             const std::filesystem::path& GetCurrentAssetDirectory() const { return m_CurrentDirectory; }
             bool IsDropTargetPoint(float mouseX, float mouseY) const { return IsContentPoint(mouseX, mouseY); }
@@ -89,6 +90,7 @@ namespace CCEngine
                 Model,
                 FbxMesh,
                 Texture,
+                Audio,
                 Script
             };
 
@@ -118,7 +120,8 @@ namespace CCEngine
                 Prefab,
                 Scene,
                 Script,
-                Avatar
+                Avatar,
+                Audio
             };
 
             enum class SortMode

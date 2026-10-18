@@ -13,8 +13,12 @@
 
 #include <clocale>
 #include <filesystem>
+#include <iterator>
 #include <vector>
 #include <string>
+#include <memory>
+#include <stdexcept>
+#include <iostream>
 #include <Windows.h>
 #include "Core/AssetDatabase.h"
 #include "Core/ConsoleLog.h"
@@ -24,9 +28,11 @@
 #include "Renderer/RuntimeShaderLibrary.h"
 #include "Renderer/ShaderCompiler.h"
 #include "Scripting/ScriptEngine.h"
+#ifndef CC_GAME_PLAYER
 #include "UI/AssetBrowserPanel.h"
 #include "UI/InspectorPanel.h"
 #include "UI/InspectorRegistry.h"
+#endif
 
 // 엔트리 포인트 헤더: 플랫폼별로 메인 함수를 정의하는 헤더
 // 설명 : 엔진이 실행될 때 가장 먼저 호출되는 함수인 main 함수를 정의하는 헤더
@@ -35,12 +41,48 @@ extern CCEngine::Application* CCEngine::CreateApplication(const std::vector<std:
 
 namespace
 {
-    void SetupProjectWorkingDirectory()
+    std::filesystem::path GetExecutableDirectory()
+    {
+        wchar_t buffer[32768] = {};
+        DWORD length = GetModuleFileNameW(nullptr, buffer, static_cast<DWORD>(std::size(buffer)));
+        if (length == 0 || length >= std::size(buffer))
+            return {};
+        return std::filesystem::path(buffer).parent_path();
+    }
+
+    void SetupProjectWorkingDirectory(int argc, char** argv)
     {
         std::error_code ec;
         auto current = std::filesystem::current_path(ec);
         if (ec)
             return;
+
+        // 배포 Player는 실행 파일 옆 Manifest가 프로젝트 루트다. 에디터용 Sandbox 탐색보다
+        // 먼저 판정해야 다른 PC에서 우연히 존재하는 개발 폴더로 이동하지 않는다.
+        std::filesystem::path executableDirectory = GetExecutableDirectory();
+        if (!executableDirectory.empty() && std::filesystem::exists(executableDirectory / "GameProject.json", ec) && !ec)
+        {
+            std::filesystem::current_path(executableDirectory, ec);
+            return;
+        }
+
+        for (int i = 1; i < argc; ++i)
+        {
+            std::string argument = argv[i] ? argv[i] : "";
+            constexpr const char* prefix = "--manifest=";
+            if (argument.rfind(prefix, 0) != 0)
+                continue;
+
+            std::filesystem::path manifestPath = argument.substr(std::char_traits<char>::length(prefix));
+            if (manifestPath.is_relative())
+                manifestPath = current / manifestPath;
+            if (std::filesystem::exists(manifestPath, ec) && !ec)
+            {
+                // 명시적 Manifest 경로는 CreateApplication이 현재 작업 폴더 기준으로 절대화한다.
+                // 여기서 먼저 작업 폴더를 옮기면 상대 경로가 두 번 결합되므로 위치만 확인하고 유지한다.
+                return;
+            }
+        }
 
         // assets 폴더만으로 프로젝트를 판정하면 솔루션 루트의 임시 폴더를 잘못 선택할 수 있다.
         if (std::filesystem::exists(current / "project.ccproject", ec) && !ec &&
@@ -85,7 +127,7 @@ int main(int argc, char** argv)
     SetConsoleCP(CP_UTF8);
     ////////////////////////////////////////////////////////
 
-    SetupProjectWorkingDirectory();
+    SetupProjectWorkingDirectory(argc, argv);
 
     HWND consoleWindow = GetConsoleWindow();
     if (consoleWindow != NULL)
@@ -101,16 +143,28 @@ int main(int argc, char** argv)
         for (int i = 1; i < argc; ++i)
             commandLineArgs.emplace_back(argv[i]);
 
-        auto app = CCEngine::CreateApplication(commandLineArgs);
-        app->Run();
-        exitCode = app->GetExitCode();
-
-        delete app;
+        try
+        {
+            std::unique_ptr<CCEngine::Application> app(CCEngine::CreateApplication(commandLineArgs));
+            if (!app)
+                throw std::runtime_error("Application factory returned null.");
+            app->Run();
+            exitCode = app->GetExitCode();
+        }
+        catch (const std::exception& error)
+        {
+            // 무인 빌드도 같은 진입점을 쓰므로 모달 창으로 정지시키지 않는다.
+            std::cerr << "CCEngine failed: " << error.what() << std::endl;
+            CCEngine::ConsoleLog::Error(error.what());
+            exitCode = 1;
+        }
     }
 
     // Application이 완전히 삭제된 뒤 세션 캐시를 먼저 비운다.
     // 렌더 리소스를 물고 있는 캐시는 렌더러가 살아 있을 때 놓아야 종료 순서가 안전하다.
+#ifndef CC_GAME_PLAYER
     CCEngine::UI::AssetBrowserPanel::ShutdownSharedCaches();
+#endif
     CCEngine::ModelImporter::ClearCache();
     CCEngine::RuntimeShaderLibrary::Clear();
     CCEngine::ScriptEngine::Shutdown();
@@ -123,8 +177,10 @@ int main(int argc, char** argv)
     CCEngine::ShaderCompiler::ClearCache();
     CCEngine::AssetDatabase::Shutdown();
     CCEngine::ConsoleLog::Clear();
+#ifndef CC_GAME_PLAYER
     CCEngine::UI::InspectorPanel::ShutdownSharedCaches();
     CCEngine::UI::InspectorRegistry::Clear();
+#endif
 
     // destructor 본문 안에서 검사하면 Window, LayerStack 같은 멤버가 아직 살아 있어 정상 해제 예정 메모리도 누수처럼 보인다.
     CCEngine::MemoryManager::Shutdown();

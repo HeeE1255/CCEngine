@@ -1,4 +1,7 @@
 #pragma once
+#if defined(CC_ENABLE_VULKAN_RHI)
+#include "VulkanTextureStorage.h"
+#else
 #include "Renderer/Texture.h"
 #include <string>
 
@@ -24,3 +27,4 @@ namespace CCEngine
         // 나중에 VkImage, VkDeviceMemory, VkImageView 등 선언
     };
 }
+#endif

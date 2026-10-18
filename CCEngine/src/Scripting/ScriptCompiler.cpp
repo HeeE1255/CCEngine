@@ -179,9 +179,12 @@ namespace CCEngine
             s_LastSourceChangeTime = std::chrono::steady_clock::now();
         }
 
-        CompileResult CompileScripts()
+        CompileResult CompileScripts(const std::filesystem::path& projectRoot = {})
         {
-            const auto buildScript = std::filesystem::current_path() / "assets" / "Scripts" / "BuildScripts.ps1";
+            const std::filesystem::path root = projectRoot.empty()
+                ? std::filesystem::current_path()
+                : projectRoot;
+            const auto buildScript = root / "assets" / "Scripts" / "BuildScripts.ps1";
             if (!std::filesystem::exists(buildScript))
                 return { -1, "BuildScripts.ps1 was not found: " + buildScript.string() };
 
@@ -209,7 +212,7 @@ namespace CCEngine
             s_Compiling = true;
             ConsoleLog::Info("Compiling C# scripts...");
             // 컴파일은 파일 접근과 외부 프로세스 대기가 대부분이므로 렌더 스레드 밖에서 실행한다.
-            s_CompileTask = std::async(std::launch::async, CompileScripts);
+            s_CompileTask = std::async(std::launch::async, [] { return CompileScripts(); });
         }
 
         void RequestCompileInternal()
@@ -332,5 +335,11 @@ namespace CCEngine
     bool ScriptCompiler::IsCompiling()
     {
         return s_Compiling;
+    }
+
+    ScriptBuildResult ScriptCompiler::CompileForBuild(const std::filesystem::path& projectRoot)
+    {
+        const CompileResult result = CompileScripts(projectRoot);
+        return { result.ExitCode == 0, result.ExitCode, result.Output };
     }
 }

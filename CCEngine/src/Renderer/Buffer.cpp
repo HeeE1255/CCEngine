@@ -11,6 +11,7 @@ namespace CCEngine
     // ==========================================
     VertexBuffer* VertexBuffer::Create(void* vertices, uint32_t size)
     {
+        RendererAPI::RequireAvailable(RendererAPI::GetAPI());
         switch (RendererAPI::GetAPI())
         {
         case RendererAPI::API::None:       return nullptr;
@@ -23,6 +24,7 @@ namespace CCEngine
 
     VertexBuffer* VertexBuffer::Create(uint32_t size)
     {
+        RendererAPI::RequireAvailable(RendererAPI::GetAPI());
         switch (RendererAPI::GetAPI())
         {
         case RendererAPI::API::None:       return nullptr;
@@ -38,6 +40,7 @@ namespace CCEngine
     // ==========================================
     IndexBuffer* IndexBuffer::Create(uint32_t* indices, uint32_t count)
     {
+        RendererAPI::RequireAvailable(RendererAPI::GetAPI());
         switch (RendererAPI::GetAPI())
         {
         case RendererAPI::API::None:       return nullptr;
@@ -53,6 +56,7 @@ namespace CCEngine
     // ==========================================
     ConstantBuffer* ConstantBuffer::Create(uint32_t size)
     {
+        RendererAPI::RequireAvailable(RendererAPI::GetAPI());
         switch (RendererAPI::GetAPI())
         {
         case RendererAPI::API::None:       return nullptr;

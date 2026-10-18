@@ -164,3 +164,91 @@ project "Sandbox"
         runtime "Release"
         optimize "On"
     filter {}
+
+-- ============================================================================
+-- 4. 배포용 게임 Player
+-- ============================================================================
+project "CCGame"
+    location "CCGame"
+    kind "ConsoleApp"
+    language "C++"
+    cppdialect "C++20"
+    staticruntime "off"
+
+    targetdir ("bin/" .. outputdir)
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+
+    files {
+        "CCGame/src/**.h",
+        "CCGame/src/**.cpp"
+    }
+
+    includedirs {
+        "CCEngine/src",
+        "CCEngine/vendor/spdlog/include",
+        "CCEngine/vendor/box2d/include",
+        "CCEngine/vendor/Assimp/include"
+    }
+
+    defines { "CC_GAME_PLAYER" }
+    links { "CCEngine" }
+
+    filter "configurations:Debug"
+        defines { "CC_DEBUG" }
+        runtime "Debug"
+        symbols "On"
+
+    filter "configurations:Release"
+        defines { "CC_RELEASE" }
+        runtime "Release"
+        optimize "On"
+
+    filter "configurations:Dist"
+        defines { "CC_DIST" }
+        runtime "Release"
+        optimize "On"
+    filter {}
+
+-- ============================================================================
+-- 5. 자동화와 Build Settings가 공유할 명령행 빌더
+-- ============================================================================
+project "CCBuild"
+    location "CCBuild"
+    kind "ConsoleApp"
+    language "C++"
+    cppdialect "C++20"
+    staticruntime "off"
+
+    targetdir ("bin/" .. outputdir)
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+
+    files {
+        "CCBuild/src/**.h",
+        "CCBuild/src/**.cpp"
+    }
+
+    includedirs {
+        "CCEngine/src",
+        "CCEngine/vendor/spdlog/include",
+        "CCEngine/vendor/box2d/include",
+        "CCEngine/vendor/Assimp/include"
+    }
+
+    links { "CCEngine", "delayimp" }
+    linkoptions { "/DELAYLOAD:CCEngine.dll" }
+
+    filter "configurations:Debug"
+        defines { "CC_DEBUG" }
+        runtime "Debug"
+        symbols "On"
+
+    filter "configurations:Release"
+        defines { "CC_RELEASE" }
+        runtime "Release"
+        optimize "On"
+
+    filter "configurations:Dist"
+        defines { "CC_DIST" }
+        runtime "Release"
+        optimize "On"
+    filter {}

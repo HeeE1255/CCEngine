@@ -28,6 +28,7 @@
 #include "UI/Button.h"
 #include "UI/AssetBrowserPanel.h"
 #include "UI/AssetReferenceValidatorPanel.h"
+#include "UI/BuildSettingsPanel.h"
 #include "UI/ConsolePanel.h"
 #include "UI/ProjectSettingsPanel.h"
 #include "UI/WindowPanel.h"
@@ -62,6 +63,13 @@ namespace CCEngine {
             Gray
         };
 
+        enum class PhysicsDebugDimension
+        {
+            Both,
+            TwoD,
+            ThreeD
+        };
+
         void SaveScene();
         void SaveSceneAs();
         void OpenScene();
@@ -77,7 +85,10 @@ namespace CCEngine {
         bool ApplyTextureAssetToEntity(Entity entity, const std::string& filepath);
         bool ApplyMaterialAssetToEntity(Entity entity, const std::string& filepath);
         bool AssignAnimatorControllerToEntity(Entity entity, const std::filesystem::path& controllerPath, bool openGraph);
-        void BeginAssetPick(const std::string& label, const std::vector<std::string>& acceptedTypes, std::function<bool(const std::filesystem::path&, const std::string&)> onPicked);
+        void BeginAssetPick(const std::string& label, const std::vector<std::string>& acceptedTypes,
+            std::function<bool(const std::filesystem::path&, const std::string&)> onPicked,
+            std::function<void()> onClosed = {});
+        void BeginBuildAlwaysIncludePick();
         void BeginAnimatorClipPick(Entity entity, int layerIndex, int stateIndex);
         bool ApplyAnimatorClipAssetToState(Entity entity, int layerIndex, int stateIndex, const std::filesystem::path& assetPath);
         void SelectAssetForInspection(const std::filesystem::path& assetPath, const std::string& assetType);
@@ -124,6 +135,8 @@ namespace CCEngine {
         void ProcessAssetFileWatcher();
         void OpenEditorWindow(int windowKind);
         void OpenProjectSettingsWindow();
+        void OpenBuildSettingsWindow();
+        void NavigateToBuildDiagnostic(const GameBuildMessage& message);
         void OpenAssetReferenceValidatorWindow();
         void OpenMaterialGraphEditorWindow(const std::filesystem::path& graphPath);
         void OpenAnimatorGraphEditorWindow(Entity entity);
@@ -134,16 +147,15 @@ namespace CCEngine {
         void RenderPhysicsDebugView(const PerspectiveCamera& camera, const std::vector<Entity>& selectedEntities);
         void RenderRootMotionDebugView(const PerspectiveCamera& camera, const std::vector<Entity>& selectedEntities);
         void RenderSceneGrid(const PerspectiveCamera& camera);
-        void CyclePhysicsDebugViewMode();
         void UpdatePhysicsDebugButton();
+        void UpdatePhysicsDebugOptionButtons();
         void UpdateSceneGridButton();
         void UpdateRootMotionDebugButton();
         void UpdateRootMotionDebugOptionButtons();
         void ClearRootMotionDebugPaths();
         void SetRootMotionDebugPathLimit(size_t maxPoints);
-        void UpdateColliderOutlineButton();
         void HideRootMotionDebugDropdown();
-        void HideColliderDebugDropdown();
+        void HidePhysicsDebugDropdown();
         bool CreateAnimatorStateMachineTestScene();
         bool RunEditorQualityAssurance(bool closeWhenFinished);
 
@@ -209,6 +221,7 @@ namespace CCEngine {
         UI::Button* m_BtnSaveAs = nullptr;
         UI::Button* m_BtnSavePrefab = nullptr;
         UI::Button* m_BtnInstantiatePrefab = nullptr;
+        UI::Button* m_BtnBuildSettings = nullptr;
         UI::Button* m_BtnExit = nullptr;
         UI::Button* m_BtnEditUndo = nullptr;
         UI::Button* m_BtnEditRedo = nullptr;
@@ -224,6 +237,7 @@ namespace CCEngine {
         UI::WindowPanel* m_HistoryPanel = nullptr;
         UI::ConsolePanel* m_ConsolePanel = nullptr;
         UI::ProjectSettingsPanel* m_ProjectSettingsPanel = nullptr;
+        UI::BuildSettingsPanel* m_BuildSettingsPanel = nullptr;
         UI::AssetReferenceValidatorPanel* m_AssetReferenceValidatorPanel = nullptr;
         UI::MaterialGraphPanel* m_MaterialGraphPanel = nullptr;
         UI::Panel* m_HistoryContentPanel = nullptr;
@@ -250,6 +264,16 @@ namespace CCEngine {
         UI::Panel* m_SceneViewDropdownPanel = nullptr;
         UI::Button* m_BtnSceneGrid = nullptr;
         UI::Button* m_BtnPhysicsDebug = nullptr;
+        UI::Panel* m_PhysicsDebugDropdownPanel = nullptr;
+        UI::Button* m_BtnPhysicsDebugEnabled = nullptr;
+        UI::Button* m_BtnPhysicsDebugDimension = nullptr;
+        UI::Button* m_BtnPhysicsDebugScope = nullptr;
+        UI::Button* m_BtnPhysicsColliderMode = nullptr;
+        UI::Button* m_BtnPhysicsMeshWireMode = nullptr;
+        UI::Button* m_BtnPhysicsBodyCenters = nullptr;
+        UI::Button* m_BtnPhysicsTriggerMode = nullptr;
+        UI::Button* m_BtnPhysicsLegendColliders = nullptr;
+        UI::Button* m_BtnPhysicsLegendBodies = nullptr;
         UI::Button* m_BtnRootMotionDebug = nullptr;
         UI::Button* m_BtnRootMotionOptions = nullptr;
         UI::Button* m_BtnRootMotionClear = nullptr;
@@ -261,10 +285,6 @@ namespace CCEngine {
         UI::Button* m_BtnRootMotionRootMode = nullptr;
         UI::Button* m_BtnRootMotionDeltaMode = nullptr;
         UI::Button* m_BtnRootMotionRotationMode = nullptr;
-        UI::Button* m_BtnColliderOutline = nullptr;
-        UI::Panel* m_ColliderDebugDropdownPanel = nullptr;
-        UI::Button* m_BtnColliderOutlineMode = nullptr;
-        UI::Button* m_BtnMeshColliderWireMode = nullptr;
         UI::Panel* m_ObjectContextMenuPanel = nullptr;
         UI::Panel* m_MeshObjectSubmenuPanel = nullptr;
         UI::Button* m_BtnCreateEmpty = nullptr;
@@ -309,7 +329,13 @@ namespace CCEngine {
         std::chrono::steady_clock::time_point m_LastViewportRightClickTime = {};
         float m_LastViewportRightClickX = 0.0f;
         float m_LastViewportRightClickY = 0.0f;
-        int m_PhysicsDebugViewMode = 0; // 0: Off, 1/2: 2D Selected/All, 3/4: 3D Selected/All, 5/6: Both Selected/All
+        bool m_ShowPhysicsDebug = false;
+        PhysicsDebugDimension m_PhysicsDebugDimension = PhysicsDebugDimension::Both;
+        bool m_PhysicsDebugAllEntities = false;
+        bool m_ShowPhysicsColliders = true;
+        bool m_ShowPhysicsMeshWire = false;
+        bool m_ShowPhysicsBodyCenters = true;
+        bool m_PhysicsDebugTriggersOnly = false;
         SceneGridMode m_SceneGridMode = SceneGridMode::RGB;
         bool m_ShowRootMotionDebug = false;
         bool m_RootMotionDebugAllAnimators = false;
@@ -318,8 +344,6 @@ namespace CCEngine {
         bool m_ShowRootMotionDelta = true;
         bool m_ShowRootMotionRotation = true;
         size_t m_RootMotionDebugPathLimit = 128;
-        bool m_ShowColliderOutlines = false;
-        bool m_ShowMeshColliderWire = false;
 
     };
 

@@ -1,5 +1,11 @@
 #include "DX11Context.h"
+#include "DX11RendererAPI.h"
 #include <iostream>
+#include <cstring>
+#include <stdexcept>
+#include <string>
+#include <wrl/client.h>
+#include <algorithm>
 
 // 라이브러리 링크 (premake에서 했지만, 코드에서도 명시해주면 더 안전)
 #pragma comment(lib, "d3d11.lib")
@@ -7,27 +13,34 @@
 
 namespace CCEngine
 {
-	// 엔진 전역에서 현재 DirectX 11 컨텍스트에 접근하기 위한 정적 포인터
-	// 싱글톤 패턴처럼 사용하기 위해 클래스 외부에 정의
-	// 정적 변수 초기화
-	ID3D11Device* DX11Context::s_Device = nullptr;
-	ID3D11DeviceContext* DX11Context::s_DeviceContext = nullptr;
-	static DX11Context* s_MainContext = nullptr; // 메인 윈도우 참조용
-	DX11Context* DX11Context::s_CurrentContext = nullptr; // 현재 활성화된 컨텍스트를 추적하기 위한 정적 포인터 (멀티윈도우 지원용)
-
+    namespace
+    {
+        void RequireDX11(HRESULT result, const char* operation)
+        {
+            if (FAILED(result))
+                throw std::runtime_error(std::string(operation) + " failed (HRESULT="
+                    + std::to_string(static_cast<unsigned long>(result)) + ").");
+        }
+    }
 	DX11Context* DX11Context::Get() 
 	{
-		return s_CurrentContext ? s_CurrentContext : s_MainContext;
+		return dynamic_cast<DX11Context*>(GraphicsContext::GetCurrent());
 	}
 
 	void DX11Context::MakeCurrent()
 	{
-		s_CurrentContext = this;
+		if (!m_Commands || !m_SwapChain)
+			throw std::logic_error("DirectX11 context is not initialized.");
+		SetCurrentContext();
 	}
+
+    RendererAPI* DX11Context::GetCommands() { return m_Commands.get(); }
 
 	void DX11Context::BindBackBuffer()
 	{
-		s_DeviceContext->OMSetRenderTargets(1, &m_RenderTargetView, nullptr);
+		if (!m_RenderTargetView)
+			throw std::runtime_error("DirectX11 backbuffer is unavailable after resize.");
+		GetDeviceContext()->OMSetRenderTargets(1, &m_RenderTargetView, nullptr);
 
 		if (m_hWnd) // m_WindowHandle은 DX11Context가 가지고 있는 HWND 변수입니다.
 		{
@@ -42,17 +55,16 @@ namespace CCEngine
 			viewport.MinDepth = 0.0f;
 			viewport.MaxDepth = 1.0f;
 
-			s_DeviceContext->RSSetViewports(1, &viewport);
+			GetDeviceContext()->RSSetViewports(1, &viewport);
 		}
 
 	}
 
-	DX11Context::DX11Context(HWND hwnd) : m_hWnd(hwnd) 
+	DX11Context::DX11Context(HWND hwnd, std::shared_ptr<DX11Device> device)
+        : m_hWnd(hwnd), m_Device(std::move(device))
 	{
-		if (s_MainContext == nullptr)
-		{
-			s_MainContext = this;
-		}
+		if (!m_Device)
+			throw std::invalid_argument("DirectX11 context requires a shared device.");
 	}
 
 	DX11Context::~DX11Context() 
@@ -60,58 +72,24 @@ namespace CCEngine
 		if (m_RenderTargetView != nullptr) m_RenderTargetView->Release();
 		if (m_SwapChain != nullptr) m_SwapChain->Release();
 
-		if (this == s_MainContext)
-		{
-			if (s_DeviceContext != nullptr)
-			{
-				s_DeviceContext->ClearState();
-				s_DeviceContext->Flush();
-				s_DeviceContext->Release();
-			}
-			if (s_Device != nullptr)
-			{
-				s_Device->Release();
-			}
-			s_MainContext = nullptr;
-		}
-
-		if (this == s_CurrentContext) s_CurrentContext = nullptr;
+		// 공유 장치는 m_Device의 마지막 소유자가 놓을 때 해제된다.
 	}
 
 	void DX11Context::Init()
 	{
 		HRESULT hr;
 
-		// 1. 디바이스가 아직 없다면 생성 (엔진 실행 후 최초 1회)
-		if (s_Device == nullptr)
-		{
-			UINT createDeviceFlags = 0;
-#ifdef CC_DEBUG
-			createDeviceFlags |= D3D11_CREATE_DEVICE_DEBUG;
-#endif
-			D3D_FEATURE_LEVEL featureLevels[] = { D3D_FEATURE_LEVEL_11_0 };
-
-			hr = D3D11CreateDevice(
-				nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, createDeviceFlags,
-				featureLevels, 1, D3D11_SDK_VERSION,
-				&s_Device, nullptr, &s_DeviceContext
-			);
-
-			if (FAILED(hr))
-			{
-				std::cout << "DirectX 11 Device 생성 실패!" << std::endl;
-				return;
-			}
-		}
+		if (m_Commands)
+			throw std::logic_error("DirectX11 context is already initialized.");
 
 		// 2. 스왑 체인 생성을 위한 팩토리 가져오기
-		IDXGIFactory* factory = nullptr;
-		IDXGIDevice* dxgiDevice = nullptr;
-		IDXGIAdapter* dxgiAdapter = nullptr;
-
-		s_Device->QueryInterface(__uuidof(IDXGIDevice), (void**)&dxgiDevice);
-		dxgiDevice->GetParent(__uuidof(IDXGIAdapter), (void**)&dxgiAdapter);
-		dxgiAdapter->GetParent(__uuidof(IDXGIFactory), (void**)&factory);
+		// 중간 단계 실패도 임시 COM 참조가 자동 해제되도록 소유권을 지역 변수에 둔다.
+		Microsoft::WRL::ComPtr<IDXGIFactory> factory;
+		Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
+		Microsoft::WRL::ComPtr<IDXGIAdapter> dxgiAdapter;
+		RequireDX11(GetDevice()->QueryInterface(IID_PPV_ARGS(dxgiDevice.GetAddressOf())), "Query DXGI device");
+		RequireDX11(dxgiDevice->GetParent(IID_PPV_ARGS(dxgiAdapter.GetAddressOf())), "Get DXGI adapter");
+		RequireDX11(dxgiAdapter->GetParent(IID_PPV_ARGS(factory.GetAddressOf())), "Get DXGI factory");
 
 		// 3. 현재 창(m_hWnd)을 위한 스왑 체인 설정
 		DXGI_SWAP_CHAIN_DESC scd = {};
@@ -122,25 +100,17 @@ namespace CCEngine
 		scd.SampleDesc.Count = 1;
 		scd.Windowed = TRUE;
 
-		hr = factory->CreateSwapChain(s_Device, &scd, &m_SwapChain);
+		hr = factory->CreateSwapChain(GetDevice(), &scd, &m_SwapChain);
 
-		// 사용한 임시 객체 해제
-		factory->Release();
-		dxgiAdapter->Release();
-		dxgiDevice->Release();
-
-		if (FAILED(hr))
-		{
-			std::cout << "스왑 체인 생성 실패! HWND: " << m_hWnd << std::endl;
-			return;
-		}
+		RequireDX11(hr, "CreateSwapChain");
 
 		// 4. 렌더 타겟 뷰(RTV) 생성 (기존 로직과 동일)
-		ID3D11Texture2D* backBuffer = nullptr;
-		m_SwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&backBuffer);
-		s_Device->CreateRenderTargetView(backBuffer, nullptr, &m_RenderTargetView);
-		backBuffer->Release();
+		Microsoft::WRL::ComPtr<ID3D11Texture2D> backBuffer;
+		RequireDX11(m_SwapChain->GetBuffer(0, IID_PPV_ARGS(backBuffer.GetAddressOf())), "Get swapchain buffer");
+		RequireDX11(GetDevice()->CreateRenderTargetView(backBuffer.Get(), nullptr, &m_RenderTargetView), "Create backbuffer view");
 
+		m_Commands = std::make_unique<DX11RendererAPI>(*this);
+		MakeCurrent();
 		std::cout << "DirectX 11 윈도우 컨텍스트 초기화 완료 (HWND: " << m_hWnd << ")" << std::endl;
 	}
 
@@ -155,57 +125,101 @@ namespace CCEngine
 	{
 		float clearColor[4] = { r, g, b, a };
 		// 공유된 DeviceContext를 사용하되, 타겟은 자신의 RTV로 설정
-		s_DeviceContext->OMSetRenderTargets(1, &m_RenderTargetView, nullptr);
-		s_DeviceContext->ClearRenderTargetView(m_RenderTargetView, clearColor);
+		GetDeviceContext()->OMSetRenderTargets(1, &m_RenderTargetView, nullptr);
+		GetDeviceContext()->ClearRenderTargetView(m_RenderTargetView, clearColor);
 	}
 
-	void DX11Context::ResizeBuffers(uint32_t width, uint32_t height)
+    void DX11Context::ResizeBuffers(uint32_t width, uint32_t height)
+    {
+        if (!m_SwapChain || width == 0 || height == 0)
+            return;
+
+        // 보조 창의 WM_SIZE가 다른 창/피킹 MRT의 출력 바인딩을 덮어쓰면 안 된다.
+        constexpr UINT count = D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT;
+        ID3D11RenderTargetView* views[count]{};
+        Microsoft::WRL::ComPtr<ID3D11RenderTargetView> saved[count];
+        Microsoft::WRL::ComPtr<ID3D11DepthStencilView> depth;
+        bool replace[count]{};
+        auto* immediate = GetDeviceContext();
+        immediate->OMGetRenderTargets(count, views, depth.GetAddressOf());
+        for (UINT i = 0; i < count; ++i)
+        {
+            replace[i] = m_RenderTargetView && views[i] == m_RenderTargetView;
+            saved[i].Attach(views[i]);
+            // ResizeBuffers 전에 이 창의 이전 backbuffer를 붙잡는 참조는 모두 놓는다.
+            if (replace[i])
+                saved[i].Reset();
+        }
+        immediate->OMSetRenderTargets(0, nullptr, nullptr);
+        if (m_RenderTargetView)
+        {
+            m_RenderTargetView->Release();
+            m_RenderTargetView = nullptr;
+        }
+
+        const HRESULT resized = m_SwapChain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0);
+        // Resize 실패 시에도 기존 backbuffer에서 RTV를 복구한다.
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> buffer;
+        HRESULT restored = m_SwapChain->GetBuffer(0, IID_PPV_ARGS(buffer.GetAddressOf()));
+        if (SUCCEEDED(restored))
+            restored = GetDevice()->CreateRenderTargetView(buffer.Get(), nullptr, &m_RenderTargetView);
+
+        for (UINT i = 0; i < count; ++i)
+            views[i] = replace[i] ? m_RenderTargetView : saved[i].Get();
+        immediate->OMSetRenderTargets(count, views, depth.Get());
+        // Win32 메시지 콜백 밖으로 예외를 넘기지 않는다. 복구 실패는 다음 프레임에서 처리한다.
+        if (FAILED(resized) || FAILED(restored))
+            std::cerr << "DX11 resize failed: " << resized << ", target restore: " << restored << std::endl;
+    }
+
+	bool DX11Context::ReadBackBuffer(std::vector<uint8_t>& rgbaPixels, uint32_t& width, uint32_t& height)
 	{
-		// 스왑체인이나 디바이스가 없거나, 창이 최소화(0,0) 된 상태면 무시
-		if (!m_SwapChain || !s_Device || width == 0 || height == 0) return;
+		rgbaPixels.clear();
+		width = 0;
+		height = 0;
+		if (!m_SwapChain || !GetDevice() || !GetDeviceContext())
+			return false;
 
-		// ==========================================
-		// 1. 기존 렌더 타겟 뷰(RTV) 완벽하게 해제
-		// ==========================================
-		if (m_RenderTargetView)
-		{
-			// DX11 파이프라인에서 타겟을 해제
-			s_DeviceContext->OMSetRenderTargets(0, nullptr, nullptr);
-
-			m_RenderTargetView->Release();
-			m_RenderTargetView = nullptr;
-		}
-
-		// ==========================================
-		// 2. 스왑체인 버퍼 크기 진짜로 변경
-		// ==========================================
-		HRESULT hr = m_SwapChain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0);
-		if (FAILED(hr))
-		{
-			// 리사이즈 실패 시 로그 출력이나 예외 처리
-			return;
-		}
-
-		// ==========================================
-		// 3. 크기가 바뀐 새로운 백버퍼(버퍼) 텍스처를 스왑체인에서 가져오기
-		// ==========================================
 		ID3D11Texture2D* backBuffer = nullptr;
-		hr = m_SwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&backBuffer);
-		if (FAILED(hr)) return;
+		if (FAILED(m_SwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&backBuffer))) || !backBuffer)
+			return false;
 
-		// ==========================================
-		// 4. 가져온 백버퍼로 새로운 렌더 타겟 뷰(RTV) 생성
-		// ==========================================
-		hr = s_Device->CreateRenderTargetView(backBuffer, nullptr, &m_RenderTargetView);
+		D3D11_TEXTURE2D_DESC sourceDesc{};
+		backBuffer->GetDesc(&sourceDesc);
+		D3D11_TEXTURE2D_DESC stagingDesc = sourceDesc;
+		stagingDesc.Usage = D3D11_USAGE_STAGING;
+		stagingDesc.BindFlags = 0;
+		stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		stagingDesc.MiscFlags = 0;
 
+		ID3D11Texture2D* staging = nullptr;
+		const HRESULT createResult = GetDevice()->CreateTexture2D(&stagingDesc, nullptr, &staging);
+		if (FAILED(createResult) || !staging)
+		{
+			backBuffer->Release();
+			return false;
+		}
+
+		GetDeviceContext()->CopyResource(staging, backBuffer);
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		const HRESULT mapResult = GetDeviceContext()->Map(staging, 0, D3D11_MAP_READ, 0, &mapped);
+		if (SUCCEEDED(mapResult))
+		{
+			width = sourceDesc.Width;
+			height = sourceDesc.Height;
+			rgbaPixels.resize(static_cast<size_t>(width) * static_cast<size_t>(height) * 4u);
+			for (uint32_t y = 0; y < height; ++y)
+			{
+				const uint8_t* source = static_cast<const uint8_t*>(mapped.pData) + static_cast<size_t>(y) * mapped.RowPitch;
+				uint8_t* destination = rgbaPixels.data() + static_cast<size_t>(y) * width * 4u;
+				std::memcpy(destination, source, static_cast<size_t>(width) * 4u);
+			}
+			GetDeviceContext()->Unmap(staging, 0);
+		}
+
+		staging->Release();
 		backBuffer->Release();
-
-		if (FAILED(hr)) return;
-
-		// ==========================================
-		// 5. 완성된 새 렌더 타겟을 다시 DX11 파이프라인(Output Merger)에 장착!
-		// ==========================================
-		s_DeviceContext->OMSetRenderTargets(1, &m_RenderTargetView, nullptr);
+		return SUCCEEDED(mapResult) && !rgbaPixels.empty();
 	}
 
 

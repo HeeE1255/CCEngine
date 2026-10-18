@@ -2,12 +2,14 @@
 #include "Platform/DirectX11/DX11Context.h"
 #include <d3d11.h>
 #include <algorithm>
+#include <stdexcept>
 
 namespace CCEngine
 {
-    DX11RendererAPI::DX11RendererAPI()
+    DX11RendererAPI::DX11RendererAPI(DX11Context& context)
+        : m_Context(context)
     {
-        auto device = DX11Context::Get()->GetDevice();
+        auto device = m_Context.GetDevice();
 
         D3D11_BLEND_DESC blendDesc = {};
 
@@ -15,7 +17,8 @@ namespace CCEngine
         blendDesc.IndependentBlendEnable = FALSE;
         blendDesc.RenderTarget[0].BlendEnable = FALSE;
         blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
-        device->CreateBlendState(&blendDesc, &m_OpaqueBlendState);
+        if (FAILED(device->CreateBlendState(&blendDesc, m_OpaqueBlendState.GetAddressOf())))
+            throw std::runtime_error("CreateBlendState failed.");
 
         blendDesc.RenderTarget[0].BlendEnable = TRUE;
         blendDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
@@ -24,34 +27,33 @@ namespace CCEngine
         blendDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
         blendDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO;
         blendDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
-        device->CreateBlendState(&blendDesc, &m_TransparentBlendState);
+        if (FAILED(device->CreateBlendState(&blendDesc, m_TransparentBlendState.GetAddressOf())))
+            throw std::runtime_error("CreateBlendState failed.");
 
         blendDesc.IndependentBlendEnable = TRUE;
         blendDesc.RenderTarget[0].BlendEnable = TRUE;
         blendDesc.RenderTarget[1].BlendEnable = FALSE;
         blendDesc.RenderTarget[1].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
-        device->CreateBlendState(&blendDesc, &m_MRTPickingBlendState);
+        if (FAILED(device->CreateBlendState(&blendDesc, m_MRTPickingBlendState.GetAddressOf())))
+            throw std::runtime_error("CreateBlendState failed.");
 
-        D3D11_RASTERIZER_DESC rsDesc = {};
-        rsDesc.FillMode = D3D11_FILL_SOLID;
-        rsDesc.FrontCounterClockwise = FALSE;
-        rsDesc.DepthClipEnable = TRUE;
-
-        rsDesc.CullMode = D3D11_CULL_BACK;
-        device->CreateRasterizerState(&rsDesc, &m_CullBackState);
-
-        rsDesc.CullMode = D3D11_CULL_NONE;
-        device->CreateRasterizerState(&rsDesc, &m_CullNoneState);
+        for (uint32_t cullIndex = 0; cullIndex < 2; ++cullIndex)
+        {
+            for (uint32_t scissorIndex = 0; scissorIndex < 2; ++scissorIndex)
+            {
+                D3D11_RASTERIZER_DESC rsDesc = {};
+                rsDesc.FillMode = D3D11_FILL_SOLID;
+                rsDesc.FrontCounterClockwise = FALSE;
+                rsDesc.DepthClipEnable = TRUE;
+                rsDesc.CullMode = cullIndex == 0 ? D3D11_CULL_BACK : D3D11_CULL_NONE;
+                rsDesc.ScissorEnable = scissorIndex != 0;
+                if (FAILED(device->CreateRasterizerState(&rsDesc, m_RasterizerStates[cullIndex][scissorIndex].GetAddressOf())))
+                    throw std::runtime_error("CreateRasterizerState failed.");
+            }
+        }
     }
 
-    DX11RendererAPI::~DX11RendererAPI()
-    {
-        if (m_OpaqueBlendState) { m_OpaqueBlendState->Release(); m_OpaqueBlendState = nullptr; }
-        if (m_TransparentBlendState) { m_TransparentBlendState->Release(); m_TransparentBlendState = nullptr; }
-        if (m_MRTPickingBlendState) { m_MRTPickingBlendState->Release(); m_MRTPickingBlendState = nullptr; }
-        if (m_CullBackState) { m_CullBackState->Release(); m_CullBackState = nullptr; }
-        if (m_CullNoneState) { m_CullNoneState->Release(); m_CullNoneState = nullptr; }
-    }
+    DX11RendererAPI::~DX11RendererAPI() = default;
 
     void DX11RendererAPI::SetClearColor(float r, float g, float b, float a)
     {
@@ -63,8 +65,8 @@ namespace CCEngine
 
     void DX11RendererAPI::Clear()
     {
-        //DX11Context::Get()->Clear(m_ClearColor[0], m_ClearColor[1], m_ClearColor[2], m_ClearColor[3]);
-        auto context = DX11Context::Get()->GetDeviceContext();
+        //m_Context.Clear(m_ClearColor[0], m_ClearColor[1], m_ClearColor[2], m_ClearColor[3]);
+        auto context = m_Context.GetDeviceContext();
 
         // 1. 현재 파이프라인에 꽂혀있는 타겟(프레임버퍼 등)을 동적으로 가져옵니다.
         ID3D11RenderTargetView* currentRTV = nullptr;
@@ -81,7 +83,7 @@ namespace CCEngine
         else
         {
             // 바인딩된 게 없으면 기존처럼 Context(메인 화면) Clear 호출
-            DX11Context::Get()->Clear(m_ClearColor[0], m_ClearColor[1], m_ClearColor[2], m_ClearColor[3]);
+            m_Context.Clear(m_ClearColor[0], m_ClearColor[1], m_ClearColor[2], m_ClearColor[3]);
         }
 
         if (currentDSV)
@@ -93,7 +95,7 @@ namespace CCEngine
 
     void DX11RendererAPI::DrawIndexed(IndexBuffer* indexBuffer)
     {
-        auto context = DX11Context::Get()->GetDeviceContext();
+        auto context = m_Context.GetDeviceContext();
 
         // 정점을 삼각형 리스트로 해석하라고 DX11에 명령!
         context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -104,7 +106,7 @@ namespace CCEngine
 
     void DX11RendererAPI::DrawIndexed(uint32_t indexCount)
     {
-        auto context = DX11Context::Get()->GetDeviceContext();
+        auto context = m_Context.GetDeviceContext();
 
         context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         context->DrawIndexed(indexCount, 0, 0);
@@ -112,12 +114,7 @@ namespace CCEngine
 
     void DX11RendererAPI::SetViewport(uint32_t x, uint32_t y, uint32_t width, uint32_t height)
     {
-        if (DX11Context::Get() == nullptr)
-        {
-            return;
-        }
-
-        auto context = DX11Context::Get()->GetDeviceContext();
+        auto context = m_Context.GetDeviceContext();
 
         D3D11_VIEWPORT viewport;
         ZeroMemory(&viewport, sizeof(D3D11_VIEWPORT));
@@ -134,81 +131,49 @@ namespace CCEngine
 
     void DX11RendererAPI::ResizeContext(uint32_t width, uint32_t height)
     {
-        if (DX11Context::Get() == nullptr)
-        {
-            return;
-        }
-
         // DX11 스왑체인의 버퍼 크기를 직접 변경하는 진짜 로직 호출!
-        DX11Context::Get()->ResizeBuffers(width, height);
+        m_Context.ResizeBuffers(width, height);
     }
 
     void DX11RendererAPI::SetDepthTest(bool enable)
     {
-        auto device = DX11Context::Get()->GetDevice();
-        auto context = DX11Context::Get()->GetDeviceContext();
+        auto device = m_Context.GetDevice();
+        auto context = m_Context.GetDeviceContext();
 
-        static ID3D11DepthStencilState* enabledState = nullptr;
-        static ID3D11DepthStencilState* disabledState = nullptr;
 
-        if (!enabledState)
+        if (!m_DepthEnabled || !m_DepthDisabled)
         {
             // 
             CD3D11_DEPTH_STENCIL_DESC desc(D3D11_DEFAULT);
             desc.DepthEnable = TRUE;
             desc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
             desc.DepthFunc = D3D11_COMPARISON_LESS;
-            device->CreateDepthStencilState(&desc, &enabledState);
+            if (FAILED(device->CreateDepthStencilState(&desc, m_DepthEnabled.ReleaseAndGetAddressOf())))
+                throw std::runtime_error("CreateDepthStencilState failed.");
 
             desc.DepthEnable = FALSE;
             desc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
-            device->CreateDepthStencilState(&desc, &disabledState);
+            if (FAILED(device->CreateDepthStencilState(&desc, m_DepthDisabled.ReleaseAndGetAddressOf())))
+                throw std::runtime_error("CreateDepthStencilState failed.");
         }
 
         // 상태가 정상적으로 생성되었을 때만 적용
-        if (enabledState && disabledState)
+        if (m_DepthEnabled && m_DepthDisabled)
         {
-            context->OMSetDepthStencilState(enable ? enabledState : disabledState, 1);
+            context->OMSetDepthStencilState(enable ? m_DepthEnabled.Get() : m_DepthDisabled.Get(), 1);
         }
     }
 
     void DX11RendererAPI::SetScissorEnable(bool enable)
     {
-        auto device = DX11Context::Get()->GetDevice();
-        auto context = DX11Context::Get()->GetDeviceContext();
-
-        // SetDepthTest와 동일하게 static 변수로 RasterizerState를 캐싱합니다.
-        static ID3D11RasterizerState* enabledState = nullptr;
-        static ID3D11RasterizerState* disabledState = nullptr;
-
-        if (!enabledState)
-        {
-            D3D11_RASTERIZER_DESC desc = {};
-            desc.FillMode = D3D11_FILL_SOLID;
-            // UI 렌더링이 주 목적이므로 Culling을 끄거나, 기존 엔진 설정에 맞춥니다.
-            desc.CullMode = D3D11_CULL_NONE;
-            desc.DepthClipEnable = TRUE;
-
-            // 가위질 켜기 상태 생성
-            desc.ScissorEnable = TRUE;
-            device->CreateRasterizerState(&desc, &enabledState);
-
-            // 가위질 끄기 상태 생성
-            desc.ScissorEnable = FALSE;
-            device->CreateRasterizerState(&desc, &disabledState);
-        }
-
-        // 상태가 정상적으로 생성되었을 때만 파이프라인에 적용
-        if (enabledState && disabledState)
-        {
-            context->RSSetState(enable ? enabledState : disabledState);
-        }
+        m_ScissorEnabled = enable;
+        ApplyRasterizerState();
     }
 
     void DX11RendererAPI::SetScissor(uint32_t x, uint32_t y, uint32_t width, uint32_t height)
     {
         // 렌더링 컨텍스트를 가져와서 영역만 던져줍니다.
-        auto context = DX11Context::Get()->GetDeviceContext();
+        auto context = m_Context.GetDeviceContext();
 
         D3D11_RECT rect;
         rect.left = (LONG)x;
@@ -221,41 +186,45 @@ namespace CCEngine
 
     void DX11RendererAPI::SetBlendMode(BlendMode mode)
     {
-        auto context = DX11Context::Get()->GetDeviceContext();
+        auto context = m_Context.GetDeviceContext();
         float blendFactor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 
         switch (mode)
         {
         case BlendMode::Opaque:
-            context->OMSetBlendState(m_OpaqueBlendState, blendFactor, 0xffffffff);
+            context->OMSetBlendState(m_OpaqueBlendState.Get(), blendFactor, 0xffffffff);
             break;
         case BlendMode::Transparent:
-            context->OMSetBlendState(m_TransparentBlendState, blendFactor, 0xffffffff);
+            context->OMSetBlendState(m_TransparentBlendState.Get(), blendFactor, 0xffffffff);
             break;
         case BlendMode::MRTPicking:
-            context->OMSetBlendState(m_MRTPickingBlendState, blendFactor, 0xffffffff);
+            context->OMSetBlendState(m_MRTPickingBlendState.Get(), blendFactor, 0xffffffff);
             break;
         }
     }
 
     void DX11RendererAPI::SetCullMode(CullMode mode)
     {
-        auto context = DX11Context::Get()->GetDeviceContext();
+        m_CullMode = mode;
+        ApplyRasterizerState();
+    }
 
-        switch (mode)
-        {
-        case CullMode::Back:
-            context->RSSetState(m_CullBackState);
-            break;
-        case CullMode::None:
-            context->RSSetState(m_CullNoneState);
-            break;
-        }
+    void DX11RendererAPI::ApplyRasterizerState()
+    {
+        auto context = m_Context.GetDeviceContext();
+        if (!context)
+            return;
+
+        const uint32_t cullIndex = m_CullMode == CullMode::Back ? 0u : 1u;
+        const uint32_t scissorIndex = m_ScissorEnabled ? 1u : 0u;
+        ID3D11RasterizerState* state = m_RasterizerStates[cullIndex][scissorIndex].Get();
+        if (state)
+            context->RSSetState(state);
     }
 
     void DX11RendererAPI::BindTexture(uint32_t slot, RendererHandle rendererID)
     {
-        auto context = DX11Context::Get()->GetDeviceContext();
+        auto context = m_Context.GetDeviceContext();
         ID3D11ShaderResourceView* srv = static_cast<ID3D11ShaderResourceView*>(rendererID);
 
         context->PSSetShaderResources(slot, 1, &srv);
@@ -266,7 +235,7 @@ namespace CCEngine
         if (count == 0)
             return;
 
-        auto context = DX11Context::Get()->GetDeviceContext();
+        auto context = m_Context.GetDeviceContext();
         ID3D11ShaderResourceView* nullSRVs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
         uint32_t clampedStart = (std::min)(startSlot, (uint32_t)D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT);
         uint32_t clampedCount = (std::min)(count, (uint32_t)D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT - clampedStart);

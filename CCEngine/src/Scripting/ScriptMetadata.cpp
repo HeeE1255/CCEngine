@@ -1,6 +1,7 @@
 #include "Scripting/ScriptMetadata.h"
 
 #include "Core/ConsoleLog.h"
+#include "Core/PathContext.h"
 #include "json.hpp"
 
 #include <algorithm>
@@ -16,7 +17,7 @@ namespace CCEngine
 
         std::filesystem::path GetManifestPath()
         {
-            return std::filesystem::current_path() / "assets" / "Scripts" / "Build" / "GameScripts.manifest.json";
+            return PathContext::AssetRoot() / "Scripts" / "Build" / "GameScripts.manifest.json";
         }
 
         std::string ReadDefaultValue(const nlohmann::json& fieldData)
@@ -87,6 +88,8 @@ namespace CCEngine
                         field.Max = ReadOptionalFloat(editorData, "Max", 1.0f);
                         field.Step = ReadOptionalFloat(editorData, "Step", field.Display == ScriptFieldDisplay::Drag ? 0.1f : 1.0f);
                         field.ReadOnly = editorData.value("ReadOnly", false);
+                        field.AssetReference = editorData.value("AssetReference", false);
+                        field.AssetType = editorData.value("AssetType", "");
                     }
                     if (!field.Name.empty() && field.Type != ScriptFieldType::Unknown)
                         classInfo.Fields.push_back(field);

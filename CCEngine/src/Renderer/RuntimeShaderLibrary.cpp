@@ -2,8 +2,10 @@
 
 #include "Core/AssetDatabase.h"
 #include "Core/ConsoleLog.h"
+#include "Core/PathContext.h"
 #include "Renderer/MaterialAsset.h"
 #include "Renderer/ShaderCompiler.h"
+#include "Renderer/RendererAPI.h"
 
 #include <iostream>
 #include <unordered_map>
@@ -29,6 +31,12 @@ namespace CCEngine
             return (ec ? path.lexically_normal() : canonical).generic_string();
         }
 
+        std::string MakeCacheKey(const std::filesystem::path& path, const std::vector<std::string>& keywords)
+        {
+            return NormalizePathKey(path) + "|" + ShaderCompiler::MakeVariantKey(keywords)
+                + "|" + RendererAPI::GetAPIName(RendererAPI::GetAPI());
+        }
+
         std::filesystem::path ResolveMaterialShaderPath(const MaterialAsset& material)
         {
             if (!material.ShaderGuid.empty())
@@ -42,6 +50,17 @@ namespace CCEngine
                 return material.ShaderPath;
 
             return {};
+        }
+
+        std::vector<std::string> CollectMaterialKeywords(const MaterialAsset& material)
+        {
+            std::vector<std::string> keywords;
+            for (const auto& [name, value] : material.ShaderProperties)
+            {
+                if (value.Type == ShaderPropertyType::Toggle && value.BoolValue)
+                    keywords.push_back(name);
+            }
+            return ShaderCompiler::NormalizeKeywords(keywords);
         }
 
         std::shared_ptr<Shader> CreateShaderFromCompileResult(const ShaderCompileResult& result)
@@ -61,13 +80,14 @@ namespace CCEngine
         if (shaderPath.empty())
             return nullptr;
 
-        const std::string key = NormalizePathKey(shaderPath);
+        const auto keywords = CollectMaterialKeywords(material);
+        const std::string key = MakeCacheKey(shaderPath, keywords);
         auto found = s_ShaderCache.find(key);
         if (found != s_ShaderCache.end())
             return found->second.Program;
 
         RuntimeShaderEntry entry;
-        ShaderCompileResult compileResult = ShaderCompiler::CompileHlslFile(shaderPath, false);
+        ShaderCompileResult compileResult = ShaderCompiler::CompileHlslFile(shaderPath, false, keywords);
         if (compileResult.Success)
         {
             entry.Program = CreateShaderFromCompileResult(compileResult);
@@ -101,7 +121,7 @@ namespace CCEngine
         if (s_ErrorShader && s_ErrorShader->IsValid())
             return s_ErrorShader;
 
-        std::filesystem::path errorShaderPath = std::filesystem::current_path() / "assets" / "shaders" / "ErrorShader.hlsl";
+        std::filesystem::path errorShaderPath = PathContext::AssetRoot() / "shaders" / "ErrorShader.hlsl";
         ShaderCompileResult compileResult = ShaderCompiler::CompileHlslFile(errorShaderPath, false);
         if (compileResult.Success)
             s_ErrorShader = CreateShaderFromCompileResult(compileResult);
@@ -110,7 +130,7 @@ namespace CCEngine
         {
             // 에러 셰이더까지 깨진 경우에는 마지막 안전장치로 기본 셰이더를 쓴다.
             // 이 경로는 사용자 작업물이 아니라 엔진 내부 리소스 문제를 확인하기 위한 fallback이다.
-            s_ErrorShader.reset(Shader::Create("assets/shaders/Base3D.hlsl"));
+            s_ErrorShader.reset(Shader::Create((PathContext::AssetRoot() / "shaders" / "Base3D.hlsl").string()));
         }
 
         return s_ErrorShader;
@@ -122,7 +142,7 @@ namespace CCEngine
         if (shaderPath.empty())
             return status;
 
-        const std::string key = NormalizePathKey(shaderPath);
+        const std::string key = MakeCacheKey(shaderPath, {});
         auto found = s_ShaderCache.find(key);
         if (found == s_ShaderCache.end())
             return status;
@@ -136,7 +156,20 @@ namespace CCEngine
 
     RuntimeShaderStatus RuntimeShaderLibrary::GetStatusForMaterial(const MaterialAsset& material)
     {
-        return GetStatusForShader(ResolveMaterialShaderPath(material));
+        RuntimeShaderStatus status;
+        const auto shaderPath = ResolveMaterialShaderPath(material);
+        if (shaderPath.empty())
+            return status;
+        const auto keywords = CollectMaterialKeywords(material);
+        const std::string key = MakeCacheKey(shaderPath, keywords);
+        const auto found = s_ShaderCache.find(key);
+        if (found == s_ShaderCache.end())
+            return status;
+        status.HasEntry = true;
+        status.Failed = found->second.Failed;
+        status.UsingErrorShader = found->second.Failed;
+        status.Message = found->second.Message;
+        return status;
     }
 
     void RuntimeShaderLibrary::Invalidate(const std::filesystem::path& shaderPath)
@@ -144,7 +177,14 @@ namespace CCEngine
         if (shaderPath.empty())
             return;
 
-        s_ShaderCache.erase(NormalizePathKey(shaderPath));
+        const std::string pathPrefix = NormalizePathKey(shaderPath) + "|";
+        for (auto iterator = s_ShaderCache.begin(); iterator != s_ShaderCache.end();)
+        {
+            if (iterator->first.rfind(pathPrefix, 0) == 0)
+                iterator = s_ShaderCache.erase(iterator);
+            else
+                ++iterator;
+        }
     }
 
     void RuntimeShaderLibrary::Clear()

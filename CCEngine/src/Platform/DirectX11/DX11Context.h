@@ -1,16 +1,19 @@
 #pragma once
 #include "Renderer/GraphicsContext.h"
+#include "DX11Device.h"
 #include "Core.h"
 #include <d3d11.h>
 #include <Windows.h>
 #include <cstdint>
+#include <vector>
 
 namespace CCEngine
 {
+    class DX11RendererAPI;
     class CC_API DX11Context : public GraphicsContext
     {
     public:
-        DX11Context(HWND windowHandle);
+        DX11Context(HWND windowHandle, std::shared_ptr<DX11Device> device);
         virtual ~DX11Context();
 
         virtual void Init() override;
@@ -20,12 +23,16 @@ namespace CCEngine
 
         virtual void MakeCurrent() override;
         virtual void BindBackBuffer() override;
+        RendererAPI* GetCommands() override;
+        std::shared_ptr<GraphicsDevice> GetGraphicsDevice() const override { return m_Device; }
 
         virtual void ResizeBuffers(uint32_t width, uint32_t height) override;
 
+        bool ReadBackBuffer(std::vector<uint8_t>& rgbaPixels, uint32_t& width, uint32_t& height) override;
+
         // Get/Set은 한 줄로 작성
-        ID3D11Device* GetDevice() { return s_Device; }
-        ID3D11DeviceContext* GetDeviceContext() { return s_DeviceContext; }
+        ID3D11Device* GetDevice() { return m_Device->Native(); }
+        ID3D11DeviceContext* GetDeviceContext() { return m_Device->Immediate(); }
         HWND GetWindowHandle() const { return m_hWnd; }
         ID3D11RenderTargetView* GetBackBufferRTV() { return m_RenderTargetView; }
 		IDXGISwapChain* GetSwapChain() { return m_SwapChain; }
@@ -35,9 +42,8 @@ namespace CCEngine
     private:
         HWND m_hWnd;
 
-        static ID3D11Device* s_Device; // DirectX 11 디바이스 객체
-        static ID3D11DeviceContext* s_DeviceContext; // DirectX 11 디바이스 컨텍스트 객체 (렌더링 명령어를 GPU에 전달하는 역할)
-        static DX11Context* s_CurrentContext; // 현재 활성화된 컨텍스트를 추적하기 위한 정적 포인터 (멀티윈도우 지원용)
+        std::shared_ptr<DX11Device> m_Device;
+        std::unique_ptr<DX11RendererAPI> m_Commands;
         IDXGISwapChain* m_SwapChain = nullptr; // 스왑 체인 객체 (버퍼 스왑을 관리)
         ID3D11RenderTargetView* m_RenderTargetView = nullptr; // 렌더 타겟 뷰 객체 (렌더링 결과를 출력할 버퍼를 나타냄)
     };

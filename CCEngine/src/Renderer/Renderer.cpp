@@ -11,18 +11,30 @@ namespace CCEngine
 {
     // 배경색을 기억해 둘 내부 변수
     static float s_ClearColor[4] = { 0.1f, 0.1f, 0.1f, 1.0f };
+    static bool s_Initialized = false;
 
     // ==========================================================
     // [🔥 추가] 렌더러 전체 초기화 및 메모리 해제
     // ==========================================================
     void Renderer::Init()
     {
-        RenderCommand::Init();
-        RenderState::Init(); //
-        Renderer2D::Init();  //
-        UIRenderer::Init();
-        Renderer3D::Init(); //
-
+        if (s_Initialized)
+            return;
+        try
+        {
+            RenderCommand::Init();
+            RenderState::Init();
+            Renderer2D::Init();
+            UIRenderer::Init();
+            Renderer3D::Init();
+            s_Initialized = true;
+        }
+        catch (...)
+        {
+            // 뒤 단계가 실패해도 앞에서 만든 폰트/버퍼를 남기지 않는다.
+            Shutdown();
+            throw;
+        }
     }
 
     void Renderer::Shutdown()
@@ -32,6 +44,7 @@ namespace CCEngine
         Renderer2D::Shutdown();  //
         RenderState::Shutdown(); // 
         RenderCommand::Shutdown();
+        s_Initialized = false;
     }
     // ==========================================================
 
@@ -78,10 +91,10 @@ namespace CCEngine
 
     void Renderer::OnWindowResize(uint32_t width, uint32_t height)
     {
-        // 1. 그래픽 컨텍스트(스왑체인) 리사이즈! 
-        RenderCommand::ResizeContext(width, height);
-
-        // 2. 뷰포트(Viewport) 영역 재설정!
+        // Swapchain은 WM_SIZE에서 해당 창의 Context가 한 번만 변경한다.
+        // 여기서 전역 Context를 다시 변경하면 보조 창을 잘못 리사이즈할 수 있다.
+        if (width == 0 || height == 0)
+            return;
         RenderCommand::SetViewport(0, 0, width, height);
     }
 }

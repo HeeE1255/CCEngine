@@ -1,0 +1,45 @@
+name: Windows Release Candidate
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  release-candidate:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build engine and release tools
+        shell: pwsh
+        run: ./tools/BuildEngine.ps1 -Configuration Release -Clean
+
+      - name: Build game release
+        shell: pwsh
+        run: |
+          ./bin/Release-windows-x86_64/CCBuild.exe `
+            --project=./Sandbox `
+            --binaries=./bin/Release-windows-x86_64 `
+            --profile=BuildProfile.ccbuildprofile `
+            --output=./outputs/CIRelease
+          if ($LASTEXITCODE -ne 0) { throw "CCBuild failed: $LASTEXITCODE" }
+
+      - name: Verify release candidate
+        shell: pwsh
+        run: ./tools/VerifyReleaseCandidate.ps1 -BuildRoot ./outputs/CIRelease
+
+      - name: Create portable release
+        shell: pwsh
+        run: ./tools/New-ReleasePackage.ps1 -BuildRoot ./outputs/CIRelease -OutputDirectory ./outputs/packages
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CCEngine-windows-release-candidate
+          path: |
+            outputs/packages/*.zip
+            outputs/packages/*.sha256
+            outputs/CIRelease/BuildManifest.json
+          if-no-files-found: error
+          retention-days: 14

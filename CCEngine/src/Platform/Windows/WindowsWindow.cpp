@@ -11,6 +11,7 @@
 #include <windowsx.h>
 #include <utility>
 #include <vector>
+#include <stdexcept>
 //#include "imgui.h"
 
 //extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -57,6 +58,17 @@ namespace CCEngine
 
 		switch (message)
 		{
+		case WM_GETMINMAXINFO:
+		{
+			if (!window)
+				break;
+			auto* limits = reinterpret_cast<MINMAXINFO*>(lParam);
+			if (window->GetMinimumWidth() > 0)
+				limits->ptMinTrackSize.x = static_cast<LONG>(window->GetMinimumWidth());
+			if (window->GetMinimumHeight() > 0)
+				limits->ptMinTrackSize.y = static_cast<LONG>(window->GetMinimumHeight());
+			return 0;
+		}
 		case WM_SETFOCUS:
 		{
 			ActivateWindowInput(window);
@@ -128,7 +140,7 @@ namespace CCEngine
 				}
 
 				if (CCEngine::Application::Get() &&
-					window == &(CCEngine::Application::Get()->GetWindow()))
+					CCEngine::Application::Get()->IsMainWindow(window))
 				{
 					CCEngine::WindowResizeEvent e(width, height);
 					CCEngine::Application::Get()->OnEvent(e);
@@ -141,7 +153,7 @@ namespace CCEngine
 		case WM_CLOSE:
 		{
 			if (CCEngine::Application::Get() &&
-				window == &(CCEngine::Application::Get()->GetWindow()))
+				CCEngine::Application::Get()->IsMainWindow(window))
 			{
 				CCEngine::WindowCloseEvent e;
 				CCEngine::Application::Get()->OnEvent(e);
@@ -161,7 +173,7 @@ namespace CCEngine
 		case WM_DESTROY:
 		{
 			if (CCEngine::Application::Get() &&
-				window == &(CCEngine::Application::Get()->GetWindow()))
+				CCEngine::Application::Get()->IsMainWindow(window))
 			{
 				PostQuitMessage(0);
 			}
@@ -191,7 +203,7 @@ namespace CCEngine
 				CCEngine::MouseButtonReleasedEvent e(0, mouseX, mouseY);
 
 				bool isMainWindow = (CCEngine::Application::Get() &&
-					window == &(CCEngine::Application::Get()->GetWindow()));
+					CCEngine::Application::Get()->IsMainWindow(window));
 
 				if (isMainWindow)
 				{
@@ -221,7 +233,7 @@ namespace CCEngine
 				CCEngine::MouseButtonReleasedEvent e(1, mouseX, mouseY);
 
 				bool isMainWindow = (CCEngine::Application::Get() &&
-					window == &(CCEngine::Application::Get()->GetWindow()));
+					CCEngine::Application::Get()->IsMainWindow(window));
 
 				if (isMainWindow)
 				{
@@ -253,7 +265,7 @@ namespace CCEngine
 				CCEngine::MouseButtonReleasedEvent e(2, mouseX, mouseY);
 
 				bool isMainWindow = (CCEngine::Application::Get() &&
-					window == &(CCEngine::Application::Get()->GetWindow()));
+					CCEngine::Application::Get()->IsMainWindow(window));
 
 				if (isMainWindow)
 				{
@@ -285,7 +297,7 @@ namespace CCEngine
 				CCEngine::MouseButtonPressedEvent e(0, mouseX, mouseY);
 
 				bool isMainWindow = (CCEngine::Application::Get() &&
-					window == &(CCEngine::Application::Get()->GetWindow()));
+					CCEngine::Application::Get()->IsMainWindow(window));
 
 				if (isMainWindow)
 				{
@@ -316,7 +328,7 @@ namespace CCEngine
 				CCEngine::MouseButtonPressedEvent e(1, mouseX, mouseY);
 
 				bool isMainWindow = (CCEngine::Application::Get() &&
-					window == &(CCEngine::Application::Get()->GetWindow()));
+					CCEngine::Application::Get()->IsMainWindow(window));
 
 				if (isMainWindow)
 				{
@@ -349,7 +361,7 @@ namespace CCEngine
 				CCEngine::MouseButtonPressedEvent e(2, mouseX, mouseY);
 
 				bool isMainWindow = (CCEngine::Application::Get() &&
-					window == &(CCEngine::Application::Get()->GetWindow()));
+					CCEngine::Application::Get()->IsMainWindow(window));
 
 				if (isMainWindow)
 				{
@@ -378,7 +390,7 @@ namespace CCEngine
 				CCEngine::MouseMovedEvent e(mouseX, mouseY);
 
 				bool isMainWindow = (CCEngine::Application::Get() &&
-					window == &(CCEngine::Application::Get()->GetWindow()));
+					CCEngine::Application::Get()->IsMainWindow(window));
 
 				if (isMainWindow)
 				{
@@ -419,7 +431,9 @@ namespace CCEngine
 				bool isBottom = pt.y >= rc.bottom - borderWidth;
 
 				bool isMainWindow = (CCEngine::Application::Get() &&
-					window == &(CCEngine::Application::Get()->GetWindow()));
+					CCEngine::Application::Get()->IsMainWindow(window));
+				if (isMainWindow && window->GetWindowMode() != WindowMode::Windowed)
+					return HTCLIENT;
 				bool isDockRootWindow = !isMainWindow && window->GetRootUI() && window->GetRootUI()->GetName() == "DockRoot";
 				if (isDockRootWindow)
 				{
@@ -475,7 +489,7 @@ namespace CCEngine
 				CCEngine::MouseScrolledEvent e(0.0f, yOffset);
 
 				bool isMainWindow = (CCEngine::Application::Get() &&
-					window == &(CCEngine::Application::Get()->GetWindow()));
+					CCEngine::Application::Get()->IsMainWindow(window));
 
 				if (isMainWindow)
 				{
@@ -526,7 +540,7 @@ namespace CCEngine
 			{
 				CCEngine::FileDropEvent e(std::move(droppedPaths), (float)dropPoint.x, (float)dropPoint.y);
 				bool isMainWindow = (CCEngine::Application::Get() &&
-					window == &(CCEngine::Application::Get()->GetWindow()));
+					CCEngine::Application::Get()->IsMainWindow(window));
 
 				if (isMainWindow)
 					CCEngine::Application::Get()->OnEvent(e);
@@ -591,6 +605,12 @@ namespace CCEngine
 		SetWindowPos(m_Window, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
 	}
 
+	void WindowsWindow::SetMinimumSize(unsigned int width, unsigned int height)
+	{
+		m_MinimumWidth = width;
+		m_MinimumHeight = height;
+	}
+
 	std::pair<int, int> WindowsWindow::GetScreenMousePosition() const
 	{
 		POINT pt;
@@ -608,6 +628,7 @@ namespace CCEngine
 		m_Data.Title = props.Title;
 		m_Data.Width = props.Width;
 		m_Data.Height = props.Height;
+		m_Data.Mode = props.Mode;
 
 		WNDCLASSEX wc = { 0 };
 		wc.cbSize = sizeof(WNDCLASSEX);
@@ -621,19 +642,56 @@ namespace CCEngine
 
 		std::wstring titleWide(m_Data.Title.begin(), m_Data.Title.end());
 
-		DWORD windowStyle = WS_POPUP | WS_THICKFRAME;
+		DWORD windowStyle = props.Mode == WindowMode::Windowed
+			? WS_POPUP | WS_THICKFRAME
+			: WS_POPUP;
+
+		MONITORINFO monitorInfo = {};
+		monitorInfo.cbSize = sizeof(MONITORINFO);
+		GetMonitorInfo(MonitorFromPoint({ 0, 0 }, MONITOR_DEFAULTTOPRIMARY), &monitorInfo);
+		const RECT placementArea = props.Mode == WindowMode::Fullscreen
+			? monitorInfo.rcMonitor
+			: monitorInfo.rcWork;
+
+		int windowX = placementArea.left + ((placementArea.right - placementArea.left) - static_cast<int>(m_Data.Width)) / 2;
+		int windowY = placementArea.top + ((placementArea.bottom - placementArea.top) - static_cast<int>(m_Data.Height)) / 2;
+		if (props.Mode == WindowMode::Fullscreen)
+		{
+			windowX = monitorInfo.rcMonitor.left;
+			windowY = monitorInfo.rcMonitor.top;
+			m_Data.Width = static_cast<unsigned int>(monitorInfo.rcMonitor.right - monitorInfo.rcMonitor.left);
+			m_Data.Height = static_cast<unsigned int>(monitorInfo.rcMonitor.bottom - monitorInfo.rcMonitor.top);
+		}
 
 		m_Window = CreateWindowEx(
 			0, wc.lpszClassName, titleWide.c_str(),
 			windowStyle,
-			CW_USEDEFAULT, CW_USEDEFAULT, m_Data.Width, m_Data.Height,
+			windowX, windowY, m_Data.Width, m_Data.Height,
 			nullptr, nullptr, wc.hInstance, this
 		);
+		if (!m_Window)
+			throw std::runtime_error("CreateWindowEx failed: " + std::to_string(GetLastError()));
+		GraphicsContext* previousContext = GraphicsContext::GetCurrent();
+		try
+		{
+			m_Context = GraphicsContext::Create(m_Window, props.SharedGraphicsDevice);
+			if (!m_Context)
+				throw std::runtime_error("Graphics context factory returned null.");
+			m_Context->Init();
+			// 창을 생성하는 도중 기존 패널의 그리기 대상까지 바뀌면 안 된다.
+			if (previousContext)
+				previousContext->MakeCurrent();
+		}
+		catch (...)
+		{
+			// 생성자 실패 시 소멸자가 호출되지 않으므로 HWND와 부분 생성 Context를 여기서 회수한다.
+			Shutdown();
+			if (previousContext)
+				previousContext->MakeCurrent();
+			throw;
+		}
 		DragAcceptFiles(m_Window, TRUE);
 		ShowWindow(m_Window, SW_SHOW);
-
-		m_Context = GraphicsContext::Create(m_Window);
-		m_Context->Init();
 	}
 
 	void WindowsWindow::Shutdown()

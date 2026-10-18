@@ -3,6 +3,9 @@
 #include "Renderer/Shader.h"
 #include "Renderer/RenderCommand.h"
 #include "Renderer/Texture.h"
+#include "Utils/MathUtils.h"
+#include <vector>
+#include <stdexcept>
 
 namespace CCEngine
 {
@@ -54,7 +57,7 @@ namespace CCEngine
 
         s_Data.QuadVertexBufferBase = new QuadVertex[s_Data.MaxVertices];
 
-        uint32_t* quadIndices = new uint32_t[s_Data.MaxIndices];
+        std::vector<uint32_t> quadIndices(s_Data.MaxIndices);
         uint32_t offset = 0;
         for (uint32_t i = 0; i < s_Data.MaxIndices; i += 6)
         {
@@ -67,10 +70,11 @@ namespace CCEngine
             offset += 4;
         }
 
-        s_Data.QuadIndexBuffer = IndexBuffer::Create(quadIndices, s_Data.MaxIndices);
-        delete[] quadIndices;
+        s_Data.QuadIndexBuffer = IndexBuffer::Create(quadIndices.data(), s_Data.MaxIndices);
 
         s_Data.TextureShader = Shader::Create("assets/shaders/Renderer2D.hlsl");
+        if (!s_Data.TextureShader || !s_Data.TextureShader->IsValid())
+            throw std::runtime_error("Renderer2D shader initialization failed: assets/shaders/Renderer2D.hlsl");
         s_Data.CameraConstantBuffer = ConstantBuffer::Create(sizeof(DirectX::XMMATRIX));
 
         for (uint32_t i = 0; i < s_Data.MaxTextureSlots; i++)
@@ -86,32 +90,35 @@ namespace CCEngine
         delete s_Data.TextureShader;
         delete s_Data.QuadIndexBuffer;
         delete s_Data.QuadVertexBuffer;
+        s_Data = {};
     }
 
     void Renderer2D::BeginScene(const PerspectiveCamera& camera)
     {
-        RenderCommand::SetDepthTest(false);
+        RenderCommand::ApplyPassState({
+            RendererAPI::BlendMode::MRTPicking,
+            RendererAPI::CullMode::None,
+            false,
+            false });
 
-        DirectX::XMMATRIX viewProj = DirectX::XMMatrixTranspose(camera.GetViewProjectionMatrix());
+        DirectX::XMMATRIX viewProj = Math::MathUtils::GetMatrixForShader(camera.GetViewProjectionMatrix());
         s_Data.CameraConstantBuffer->SetData(&viewProj, sizeof(DirectX::XMMATRIX));
         s_Data.CameraConstantBuffer->Bind(0);
-
-        RenderCommand::SetBlendMode(RendererAPI::BlendMode::MRTPicking);
-        RenderCommand::SetCullMode(RendererAPI::CullMode::None);
 
         StartBatch();
     }
 
     void Renderer2D::BeginScene(const DirectX::XMMATRIX& viewProjection)
     {
-        RenderCommand::SetDepthTest(false);
+        RenderCommand::ApplyPassState({
+            RendererAPI::BlendMode::Transparent,
+            RendererAPI::CullMode::None,
+            false,
+            false });
 
-        DirectX::XMMATRIX transposed = DirectX::XMMatrixTranspose(viewProjection);
+        DirectX::XMMATRIX transposed = Math::MathUtils::GetMatrixForShader(viewProjection);
         s_Data.CameraConstantBuffer->SetData(&transposed, sizeof(DirectX::XMMATRIX));
         s_Data.CameraConstantBuffer->Bind(0);
-
-        RenderCommand::SetBlendMode(RendererAPI::BlendMode::Transparent);
-        RenderCommand::SetCullMode(RendererAPI::CullMode::None);
 
         StartBatch();
     }

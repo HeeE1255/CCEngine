@@ -1,5 +1,7 @@
 #include "Renderer/ShaderCompiler.h"
+#include "Core/PathContext.h"
 #include "Renderer/ShaderProperty.h"
+#include "json.hpp"
 
 #define NOMINMAX
 #include <d3dcompiler.h>
@@ -45,9 +47,12 @@ namespace CCEngine
             return stream.str();
         }
 
-        std::filesystem::path GetShaderCacheDirectory(const std::filesystem::path& sourcePath)
+        std::filesystem::path GetShaderCacheDirectory(
+            const std::filesystem::path& sourcePath,
+            const std::string& variantKey = "default")
         {
-            return std::filesystem::current_path() / "local" / "shader-cache" / MakeStablePathHash(sourcePath);
+            return PathContext::ProjectRoot() / "local" / "shader-cache" /
+                MakeStablePathHash(sourcePath) / MakeStablePathHash(variantKey);
         }
 
         bool IsBytecodeFresh(const std::filesystem::path& sourcePath, const std::filesystem::path& bytecodePath)
@@ -72,9 +77,12 @@ namespace CCEngine
             if (!blob || !blob->GetBufferPointer() || blob->GetBufferSize() == 0)
                 return "";
 
-            return std::string(
+            std::string message(
                 static_cast<const char*>(blob->GetBufferPointer()),
                 static_cast<size_t>(blob->GetBufferSize()));
+            while (!message.empty() && message.back() == '\0')
+                message.pop_back();
+            return message;
         }
 
         bool WriteBlobToFile(ID3DBlob* blob, const std::filesystem::path& outputPath)
@@ -258,6 +266,59 @@ namespace CCEngine
         }
 
         std::unordered_map<std::string, ShaderCompileResult> s_LastCompileResults;
+
+        struct RuntimeBytecodePaths
+        {
+            std::filesystem::path Vertex;
+            std::filesystem::path Pixel;
+        };
+
+        std::unordered_map<std::string, RuntimeBytecodePaths> s_RuntimeBytecode;
+        bool s_RuntimeBytecodeOnly = false;
+
+        std::string NormalizeShaderPath(const std::filesystem::path& path)
+        {
+            std::error_code ec;
+            const auto canonical = std::filesystem::weakly_canonical(path, ec);
+            std::string key = (ec ? path.lexically_normal() : canonical).generic_string();
+            std::transform(key.begin(), key.end(), key.begin(), [](unsigned char character)
+            {
+                return static_cast<char>(std::tolower(character));
+            });
+            return key;
+        }
+
+        std::string NormalizePortableShaderKey(const std::filesystem::path& path)
+        {
+            std::string key = path.lexically_normal().generic_string();
+            while (key.rfind("./", 0) == 0)
+                key.erase(0, 2);
+            std::transform(key.begin(), key.end(), key.begin(), [](unsigned char character)
+            {
+                return static_cast<char>(std::tolower(character));
+            });
+            return key;
+        }
+
+        bool ResolveManifestPath(
+            const std::filesystem::path& root,
+            const std::filesystem::path& storedPath,
+            std::filesystem::path& resolved)
+        {
+            if (storedPath.empty() || storedPath.is_absolute())
+                return false;
+
+            resolved = (root / storedPath).lexically_normal();
+            const auto relative = resolved.lexically_relative(root);
+            if (relative.empty() || relative.is_absolute())
+                return false;
+            for (const auto& part : relative)
+            {
+                if (part == "..")
+                    return false;
+            }
+            return true;
+        }
     }
 
     bool ShaderCompiler::IsHlslSource(const std::filesystem::path& path)
@@ -304,7 +365,7 @@ namespace CCEngine
 
     bool ShaderCompiler::GetLastCompileResult(const std::filesystem::path& sourcePath, ShaderCompileResult& outResult)
     {
-        auto found = s_LastCompileResults.find(MakeStablePathHash(sourcePath));
+        auto found = s_LastCompileResults.find(MakeStablePathHash(sourcePath) + "|default");
         if (found == s_LastCompileResults.end())
             return false;
 
@@ -317,13 +378,81 @@ namespace CCEngine
         // 컴파일 결과 문자열은 에디터 세션용 진단 캐시다.
         // 종료 시 비워 두면 실제 해제되지 않은 리소스만 메모리 검사에 남는다.
         std::unordered_map<std::string, ShaderCompileResult>().swap(s_LastCompileResults);
+        std::unordered_map<std::string, RuntimeBytecodePaths>().swap(s_RuntimeBytecode);
     }
 
     ShaderCompileResult ShaderCompiler::CompileHlslFile(const std::filesystem::path& sourcePath, bool forceRecompile)
     {
+        return CompileHlslFile(sourcePath, forceRecompile, {});
+    }
+
+    std::vector<std::string> ShaderCompiler::NormalizeKeywords(const std::vector<std::string>& keywords)
+    {
+        std::vector<std::string> normalized;
+        normalized.reserve(keywords.size());
+        for (const std::string& keyword : keywords)
+        {
+            if (keyword.empty() || !std::isalpha(static_cast<unsigned char>(keyword.front())) && keyword.front() != '_')
+                continue;
+            if (!std::all_of(keyword.begin(), keyword.end(), [](unsigned char character)
+            {
+                return std::isalnum(character) || character == '_';
+            }))
+                continue;
+            normalized.push_back(keyword);
+        }
+        std::sort(normalized.begin(), normalized.end());
+        normalized.erase(std::unique(normalized.begin(), normalized.end()), normalized.end());
+        return normalized;
+    }
+
+    std::string ShaderCompiler::MakeVariantKey(const std::vector<std::string>& keywords)
+    {
+        const auto normalized = NormalizeKeywords(keywords);
+        if (normalized.empty())
+            return "default";
+        std::string key;
+        for (const std::string& keyword : normalized)
+        {
+            if (!key.empty())
+                key += ';';
+            key += keyword;
+        }
+        return key;
+    }
+
+    ShaderCompileResult ShaderCompiler::CompileHlslFile(
+        const std::filesystem::path& sourcePath,
+        bool forceRecompile,
+        const std::vector<std::string>& requestedKeywords)
+    {
+        const auto keywords = NormalizeKeywords(requestedKeywords);
+        const std::string variantKey = MakeVariantKey(keywords);
+        std::filesystem::path runtimeVertex;
+        std::filesystem::path runtimePixel;
+        if (TryGetRuntimeBytecode(sourcePath, keywords, runtimeVertex, runtimePixel))
+        {
+            ShaderCompileResult packaged;
+            packaged.Success = true;
+            packaged.SourcePath = sourcePath;
+            packaged.CacheDirectory = runtimeVertex.parent_path();
+            packaged.Vertex = { true, true, runtimeVertex, "VSMain", "vs_5_0", "Using packaged bytecode." };
+            packaged.Pixel = { true, true, runtimePixel, "PSMain", "ps_5_0", "Using packaged bytecode." };
+            packaged.Summary = "Loaded packaged shader bytecode.";
+            return packaged;
+        }
+
+        if (s_RuntimeBytecodeOnly)
+        {
+            ShaderCompileResult result;
+            result.SourcePath = sourcePath;
+            result.Summary = "Packaged shader bytecode is required but missing: " + sourcePath.string();
+            return result;
+        }
+
         ShaderCompileResult result;
         result.SourcePath = sourcePath;
-        result.CacheDirectory = GetShaderCacheDirectory(sourcePath);
+        result.CacheDirectory = GetShaderCacheDirectory(sourcePath, variantKey);
 
         if (!IsHlslSource(sourcePath))
         {
@@ -343,8 +472,8 @@ namespace CCEngine
 
         // 셰이더 컴파일 결과는 local 캐시에 둔다.
         // 원본 HLSL은 사람이 편집하는 파일이고, cso는 언제든 다시 만들 수 있는 산출물이기 때문이다.
-        result.Vertex = CompileStage(sourcePath, vertexBytecode, ShaderStage::Vertex, "VSMain", "vs_5_0", forceRecompile);
-        result.Pixel = CompileStage(sourcePath, pixelBytecode, ShaderStage::Pixel, "PSMain", "ps_5_0", forceRecompile);
+        result.Vertex = CompileStage(sourcePath, vertexBytecode, ShaderStage::Vertex, "VSMain", "vs_5_0", forceRecompile, keywords);
+        result.Pixel = CompileStage(sourcePath, pixelBytecode, ShaderStage::Pixel, "PSMain", "ps_5_0", forceRecompile, keywords);
 
         result.Success = result.Vertex.Success && result.Pixel.Success;
         if (result.Success)
@@ -378,8 +507,121 @@ namespace CCEngine
 
         // Inspector와 Runtime이 같은 컴파일 상태를 보여줄 수 있도록 마지막 결과를 메모리에 남긴다.
         // 디스크에는 bytecode만 저장하고, 진단 문자열은 에디터 세션 안에서만 유지한다.
-        s_LastCompileResults[MakeStablePathHash(sourcePath)] = result;
+        s_LastCompileResults[MakeStablePathHash(sourcePath) + "|" + variantKey] = result;
         return result;
+    }
+
+    bool ShaderCompiler::LoadRuntimeBytecodeManifest(const std::filesystem::path& manifestPath, std::string& error)
+    {
+        std::ifstream input(manifestPath);
+        if (!input.is_open())
+        {
+            error = "Shader build manifest not found: " + manifestPath.string();
+            return false;
+        }
+
+        nlohmann::json manifest;
+        try
+        {
+            input >> manifest;
+        }
+        catch (const std::exception& exception)
+        {
+            error = "Shader build manifest parse failed: " + std::string(exception.what());
+            return false;
+        }
+
+        const uint32_t version = manifest.value("Version", 0u);
+        if ((version != 1u && version != 2u && version != 3u) || !manifest.contains("Shaders") || !manifest["Shaders"].is_array())
+        {
+            error = "Unsupported or malformed shader build manifest.";
+            return false;
+        }
+
+        std::error_code ec;
+        const auto root = std::filesystem::absolute(manifestPath.parent_path(), ec).lexically_normal();
+        if (ec)
+        {
+            error = "Failed to resolve shader build root: " + ec.message();
+            return false;
+        }
+
+        std::unordered_map<std::string, RuntimeBytecodePaths> runtimeBytecode;
+        for (const auto& shader : manifest["Shaders"])
+        {
+            if (!shader.is_object())
+                continue;
+
+            const std::filesystem::path storedSource = shader.value("SourcePath", "");
+            std::vector<std::string> keywords;
+            for (const auto& keyword : shader.value("Keywords", nlohmann::json::array()))
+            {
+                if (keyword.is_string())
+                    keywords.push_back(keyword.get<std::string>());
+            }
+            const std::string variantSuffix = "|" + MakeVariantKey(keywords);
+            std::filesystem::path source;
+            RuntimeBytecodePaths paths;
+            if (!ResolveManifestPath(root, storedSource, source) ||
+                !ResolveManifestPath(root, shader.value("VertexBytecode", ""), paths.Vertex) ||
+                !ResolveManifestPath(root, shader.value("PixelBytecode", ""), paths.Pixel))
+            {
+                error = "Shader build manifest contains an unsafe path.";
+                return false;
+            }
+            if (!std::filesystem::is_regular_file(paths.Vertex, ec) || ec ||
+                !std::filesystem::is_regular_file(paths.Pixel, ec) || ec)
+            {
+                error = "Packaged shader bytecode is missing for: " + source.string();
+                return false;
+            }
+
+            // Release 패키지에는 HLSL 원본이 없으므로 weakly_canonical 결과만 키로 쓰면
+            // 실행 위치나 존재하지 않는 마지막 경로 구간에 따라 같은 셰이더가 달라질 수 있다.
+            // Manifest의 배포 상대 경로도 함께 키로 보존해 패키지를 어디로 옮겨도 찾게 한다.
+            runtimeBytecode[NormalizeShaderPath(source) + variantSuffix] = paths;
+            runtimeBytecode[NormalizePortableShaderKey(storedSource) + variantSuffix] = std::move(paths);
+        }
+
+        s_RuntimeBytecode = std::move(runtimeBytecode);
+        error.clear();
+        return true;
+    }
+
+    bool ShaderCompiler::TryGetRuntimeBytecode(
+        const std::filesystem::path& sourcePath,
+        std::filesystem::path& vertexBytecode,
+        std::filesystem::path& pixelBytecode)
+    {
+        return TryGetRuntimeBytecode(sourcePath, {}, vertexBytecode, pixelBytecode);
+    }
+
+    bool ShaderCompiler::TryGetRuntimeBytecode(
+        const std::filesystem::path& sourcePath,
+        const std::vector<std::string>& keywords,
+        std::filesystem::path& vertexBytecode,
+        std::filesystem::path& pixelBytecode)
+    {
+        const std::string suffix = "|" + MakeVariantKey(keywords);
+        const auto found = s_RuntimeBytecode.find(NormalizeShaderPath(sourcePath) + suffix);
+        auto resolved = found;
+        if (resolved == s_RuntimeBytecode.end() && sourcePath.is_relative())
+            resolved = s_RuntimeBytecode.find(NormalizePortableShaderKey(sourcePath) + suffix);
+        if (resolved == s_RuntimeBytecode.end())
+            return false;
+        vertexBytecode = resolved->second.Vertex;
+        pixelBytecode = resolved->second.Pixel;
+        return true;
+    }
+
+    void ShaderCompiler::SetRuntimeBytecodeOnly(bool enabled)
+    {
+        s_RuntimeBytecodeOnly = enabled;
+    }
+
+    bool ShaderCompiler::IsRuntimeBytecodeOnly()
+    {
+        return s_RuntimeBytecodeOnly;
     }
 
     ShaderCompileStageResult ShaderCompiler::CompileStage(
@@ -388,7 +630,8 @@ namespace CCEngine
         ShaderStage stage,
         const std::string& entryPoint,
         const std::string& targetProfile,
-        bool forceRecompile)
+        bool forceRecompile,
+        const std::vector<std::string>& keywords)
     {
         ShaderCompileStageResult result;
         result.BytecodePath = bytecodePath;
@@ -406,9 +649,15 @@ namespace CCEngine
         ID3DBlob* shaderBlob = nullptr;
         ID3DBlob* errorBlob = nullptr;
 
+        std::vector<D3D_SHADER_MACRO> macros;
+        macros.reserve(keywords.size() + 1);
+        for (const std::string& keyword : keywords)
+            macros.push_back({ keyword.c_str(), "1" });
+        macros.push_back({ nullptr, nullptr });
+
         HRESULT hr = D3DCompileFromFile(
             sourcePath.wstring().c_str(),
-            nullptr,
+            keywords.empty() ? nullptr : macros.data(),
             D3D_COMPILE_STANDARD_FILE_INCLUDE,
             entryPoint.c_str(),
             targetProfile.c_str(),

@@ -246,7 +246,7 @@ namespace CCEngine
             DirectX::XMFLOAT4 GetDockWorkspace(Window* window)
             {
                 auto& mainWindow = Application::Get()->GetWindow();
-                float topReservedHeight = (window == &mainWindow) ? 48.0f : 0.0f;
+                float topReservedHeight = (window == &mainWindow) ? DockManager::MainWindowReservedTop : 0.0f;
                 return {
                     0.0f,
                     topReservedHeight,

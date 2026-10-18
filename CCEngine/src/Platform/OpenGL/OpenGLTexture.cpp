@@ -1,4 +1,5 @@
 #include "Platform/OpenGL/OpenGLTexture.h"
+#if !defined(CC_ENABLE_OPENGL_RHI)
 #include <iostream>
 
 namespace CCEngine
@@ -23,3 +24,4 @@ namespace CCEngine
     void OpenGLTexture2D::Unbind(uint32_t slot) const { /* glBindTexture(0) */ }
     void OpenGLTexture2D::SetData(void* data, uint32_t size) { /* glTexSubImage2D */ }
 }
+#endif

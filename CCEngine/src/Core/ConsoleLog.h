@@ -1,7 +1,9 @@
 #pragma once
 
 #include "Core.h"
+#include <cstdint>
 #include <string>
+#include <filesystem>
 #include <vector>
 
 namespace CCEngine
@@ -26,6 +28,12 @@ namespace CCEngine
         static void Warning(const std::string& message);
         static void Error(const std::string& message);
         static void Clear();
+        static bool ConfigureFile(
+            const std::filesystem::path& path,
+            ConsoleLogLevel minimumLevel = ConsoleLogLevel::Info,
+            uint64_t maximumBytes = 5ull * 1024ull * 1024ull,
+            uint32_t retainedFiles = 5);
+        static const std::filesystem::path& GetFilePath();
 
         static const std::vector<ConsoleLogEntry>& GetEntries();
 

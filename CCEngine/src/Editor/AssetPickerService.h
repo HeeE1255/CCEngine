@@ -21,6 +21,7 @@ namespace CCEngine
     {
     public:
         using PickCallback = std::function<bool(const std::filesystem::path&, const std::string&)>;
+        using ClosedCallback = std::function<void()>;
 
         struct HostCallbacks
         {
@@ -33,7 +34,7 @@ namespace CCEngine
             bool externalWatcherActive,
             const std::filesystem::path& rootDirectory,
             HostCallbacks callbacks);
-        void Begin(const std::string& label, const std::vector<std::string>& acceptedTypes, PickCallback onPicked);
+        void Begin(const std::string& label, const std::vector<std::string>& acceptedTypes, PickCallback onPicked, ClosedCallback onClosed = {});
         void Update();
         void Cancel(bool clearFilter);
         void Shutdown();
@@ -48,6 +49,7 @@ namespace CCEngine
             std::string Label;
             std::vector<std::string> AcceptedTypes;
             PickCallback OnPicked;
+            ClosedCallback OnClosed;
             bool Active = false;
         };
 

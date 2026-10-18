@@ -62,7 +62,7 @@ namespace CCEngine
             constexpr float kTypeFilterButtonWidth = 126.0f;
             constexpr float kSortButtonWidth = 102.0f;
             constexpr float kDropdownItemHeight = 26.0f;
-            constexpr int kTypeFilterItemCount = 9;
+            constexpr int kTypeFilterItemCount = 10;
             constexpr int kSortItemCount = 3;
 
             bool TryAcquirePreviewSlot(std::atomic<int>& counter, int maxCount)
@@ -2232,6 +2232,7 @@ namespace CCEngine
             if (extension == ".ccavatar") return AssetType::Avatar;
             if (extension == ".fbx" || extension == ".obj" || extension == ".gltf" || extension == ".glb") return AssetType::Model;
             if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".tga") return AssetType::Texture;
+            if (extension == ".wav" || extension == ".ogg" || extension == ".mp3" || extension == ".flac") return AssetType::Audio;
             if (extension == ".cs") return AssetType::Script;
             return AssetType::Unknown;
         }
@@ -2251,6 +2252,7 @@ namespace CCEngine
                 case AssetType::Model: return "MDL";
                 case AssetType::FbxMesh: return "MSH";
                 case AssetType::Texture: return "TEX";
+                case AssetType::Audio: return "AUD";
                 case AssetType::Script: return "C#";
                 default: return "???";
             }
@@ -2270,6 +2272,7 @@ namespace CCEngine
                 case AssetType::Model: return "model";
                 case AssetType::FbxMesh: return "mesh";
                 case AssetType::Texture: return "texture";
+                case AssetType::Audio: return "audio";
                 case AssetType::Script: return "script";
                 case AssetType::Folder: return "folder";
                 default: return "unknown";
@@ -2288,6 +2291,7 @@ namespace CCEngine
                 case TypeFilter::Scene: return "Scene";
                 case TypeFilter::Script: return "Script";
                 case TypeFilter::Avatar: return "Avatar";
+                case TypeFilter::Audio: return "Audio";
                 default: return "All Types";
             }
         }
@@ -2818,6 +2822,57 @@ namespace CCEngine
             Refresh();
         }
 
+        bool AssetBrowserPanel::RevealAsset(const std::filesystem::path& assetPath)
+        {
+            if (assetPath.empty() || m_PickerState.IsActive())
+                return false;
+
+            std::error_code ec;
+            std::filesystem::path target = assetPath.is_absolute()
+                ? assetPath
+                : std::filesystem::absolute(assetPath, ec);
+            if (ec || !std::filesystem::exists(target, ec) || ec)
+                return false;
+
+            target = std::filesystem::weakly_canonical(target, ec);
+            if (ec || !IsPathInsideRoot(target, false))
+                return false;
+
+            // 진단에서 특정 에셋으로 이동할 때 기존 검색/타입 필터가 대상을 숨기면
+            // 이동은 성공했지만 아무것도 안 보이는 것처럼 느껴진다. 명시적 Reveal은 필터를 초기화한다.
+            m_SearchQuery.clear();
+            m_SearchFocused = false;
+            m_TypeFilter = TypeFilter::All;
+            NavigateTo(target.parent_path());
+
+            for (int index = 0; index < static_cast<int>(m_ViewEntries.size()); ++index)
+            {
+                std::error_code entryError;
+                const auto entryPath = std::filesystem::weakly_canonical(m_ViewEntries[index].Path, entryError);
+                if (!entryError && entryPath == target)
+                {
+                    SelectSingle(index);
+                    if (m_IconSizeStep == 0)
+                    {
+                        m_ScrollState.ScrollY = (std::max)(0.0f, index * (m_RowHeight + m_RowGap) - 20.0f);
+                    }
+                    else
+                    {
+                        const float iconSizes[5] = { 18.0f, 36.0f, 64.0f, 96.0f, 128.0f };
+                        const float iconSize = iconSizes[(std::clamp)(m_IconSizeStep, 0, 4)];
+                        const float cellWidth = iconSize + 58.0f;
+                        const float cellHeight = iconSize + 42.0f;
+                        const float viewWidth = (std::max)(1.0f, m_CalculatedSize.x - m_TreeWidth - 34.0f);
+                        const int columns = (std::max)(1, static_cast<int>(viewWidth / cellWidth));
+                        m_ScrollState.ScrollY = (std::max)(0.0f, (index / columns) * cellHeight - 20.0f);
+                    }
+                    BringToFront();
+                    return true;
+                }
+            }
+            return false;
+        }
+
         bool AssetBrowserPanel::IsContentPoint(float mouseX, float mouseY) const
         {
             float contentX = m_CalculatedPos.x + m_TreeWidth + 6.0f;
@@ -3220,6 +3275,8 @@ namespace CCEngine
                         queryTypeFilter = TypeFilter::Script;
                     else if (typeText == "avatar" || typeText == "avt")
                         queryTypeFilter = TypeFilter::Avatar;
+                    else if (typeText == "audio" || typeText == "sound" || typeText == "aud")
+                        queryTypeFilter = TypeFilter::Audio;
                     continue;
                 }
 
@@ -3288,6 +3345,7 @@ namespace CCEngine
                         case TypeFilter::Scene: return entry.Type == AssetType::Scene;
                         case TypeFilter::Script: return entry.Type == AssetType::Script;
                         case TypeFilter::Avatar: return entry.Type == AssetType::Avatar;
+                        case TypeFilter::Audio: return entry.Type == AssetType::Audio;
                         default: return true;
                     }
                 };
@@ -5271,6 +5329,10 @@ namespace CCEngine
                 case AssetType::Texture:
                     iconColor = { 0.54f, 0.40f, 0.58f, 1.0f };
                     label = "TEX";
+                    break;
+                case AssetType::Audio:
+                    iconColor = { 0.72f, 0.46f, 0.30f, 1.0f };
+                    label = "AUD";
                     break;
                 case AssetType::Script:
                     iconColor = { 0.28f, 0.48f, 0.72f, 1.0f };

@@ -165,6 +165,9 @@
     <ClInclude Include="src\Animation\AnimatorControllerAsset.h" />
     <ClInclude Include="src\Animation\AvatarAsset.h" />
     <ClInclude Include="src\Application.h" />
+    <ClInclude Include="src\Build\AssetDependencyCollector.h" />
+    <ClInclude Include="src\Build\GameBuildProfile.h" />
+    <ClInclude Include="src\Build\GameBuildService.h" />
     <ClInclude Include="src\Core.h" />
     <ClInclude Include="src\Core\AssetDatabase.h" />
     <ClInclude Include="src\Core\ConsoleLog.h" />
@@ -191,6 +194,15 @@
     <ClInclude Include="src\Physics\PhysicsWorld3D.h" />
     <ClInclude Include="src\Platform\DirectX11\DX11Buffer.h" />
     <ClInclude Include="src\Platform\DirectX11\DX11Context.h" />
+    <ClInclude Include="src\Platform\DirectX11\DX11Device.h" />
+    <ClInclude Include="src\Platform\DirectX12\DX12Buffer.h" />
+    <ClInclude Include="src\Platform\DirectX12\DX12Context.h" />
+    <ClInclude Include="src\Platform\DirectX12\DX12Device.h" />
+    <ClInclude Include="src\Platform\DirectX12\DX12Framebuffer.h" />
+    <ClInclude Include="src\Platform\DirectX12\DX12RendererAPI.h" />
+    <ClInclude Include="src\Platform\DirectX12\DX12Resources.h" />
+    <ClInclude Include="src\Platform\DirectX12\DX12Shader.h" />
+    <ClInclude Include="src\Platform\DirectX12\DX12Texture.h" />
     <ClInclude Include="src\Platform\DirectX11\DX11Framebuffer.h" />
     <ClInclude Include="src\Platform\DirectX11\DX11RendererAPI.h" />
     <ClInclude Include="src\Platform\DirectX11\DX11Shader.h" />
@@ -203,6 +215,7 @@
     <ClInclude Include="src\Renderer\Font.h" />
     <ClInclude Include="src\Renderer\Framebuffer.h" />
     <ClInclude Include="src\Renderer\GraphicsContext.h" />
+    <ClInclude Include="src\Renderer\GraphicsDevice.h" />
     <ClInclude Include="src\Renderer\MaterialAsset.h" />
     <ClInclude Include="src\Renderer\MaterialPreviewRenderer.h" />
     <ClInclude Include="src\Renderer\Mesh.h" />
@@ -225,6 +238,8 @@
     <ClInclude Include="src\Renderer\Texture.h" />
     <ClInclude Include="src\Renderer\UIRenderer.h" />
     <ClInclude Include="src\Renderer\VisualShaderAsset.h" />
+    <ClInclude Include="src\Runtime\GameLayer.h" />
+    <ClInclude Include="src\Runtime\RuntimeManifest.h" />
     <ClInclude Include="src\Scene\Components.h" />
     <ClInclude Include="src\Scene\Entity.h" />
     <ClInclude Include="src\Scene\PrefabSerializer.h" />
@@ -239,6 +254,7 @@
     <ClInclude Include="src\UI\AssetBrowserPanel.h" />
     <ClInclude Include="src\UI\AssetBrowserPickerState.h" />
     <ClInclude Include="src\UI\AssetReferenceValidatorPanel.h" />
+    <ClInclude Include="src\UI\BuildSettingsPanel.h" />
     <ClInclude Include="src\UI\Button.h" />
     <ClInclude Include="src\UI\ConsolePanel.h" />
     <ClInclude Include="src\UI\DockManager.h" />
@@ -273,6 +289,9 @@
     <ClCompile Include="src\Animation\AnimatorControllerAsset.cpp" />
     <ClCompile Include="src\Animation\AvatarAsset.cpp" />
     <ClCompile Include="src\Application.cpp" />
+    <ClCompile Include="src\Build\AssetDependencyCollector.cpp" />
+    <ClCompile Include="src\Build\GameBuildProfile.cpp" />
+    <ClCompile Include="src\Build\GameBuildService.cpp" />
     <ClCompile Include="src\Core\AssetDatabase.cpp" />
     <ClCompile Include="src\Core\ConsoleLog.cpp" />
     <ClCompile Include="src\Core\Layer.cpp" />
@@ -292,6 +311,16 @@
     <ClCompile Include="src\Physics\PhysicsWorld3D.cpp" />
     <ClCompile Include="src\Platform\DirectX11\DX11Buffer.cpp" />
     <ClCompile Include="src\Platform\DirectX11\DX11Context.cpp" />
+    <ClCompile Include="src\Platform\DirectX11\DX11Device.cpp" />
+    <ClCompile Include="src\Platform\DirectX12\DX12Buffer.cpp" />
+    <ClCompile Include="src\Platform\DirectX12\DX12Context.cpp" />
+    <ClCompile Include="src\Platform\DirectX12\DX12Device.cpp" />
+    <ClCompile Include="src\Platform\DirectX12\DX12Framebuffer.cpp" />
+    <ClCompile Include="src\Platform\DirectX12\DX12RendererAPI.cpp" />
+    <ClCompile Include="src\Platform\DirectX12\DX12Resources.cpp" />
+    <ClCompile Include="src\Platform\DirectX12\DX12Shader.cpp" />
+    <ClCompile Include="src\Platform\DirectX12\DX12Texture.cpp" />
+    <ClCompile Include="src\Platform\DirectX12\DX12Pipeline.cpp" />
     <ClCompile Include="src\Platform\DirectX11\DX11Framebuffer.cpp" />
     <ClCompile Include="src\Platform\DirectX11\DX11RendererAPI.cpp" />
     <ClCompile Include="src\Platform\DirectX11\DX11Shader.cpp" />
@@ -321,6 +350,8 @@
     <ClCompile Include="src\Renderer\Texture.cpp" />
     <ClCompile Include="src\Renderer\UIRenderer.cpp" />
     <ClCompile Include="src\Renderer\VisualShaderAsset.cpp" />
+    <ClCompile Include="src\Runtime\GameLayer.cpp" />
+    <ClCompile Include="src\Runtime\RuntimeManifest.cpp" />
     <ClCompile Include="src\Scene\Entity.cpp" />
     <ClCompile Include="src\Scene\PrefabSerializer.cpp" />
     <ClCompile Include="src\Scene\Scene.cpp" />
@@ -332,6 +363,7 @@
     <ClCompile Include="src\UI\AssetBrowserPanel.cpp" />
     <ClCompile Include="src\UI\AssetBrowserPicker.cpp" />
     <ClCompile Include="src\UI\AssetReferenceValidatorPanel.cpp" />
+    <ClCompile Include="src\UI\BuildSettingsPanel.cpp" />
     <ClCompile Include="src\UI\Button.cpp" />
     <ClCompile Include="src\UI\ConsolePanel.cpp" />
     <ClCompile Include="src\UI\DockManager.cpp" />

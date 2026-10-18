@@ -39,6 +39,13 @@ namespace CCEngine
     [AttributeUsage(AttributeTargets.Field)]
     public sealed class ReadOnlyAttribute : Attribute { }
 
+    [AttributeUsage(AttributeTargets.Field)]
+    public sealed class AssetReferenceAttribute : Attribute
+    {
+        public string AssetType { get; }
+        public AssetReferenceAttribute(string assetType = "Any") => AssetType = assetType;
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     public struct Vector3
     {

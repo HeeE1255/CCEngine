@@ -11,6 +11,7 @@
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <stdexcept>
 #include <vector>
 
 #ifdef CC_PLATFORM_WINDOWS
@@ -132,10 +133,21 @@ namespace CCEngine
     }
 
     Application::Application(const std::vector<std::string>& commandLineArgs)
+        : Application(commandLineArgs, WindowProps())
+    {
+    }
+
+    Application::Application(const std::vector<std::string>& commandLineArgs, const WindowProps& windowProps)
         : m_CommandLineArgs(commandLineArgs)
     {
         // 실행 시점의 명령줄 인수로 렌더링 API를 선택합니다.
-        if (HasCommandLineFlag("-opengl"))
+        const int apiFlags = int(HasCommandLineFlag("-opengl")) + int(HasCommandLineFlag("-vulkan"))
+            + int(HasCommandLineFlag("-dx11")) + int(HasCommandLineFlag("-dx12"));
+        if (apiFlags > 1)
+            throw std::invalid_argument("Specify only one graphics API: -dx11, -dx12, -opengl or -vulkan.");
+        if (HasCommandLineFlag("-dx12"))
+            RendererAPI::SetAPI(RendererAPI::API::DirectX12);
+        else if (HasCommandLineFlag("-opengl"))
             RendererAPI::SetAPI(RendererAPI::API::OpenGL);
         else if (HasCommandLineFlag("-vulkan"))
             RendererAPI::SetAPI(RendererAPI::API::Vulkan);
@@ -148,13 +160,39 @@ namespace CCEngine
         s_Instance = this;
 
         // 플랫폼별 Window 구현은 Window::Create 내부에서 선택됩니다.
-        m_Window = std::unique_ptr<Window>(Window::Create());
+        try
+        {
+            m_Window = std::unique_ptr<Window>(Window::Create(windowProps));
+            if (!m_Window)
+                throw std::runtime_error("Failed to create application window.");
+        }
+        catch (...)
+        {
+            s_Instance = nullptr;
+            throw;
+        }
         m_ActiveInputWindow = m_Window.get();
     }
 
     Application::~Application()
     {
+        // 멤버의 역순 소멸에 맡기면 Window가 LayerStack보다 먼저 사라진다.
+        // GPU 자원을 사용하는 OnDetach는 Context가 살아 있을 때 끝낸다.
+        if (m_Window && m_Window->GetContext())
+        {
+            try { m_Window->GetContext()->MakeCurrent(); }
+            catch (const std::exception& error) { std::cerr << error.what() << std::endl; }
+        }
+        m_LayerStack.Clear();
         s_Instance = nullptr;
+        for (Window* window : m_SecondaryWindows)
+        {
+            window->SetRootUI(nullptr);
+            delete window;
+        }
+        m_SecondaryWindows.clear();
+        if (m_Window)
+            m_Window->SetRootUI(nullptr);
     }
 
     void Application::PushLayer(Layer* layer)
@@ -170,18 +208,24 @@ namespace CCEngine
     Window* Application::CreateSecondaryWindow(const std::string& title, uint32_t width, uint32_t height)
     {
         WindowProps props(title, width, height);
+        props.SharedGraphicsDevice = m_Window->GetContext()->GetGraphicsDevice();
+        if (!props.SharedGraphicsDevice)
+            throw std::logic_error("The active backend does not support shared-device windows.");
 
         // 추상화된 팩토리 함수로 창을 생성합니다.
-        Window* newWindow = Window::Create(props);
-        m_SecondaryWindows.push_back(newWindow);
-        ActivateInputWindow(newWindow);
+        std::unique_ptr<Window> newWindow(Window::Create(props));
+        if (!newWindow)
+            throw std::runtime_error("Failed to create secondary window.");
+        m_SecondaryWindows.push_back(newWindow.get());
+        Window* result = newWindow.release();
+        ActivateInputWindow(result);
 
         // 메인 윈도우의 화면 좌표를 기준으로 새 창의 초기 위치를 정합니다.
         auto [mouseX, mouseY] = m_Window->GetScreenMousePosition();
 
-        newWindow->SetPosition(mouseX - (width / 2), mouseY - 15);
+        result->SetPosition(mouseX - (width / 2), mouseY - 15);
 
-        return newWindow;
+        return result;
     }
 
     inline void Application::RequestCloseSecondaryWindowByUI(UI::Widget* rootUI)
@@ -331,6 +375,8 @@ namespace CCEngine
                 }
             }
             AddHitchStage(hitchStages, "WindowMessages", stageStartedAt);
+            // 닫힌 보조 창이 current였더라도 업데이트 중 자원 생성은 주 창 장치를 사용한다.
+            m_Window->GetContext()->MakeCurrent();
 
             // =========================================================
             // 2. 엔진 로직과 레이어를 업데이트합니다.
@@ -374,6 +420,16 @@ namespace CCEngine
                 // 백버퍼에 남을 수 있으므로, 창마다 매 프레임 먼저 지웁니다.
                 context->Clear(0.08f, 0.08f, 0.09f, 1.0f);
                 AddHitchStage(hitchStages, isMainWindow ? "MainContextClear" : "SecondaryContextClear", stageStartedAt);
+
+                // Game Player는 별도 프레임버퍼나 에디터 UI 없이 메인 백버퍼에 바로 그린다.
+                // 창 Clear 이후, Present 이전에 호출해야 씬 결과가 다음 Clear에 지워지지 않는다.
+                if (isMainWindow)
+                {
+                    stageStartedAt = std::chrono::steady_clock::now();
+                    for (Layer* layer : m_LayerStack)
+                        layer->OnRender();
+                    AddHitchStage(hitchStages, "MainLayerRender", stageStartedAt);
+                }
 
                 // 이 창이 소유한 UI 트리를 업데이트하고 렌더링합니다.
                 UI::Widget* rootUI = win->GetRootUI();
@@ -424,6 +480,8 @@ namespace CCEngine
                 // 메인 창 하나만 v-sync 대기를 한다. 보조 창까지 대기하면
                 // 멀티 윈도우가 열린 상태에서 마우스 입력 프레임이 간헐적으로 건너뛴다.
                 stageStartedAt = std::chrono::steady_clock::now();
+                if (isMainWindow)
+                    OnMainFrameReady();
                 context->SwapBuffers(isMainWindow);
                 AddHitchStage(hitchStages, isMainWindow ? "MainPresent" : "SecondaryPresent", stageStartedAt);
                 AddHitchStage(hitchStages, isMainWindow ? "MainWindowRenderTotal" : "SecondaryWindowRenderTotal", windowRenderStartedAt);

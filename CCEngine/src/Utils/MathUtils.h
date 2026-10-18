@@ -1,6 +1,5 @@
 #pragma once
 #include <DirectXMath.h>
-#include "Renderer/RendererAPI.h" // 현재 API 확인용
 
 namespace CCEngine
 {
@@ -64,28 +63,13 @@ namespace CCEngine
             }
 
             // ====================================================================
-            // 2. 셰이더(GPU) 업로드용 (API별 예외 처리 적용!)
+            // 2. 공통 HLSL 상수 버퍼 업로드용
             // ====================================================================
             static inline DirectX::XMMATRIX GetMatrixForShader(const DirectX::XMMATRIX& matrix)
-                {
-                switch (RendererAPI::GetAPI())
-                {
-                case RendererAPI::API::DirectX11:
-                    // DX11 (HLSL)은 GPU로 보낼 때 무조건 전치(Transpose)가 필요
-                    return DirectX::XMMatrixTranspose(matrix);
-
-                case RendererAPI::API::OpenGL:
-                    // OpenGL은 나중에 C++ 코어 수학을 뭘 쓰냐에 따라 다르지만, 
-                    // 보통 그대로 보내거나 glUniformMatrix4fv에서 GL_TRUE/FALSE로 처리
-                    return matrix;
-
-                case RendererAPI::API::Vulkan:
-                    // Vulkan (GLSL/SPIR-V) 역시 구조에 따라 맞춤 처리 가능
-                    return matrix;
-
-                default:
-                    return matrix;
-                }
+            {
+                // API 이름이 아니라 셰이더의 행렬 저장 규약에 맞춘다.
+                // 공통 HLSL을 변환한 패키지도 이 상수 버퍼 배치를 유지해야 한다.
+                return DirectX::XMMatrixTranspose(matrix);
             }
 
             // 두 3D 직선(Ray)이 가장 가까워지는 점의 매개변수(t1, t2)를 구하는 함수

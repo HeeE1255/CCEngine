@@ -18,6 +18,8 @@ namespace CCEngine
         class CC_API DockManager
         {
         public:
+            static constexpr float MainWindowReservedTop = 88.0f;
+
             static void ClearPreview();
             static void DrawPreview(Window* renderWindow);
             static void UpdatePreview(WindowPanel* draggedPanel, float mouseX, float mouseY);

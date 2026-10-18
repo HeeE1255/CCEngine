@@ -7,6 +7,9 @@
     <Filter Include="src\Animation">
       <UniqueIdentifier>{5C00BBE1-C8C0-3618-91FB-7F95FD7A7BF4}</UniqueIdentifier>
     </Filter>
+    <Filter Include="src\Build">
+      <UniqueIdentifier>{0C55A8B2-78BF-5C29-C1FD-0DCF2DA73A7E}</UniqueIdentifier>
+    </Filter>
     <Filter Include="src\Core">
       <UniqueIdentifier>{A5D31CCF-91A0-77DA-BAB9-6582A6E5AC68}</UniqueIdentifier>
     </Filter>
@@ -25,6 +28,7 @@
     <Filter Include="src\Platform\DirectX11">
       <UniqueIdentifier>{2549C2B7-1143-EB09-FAAF-811AE6485176}</UniqueIdentifier>
     </Filter>
+    <Filter Include="src\Platform\DirectX12" />
     <Filter Include="src\Platform\OpenGL">
       <UniqueIdentifier>{35A49437-A105-7245-2A73-B8F796D3A804}</UniqueIdentifier>
     </Filter>
@@ -36,6 +40,9 @@
     </Filter>
     <Filter Include="src\Renderer">
       <UniqueIdentifier>{73D1DFBF-5F34-6F64-08BA-A71AF4FB3AE7}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\Runtime">
+      <UniqueIdentifier>{609514CE-CC4A-8DC3-553F-879AC1F383C7}</UniqueIdentifier>
     </Filter>
     <Filter Include="src\Scene">
       <UniqueIdentifier>{0A06D2B3-7670-862A-BFAE-37D02B58647F}</UniqueIdentifier>
@@ -68,6 +75,15 @@
     </ClInclude>
     <ClInclude Include="src\Application.h">
       <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Build\AssetDependencyCollector.h">
+      <Filter>src\Build</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Build\GameBuildProfile.h">
+      <Filter>src\Build</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Build\GameBuildService.h">
+      <Filter>src\Build</Filter>
     </ClInclude>
     <ClInclude Include="src\Core.h">
       <Filter>src</Filter>
@@ -147,6 +163,33 @@
     <ClInclude Include="src\Platform\DirectX11\DX11Context.h">
       <Filter>src\Platform\DirectX11</Filter>
     </ClInclude>
+    <ClInclude Include="src\Platform\DirectX11\DX11Device.h">
+      <Filter>src\Platform\DirectX11</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Platform\DirectX12\DX12Buffer.h">
+      <Filter>src\Platform\DirectX12</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Platform\DirectX12\DX12Context.h">
+      <Filter>src\Platform\DirectX12</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Platform\DirectX12\DX12Device.h">
+      <Filter>src\Platform\DirectX12</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Platform\DirectX12\DX12Framebuffer.h">
+      <Filter>src\Platform\DirectX12</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Platform\DirectX12\DX12RendererAPI.h">
+      <Filter>src\Platform\DirectX12</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Platform\DirectX12\DX12Resources.h">
+      <Filter>src\Platform\DirectX12</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Platform\DirectX12\DX12Shader.h">
+      <Filter>src\Platform\DirectX12</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Platform\DirectX12\DX12Texture.h">
+      <Filter>src\Platform\DirectX12</Filter>
+    </ClInclude>
     <ClInclude Include="src\Platform\DirectX11\DX11Framebuffer.h">
       <Filter>src\Platform\DirectX11</Filter>
     </ClInclude>
@@ -181,6 +224,9 @@
       <Filter>src\Renderer</Filter>
     </ClInclude>
     <ClInclude Include="src\Renderer\GraphicsContext.h">
+      <Filter>src\Renderer</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Renderer\GraphicsDevice.h">
       <Filter>src\Renderer</Filter>
     </ClInclude>
     <ClInclude Include="src\Renderer\MaterialAsset.h">
@@ -249,6 +295,12 @@
     <ClInclude Include="src\Renderer\VisualShaderAsset.h">
       <Filter>src\Renderer</Filter>
     </ClInclude>
+    <ClInclude Include="src\Runtime\GameLayer.h">
+      <Filter>src\Runtime</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Runtime\RuntimeManifest.h">
+      <Filter>src\Runtime</Filter>
+    </ClInclude>
     <ClInclude Include="src\Scene\Components.h">
       <Filter>src\Scene</Filter>
     </ClInclude>
@@ -289,6 +341,9 @@
       <Filter>src\UI</Filter>
     </ClInclude>
     <ClInclude Include="src\UI\AssetReferenceValidatorPanel.h">
+      <Filter>src\UI</Filter>
+    </ClInclude>
+    <ClInclude Include="src\UI\BuildSettingsPanel.h">
       <Filter>src\UI</Filter>
     </ClInclude>
     <ClInclude Include="src\UI\Button.h">
@@ -389,6 +444,15 @@
     <ClCompile Include="src\Application.cpp">
       <Filter>src</Filter>
     </ClCompile>
+    <ClCompile Include="src\Build\AssetDependencyCollector.cpp">
+      <Filter>src\Build</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Build\GameBuildProfile.cpp">
+      <Filter>src\Build</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Build\GameBuildService.cpp">
+      <Filter>src\Build</Filter>
+    </ClCompile>
     <ClCompile Include="src\Core\AssetDatabase.cpp">
       <Filter>src\Core</Filter>
     </ClCompile>
@@ -445,6 +509,36 @@
     </ClCompile>
     <ClCompile Include="src\Platform\DirectX11\DX11Context.cpp">
       <Filter>src\Platform\DirectX11</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Platform\DirectX11\DX11Device.cpp">
+      <Filter>src\Platform\DirectX11</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Platform\DirectX12\DX12Buffer.cpp">
+      <Filter>src\Platform\DirectX12</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Platform\DirectX12\DX12Context.cpp">
+      <Filter>src\Platform\DirectX12</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Platform\DirectX12\DX12Device.cpp">
+      <Filter>src\Platform\DirectX12</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Platform\DirectX12\DX12Framebuffer.cpp">
+      <Filter>src\Platform\DirectX12</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Platform\DirectX12\DX12RendererAPI.cpp">
+      <Filter>src\Platform\DirectX12</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Platform\DirectX12\DX12Resources.cpp">
+      <Filter>src\Platform\DirectX12</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Platform\DirectX12\DX12Shader.cpp">
+      <Filter>src\Platform\DirectX12</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Platform\DirectX12\DX12Texture.cpp">
+      <Filter>src\Platform\DirectX12</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Platform\DirectX12\DX12Pipeline.cpp">
+      <Filter>src\Platform\DirectX12</Filter>
     </ClCompile>
     <ClCompile Include="src\Platform\DirectX11\DX11Framebuffer.cpp">
       <Filter>src\Platform\DirectX11</Filter>
@@ -533,6 +627,12 @@
     <ClCompile Include="src\Renderer\VisualShaderAsset.cpp">
       <Filter>src\Renderer</Filter>
     </ClCompile>
+    <ClCompile Include="src\Runtime\GameLayer.cpp">
+      <Filter>src\Runtime</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Runtime\RuntimeManifest.cpp">
+      <Filter>src\Runtime</Filter>
+    </ClCompile>
     <ClCompile Include="src\Scene\Entity.cpp">
       <Filter>src\Scene</Filter>
     </ClCompile>
@@ -564,6 +664,9 @@
       <Filter>src\UI</Filter>
     </ClCompile>
     <ClCompile Include="src\UI\AssetReferenceValidatorPanel.cpp">
+      <Filter>src\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UI\BuildSettingsPanel.cpp">
       <Filter>src\UI</Filter>
     </ClCompile>
     <ClCompile Include="src\UI\Button.cpp">

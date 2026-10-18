@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <stdexcept>
 
 namespace CCEngine
 {
@@ -61,7 +62,11 @@ namespace CCEngine
 
     void Renderer3D::Init()
     {
+        if (!s_Data)
+            s_Data = new RenderData();
         s_Data->Base3DShader.reset(Shader::Create("assets/shaders/Base3D.hlsl"));
+        if (!s_Data->Base3DShader || !s_Data->Base3DShader->IsValid())
+            throw std::runtime_error("Renderer3D shader initialization failed: assets/shaders/Base3D.hlsl");
 
         s_Data->DefaultWhiteTexture.reset(Texture2D::Create(1, 1));
         uint32_t whiteTextureData = 0xffffffff;
@@ -87,12 +92,19 @@ namespace CCEngine
     {
         // 스마트 포인터를 사용했으므로 s_Data를 지우면 리소스가 자동 해제
         delete s_Data;
+        s_Data = nullptr;
     }
 
     void Renderer3D::BeginScene(const PerspectiveCamera& camera, const SceneLightData& lightData)
     {
-        // 깊이버퍼 활성
-        RenderCommand::SetDepthTest(true);
+        // 렌더 패스는 이전 패스가 남긴 GPU 상태에 의존하면 안 된다.
+        // Player는 2D 패스 뒤에 3D를 그리므로 상태를 복구하지 않으면 MRTPicking 블렌드와
+        // 양면 렌더링이 남아 곡면 메시에서 겹침/음영 깨짐이 나타날 수 있다.
+        RenderCommand::ApplyPassState({
+            RendererAPI::BlendMode::Opaque,
+            RendererAPI::CullMode::Back,
+            true,
+            false });
 
         // 매 프레임 시작 시, 카메라 행렬(ViewProjection)을 계산하여 상수 버퍼에 세팅!
         CameraData camData;

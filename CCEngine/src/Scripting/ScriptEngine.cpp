@@ -1,5 +1,6 @@
 #include "Scripting/ScriptEngine.h"
 #include "Core/ConsoleLog.h"
+#include "Core/PathContext.h"
 #include "Scene/Components.h"
 #include "Scene/Entity.h"
 #include "Scene/Scene.h"
@@ -58,6 +59,10 @@ namespace CCEngine
         std::filesystem::path FindHostfxr()
         {
             std::vector<std::filesystem::path> roots;
+            // 배포 Player는 실행 폴더의 런타임을 먼저 사용한다. 시스템 DOTNET_ROOT를 먼저 보면
+            // 개발 PC에서는 되지만 깨끗한 PC에서 실패하는 패키지가 만들어질 수 있다.
+            const auto runtimeRoot = PathContext::RuntimeRoot();
+            roots.emplace_back((runtimeRoot.empty() ? PathContext::ProjectRoot() : runtimeRoot) / "Runtime" / "dotnet");
             if (const wchar_t* dotnetRoot = _wgetenv(L"DOTNET_ROOT"))
                 roots.emplace_back(dotnetRoot);
             roots.emplace_back(L"C:\\Program Files\\dotnet");
@@ -221,14 +226,15 @@ namespace CCEngine
             if (s_Data.RuntimeLoaded)
                 return true;
 
-            const auto scriptsRoot = std::filesystem::current_path() / "assets" / "Scripts";
+            const auto scriptsRoot = PathContext::AssetRoot() / "Scripts";
             const auto buildRoot = scriptsRoot / "Build";
             const auto runtimeConfig = buildRoot / "CCEngine.ScriptCore.runtimeconfig.json";
             const auto coreAssembly = buildRoot / "CCEngine.ScriptCore.dll";
 
             if (!std::filesystem::exists(runtimeConfig) || !std::filesystem::exists(coreAssembly))
             {
-                ConsoleLog::Error("C# runtime files are missing. Run assets/Scripts/BuildScripts.ps1.");
+                ConsoleLog::Error("C# runtime files are missing. runtimeConfig=" + runtimeConfig.string() +
+                    " coreAssembly=" + coreAssembly.string());
                 return false;
             }
 
@@ -302,7 +308,7 @@ namespace CCEngine
         if (!scene || !LoadRuntime())
             return false;
 
-        const auto gameAssembly = std::filesystem::current_path() / "assets" / "Scripts" / "Build" / "GameScripts.dll";
+        const auto gameAssembly = PathContext::AssetRoot() / "Scripts" / "Build" / "GameScripts.dll";
         if (!std::filesystem::exists(gameAssembly))
         {
             ConsoleLog::Error("GameScripts.dll is missing. Run assets/Scripts/BuildScripts.ps1.");

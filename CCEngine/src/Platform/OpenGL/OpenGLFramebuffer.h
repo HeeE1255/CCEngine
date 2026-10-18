@@ -1,4 +1,7 @@
 #pragma once
+#if defined(CC_ENABLE_OPENGL_RHI)
+#include "OpenGLFramebufferStorage.h"
+#else
 #include "Renderer/Framebuffer.h"
 #include <vector> // std::vector 사용을 위해 추가
 
@@ -62,3 +65,4 @@ namespace CCEngine {
     };
 
 }
+#endif

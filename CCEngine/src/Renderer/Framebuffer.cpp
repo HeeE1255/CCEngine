@@ -9,6 +9,7 @@ namespace CCEngine {
 
     Framebuffer* Framebuffer::Create(const FramebufferSpecification& spec)
     {
+        RendererAPI::RequireAvailable(RendererAPI::GetAPI());
         switch (RendererAPI::GetAPI())
         {
             case RendererAPI::API::None:

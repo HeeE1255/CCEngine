@@ -2094,7 +2094,7 @@
                 "ActiveSelf": true
             },
             "AudioComponent": {
-                "AudioGuid": "",
+                "AudioGuid": "c94b5473a514f09f35cd7faa680d1136",
                 "AudioPath": "assets/audio/qa_beep_placeholder.wav",
                 "Enabled": true,
                 "Loop": false,

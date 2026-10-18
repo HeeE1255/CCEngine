@@ -1,0 +1,16 @@
+{
+    "Version": 1,
+    "ProductName": "CCEngine Build QA",
+    "ProductVersion": "0.1.0",
+    "UpdateChannel": "Development",
+    "ExecutableName": "CCEngineBuildQA",
+    "OutputDirectory": "Build/Windows",
+    "Configuration": "Release",
+    "ManagedRuntime": "SelfContained",
+    "WindowMode": "Windowed",
+    "IncludeDebugSymbols": false,
+    "ExcludeLicensedSampleAssets": true,
+    "VerifyPlayerFrame": true,
+    "AllowDevelopmentShaderFallback": true,
+    "AlwaysIncludeAssets": []
+}

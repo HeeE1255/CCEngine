@@ -8,5 +8,6 @@
     "MoveRightKey": "D",
     "MoveUpKey": "E",
     "ProjectName": "CCEngine Project",
-    "StartScenePath": ""
+    "StartSceneGuid": "c0111510cc011510cc011510cc011510",
+    "StartScenePath": "assets/scenes/Collision_Test.ccscene"
 }

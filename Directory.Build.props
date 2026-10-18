@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <PropertyGroup Condition="'$(Platform)' == 'x64'">
+    <!-- x64 빌드에는 64비트 호스트 도구를 고정한다.
+         Visual Studio 구성요소가 부분 업데이트된 PC에서도 HostX86 PDB 도구와의 버전 충돌을 피한다. -->
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+</Project>

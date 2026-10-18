@@ -9,16 +9,26 @@ namespace CCEngine
 {
 	namespace UI { class Widget; } 
 
+	enum class WindowMode
+	{
+		Windowed = 0,
+		Borderless,
+		Fullscreen
+	};
+
 	struct WindowProps
 	{
 		std::string Title;
 		unsigned int Width;
 		unsigned int Height;
+		WindowMode Mode;
+		std::shared_ptr<GraphicsDevice> SharedGraphicsDevice;
 
 		WindowProps(const std::string& title = "CCEngine",
 					unsigned int width = 1920,
-					unsigned int height = 1080)
-			: Title(title), Width(width), Height(height) {}
+					unsigned int height = 1080,
+					WindowMode mode = WindowMode::Windowed)
+			: Title(title), Width(width), Height(height), Mode(mode) {}
 	};
 
 	class CC_API Window
@@ -35,6 +45,7 @@ namespace CCEngine
 		virtual void SetRootUI(UI::Widget* rootWidget) = 0;
 		virtual UI::Widget* GetRootUI() const = 0;
 		virtual void SetPosition(int x, int y) = 0;
+		virtual void SetMinimumSize(unsigned int width, unsigned int height) = 0;
 		virtual std::pair<int, int> GetScreenMousePosition() const = 0;
 		virtual std::pair<float, float> GetMousePosition() const = 0;
 		virtual bool IsMouseButtonPressed(int button) const = 0;

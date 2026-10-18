@@ -20,6 +20,7 @@ namespace CCEngine
         Avatar,
         Model,
         Texture,
+        Audio,
         Script
     };
 
@@ -81,11 +82,13 @@ namespace CCEngine
     public:
         static void Scan(const std::filesystem::path& rootDirectory = "assets");
         static void ScanIfNeeded(const std::filesystem::path& rootDirectory = "assets");
+        static bool LoadRuntimeManifest(const std::filesystem::path& manifestPath, std::string& error);
         static void Shutdown();
         static void MarkDirty(const std::filesystem::path& rootDirectory = {});
 
         static std::string GetGuidFromPath(const std::filesystem::path& assetPath);
         static std::filesystem::path GetPathFromGuid(const std::string& guid);
+        static std::filesystem::path GetPathFromAddress(const std::string& address);
 
         static AssetKind GetAssetKind(const std::filesystem::path& assetPath);
         static std::filesystem::path GetMetaPath(const std::filesystem::path& assetPath);

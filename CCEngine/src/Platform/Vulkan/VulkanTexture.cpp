@@ -1,4 +1,5 @@
 #include "Platform/Vulkan/VulkanTexture.h"
+#if !defined(CC_ENABLE_VULKAN_RHI)
 #include <iostream>
 
 namespace CCEngine
@@ -22,3 +23,4 @@ namespace CCEngine
     void VulkanTexture2D::Unbind(uint32_t slot) const {}
     void VulkanTexture2D::SetData(void* data, uint32_t size) { /* VkBuffer -> VkImage 복사 등 */ }
 }
+#endif

@@ -25,6 +25,7 @@
 #include "Renderer/ModelImporter.h"
 #include "Application.h"
 #include "UI/HierarchyItem.h"
+#include "UI/DockManager.h"
 #include "UI/AnimatorGraphPanel.h"
 #include "UI/InspectorPanel.h"
 #include "UI/InspectorRegistry.h"
@@ -115,6 +116,139 @@ namespace CCEngine {
 
             message = "One Collider edit Undo/Redo restored both selected objects.";
             return true;
+        }
+
+        std::filesystem::path GetEditorExecutableDirectory()
+        {
+            wchar_t path[32768] = {};
+            const DWORD length = GetModuleFileNameW(nullptr, path, static_cast<DWORD>(std::size(path)));
+            return length > 0 && length < std::size(path)
+                ? std::filesystem::path(path).parent_path()
+                : std::filesystem::path{};
+        }
+
+        bool RunBuildCancellationRegressionCheck(std::string& message)
+        {
+            const std::filesystem::path sourceProjectRoot = std::filesystem::current_path();
+            GameBuildProfile profile;
+            std::string profileError;
+            if (!profile.Load(sourceProjectRoot / "BuildProfile.ccbuildprofile", profileError))
+            {
+                message = "Could not load the build profile: " + profileError;
+                return false;
+            }
+
+            const auto uniqueId = std::chrono::steady_clock::now().time_since_epoch().count();
+            const std::filesystem::path qaRoot = sourceProjectRoot.parent_path() / "local" / "qa" / "editor-build-cancel" / std::to_string(uniqueId);
+            const std::filesystem::path projectRoot = qaRoot / "Project";
+            const std::filesystem::path outputDirectory = qaRoot / "PreviousBuild";
+            const std::filesystem::path sentinel = outputDirectory / "previous-build.txt";
+            std::error_code ec;
+            std::filesystem::create_directories(outputDirectory, ec);
+            if (ec)
+            {
+                message = "Could not create the cancellation QA directory.";
+                return false;
+            }
+
+            // 실행 중인 에디터가 원본 ScriptCore DLL을 사용하고 있으므로 같은 프로젝트를
+            // 다시 컴파일하면 파일 잠금이 발생한다. 필요한 입력만 격리 복사해 실제 빌드 경로를 검증한다.
+            std::filesystem::create_directories(projectRoot / "assets" / "scenes", ec);
+            std::filesystem::create_directories(projectRoot / "assets" / "fonts", ec);
+            std::filesystem::copy(sourceProjectRoot / "assets" / "Scripts", projectRoot / "assets" / "Scripts",
+                std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, ec);
+            if (!ec)
+                std::filesystem::copy(sourceProjectRoot / "assets" / "shaders", projectRoot / "assets" / "shaders",
+                    std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, ec);
+            if (!ec)
+            {
+                std::filesystem::copy_file(
+                    sourceProjectRoot / "assets" / "fonts" / "NotoSansKR-VariableFont_wght.ttf",
+                    projectRoot / "assets" / "fonts" / "NotoSansKR-VariableFont_wght.ttf",
+                    std::filesystem::copy_options::overwrite_existing, ec);
+            }
+            if (ec)
+            {
+                message = "Could not prepare an isolated project for cancellation QA: " + ec.message();
+                return false;
+            }
+
+            {
+                std::ofstream project(projectRoot / "project.ccproject", std::ios::trunc);
+                project << R"({"ProjectName":"Build Cancel QA","GameWidth":640,"GameHeight":360,"StartSceneGuid":"ca11ca11ca11ca11ca11ca11ca11ca11","StartScenePath":"assets/scenes/CancelQA.ccscene"})";
+                std::ofstream scene(projectRoot / "assets" / "scenes" / "CancelQA.ccscene", std::ios::trunc);
+                scene << R"({"Entities":[{"Entity":1048576,"ActiveComponent":{"ActiveSelf":true},"TagComponent":{"Tag":"Main Camera"},"TransformComponent":{"Translation":[0.0,0.0,-5.0],"Rotation":[0.0,0.0,0.0],"QuaternionRotation":[0.0,0.0,0.0,1.0],"Scale":[1.0,1.0,1.0]},"CameraComponent":{"Primary":true,"FOV":45.0,"NearClip":0.1,"FarClip":1000.0}}]})";
+            }
+
+            {
+                std::ofstream marker(outputDirectory / ".ccengine-build", std::ios::trunc);
+                marker << "CCEngine Build Output";
+                std::ofstream sentinelOutput(sentinel, std::ios::trunc);
+                sentinelOutput << "preserve-me";
+            }
+
+            const auto& data = profile.Data();
+            GameBuildRequest request;
+            request.ProjectRoot = projectRoot;
+            request.OutputDirectory = outputDirectory;
+            request.BinaryDirectory = GetEditorExecutableDirectory();
+            request.ProductName = data.ProductName;
+            request.ProductVersion = data.ProductVersion;
+            request.UpdateChannel = data.UpdateChannel;
+            request.ExecutableName = data.ExecutableName;
+            request.DevelopmentBuild = data.Configuration == GameBuildConfiguration::Development;
+            request.ManagedRuntime = data.ManagedRuntime;
+            request.PlayerWindowMode = data.PlayerWindowMode;
+            request.IncludeDebugSymbols = data.IncludeDebugSymbols;
+            request.ExcludeLicensedSampleAssets = data.ExcludeLicensedSampleAssets;
+            request.VerifyPlayerFrame = true;
+            request.AllowDevelopmentShaderFallback = data.AllowDevelopmentShaderFallback;
+            request.AlwaysIncludeAssets.clear();
+            request.CancelRequested = std::make_shared<std::atomic_bool>(false);
+
+            bool reachedSmokeTest = false;
+            request.Progress = [&](const std::string& stage, float, const std::filesystem::path&)
+            {
+                if (stage == "Player Smoke Test")
+                {
+                    reachedSmokeTest = true;
+                    request.CancelRequested->store(true);
+                }
+            };
+
+            const GameBuildReport report = GameBuildService().Build(request);
+            const bool cancelReported = std::any_of(report.Messages.begin(), report.Messages.end(), [](const GameBuildMessage& item)
+            {
+                return item.Stage == "Cancel";
+            });
+
+            std::ifstream sentinelInput(sentinel);
+            std::string sentinelText;
+            sentinelInput >> sentinelText;
+            const bool previousBuildPreserved = sentinelText == "preserve-me";
+            const bool stagingRemoved = !std::filesystem::exists(outputDirectory.string() + ".staging", ec);
+
+            const bool passed = !report.Success && reachedSmokeTest && cancelReported && previousBuildPreserved && stagingRemoved;
+            if (passed)
+            {
+                // 테스트가 만든 소유 폴더만 지운다. 기존 프로젝트 Build 출력은 건드리지 않는다.
+                std::filesystem::remove_all(qaRoot, ec);
+                message = "Smoke-test cancellation completed, removed staging, and preserved the previous successful output.";
+            }
+            else
+            {
+                std::ostringstream details;
+                details << "success=" << report.Success
+                    << ", reachedSmoke=" << reachedSmokeTest
+                    << ", cancelReported=" << cancelReported
+                    << ", previousPreserved=" << previousBuildPreserved
+                    << ", stagingRemoved=" << stagingRemoved
+                    << ", evidence=" << qaRoot.string();
+                for (const auto& item : report.Messages)
+                    details << " | " << item.Stage << ": " << item.Message;
+                message = details.str();
+            }
+            return passed;
         }
 
         double ToMilliseconds(std::chrono::steady_clock::duration duration)
@@ -677,10 +811,21 @@ namespace CCEngine {
         {
             switch (type)
             {
-                case Rigidbody2DComponent::BodyType::Dynamic: return { 0.35f, 0.55f, 1.0f, 0.9f };
-                case Rigidbody2DComponent::BodyType::Kinematic: return { 0.75f, 0.45f, 1.0f, 0.9f };
+                case Rigidbody2DComponent::BodyType::Dynamic: return { 0.30f, 0.95f, 0.42f, 0.95f };
+                case Rigidbody2DComponent::BodyType::Kinematic: return { 0.25f, 0.60f, 1.0f, 0.95f };
                 case Rigidbody2DComponent::BodyType::Static:
                 default: return { 0.72f, 0.72f, 0.72f, 0.9f };
+            }
+        }
+
+        DirectX::XMFLOAT4 GetRigidbodyDebugColor(Rigidbody3DComponent::BodyType type)
+        {
+            switch (type)
+            {
+                case Rigidbody3DComponent::BodyType::Dynamic: return { 0.30f, 0.92f, 0.48f, 0.95f };
+                case Rigidbody3DComponent::BodyType::Kinematic: return { 0.35f, 0.62f, 1.0f, 0.95f };
+                case Rigidbody3DComponent::BodyType::Static:
+                default: return { 0.72f, 0.72f, 0.72f, 0.92f };
             }
         }
     }
@@ -1216,7 +1361,7 @@ namespace CCEngine {
         if (m_ToolOptionsDropdownPanel) m_ToolOptionsDropdownPanel->BringToFront();
         if (m_SceneViewDropdownPanel) m_SceneViewDropdownPanel->BringToFront();
         if (m_RootMotionDebugDropdownPanel) m_RootMotionDebugDropdownPanel->BringToFront();
-        if (m_ColliderDebugDropdownPanel) m_ColliderDebugDropdownPanel->BringToFront();
+        if (m_PhysicsDebugDropdownPanel) m_PhysicsDebugDropdownPanel->BringToFront();
     }
 
     void EditorLayer::OnEvent(Event& e)
@@ -1285,7 +1430,7 @@ namespace CCEngine {
             (m_ToolOptionsDropdownPanel && m_ToolOptionsDropdownPanel->IsVisible()) ||
             (m_SceneViewDropdownPanel && m_SceneViewDropdownPanel->IsVisible()) ||
             (m_RootMotionDebugDropdownPanel && m_RootMotionDebugDropdownPanel->IsVisible()) ||
-            (m_ColliderDebugDropdownPanel && m_ColliderDebugDropdownPanel->IsVisible()) ||
+            (m_PhysicsDebugDropdownPanel && m_PhysicsDebugDropdownPanel->IsVisible()) ||
             (m_ObjectContextMenuPanel && m_ObjectContextMenuPanel->IsVisible()) ||
             (m_MeshObjectSubmenuPanel && m_MeshObjectSubmenuPanel->IsVisible()) ||
             (m_ProjectSettingsPanel && m_ProjectSettingsPanel->IsVisible());
@@ -1351,12 +1496,12 @@ namespace CCEngine {
                 }
             }
 
-            if (m_ColliderDebugDropdownPanel && m_ColliderDebugDropdownPanel->IsVisible())
+            if (m_PhysicsDebugDropdownPanel && m_PhysicsDebugDropdownPanel->IsVisible())
             {
-                if (!m_ColliderDebugDropdownPanel->IsPointInside(mouseEvent.GetX(), mouseEvent.GetY()) &&
-                    !m_BtnColliderOutline->IsPointInside(mouseEvent.GetX(), mouseEvent.GetY()))
+                if (!m_PhysicsDebugDropdownPanel->IsPointInside(mouseEvent.GetX(), mouseEvent.GetY()) &&
+                    (!m_BtnPhysicsDebug || !m_BtnPhysicsDebug->IsPointInside(mouseEvent.GetX(), mouseEvent.GetY())))
                 {
-                    HideColliderDebugDropdown();
+                    HidePhysicsDebugDropdown();
                 }
             }
 
@@ -2118,7 +2263,6 @@ namespace CCEngine {
         UpdateSceneGridButton();
         UpdatePhysicsDebugButton();
         UpdateRootMotionDebugButton();
-        UpdateColliderOutlineButton();
     }
 
     void EditorLayer::ConfigureColliderEditCallbacks(UI::InspectorPanel* inspector)
@@ -2201,81 +2345,71 @@ namespace CCEngine {
         }
     }
 
-    void EditorLayer::CyclePhysicsDebugViewMode()
-    {
-        m_PhysicsDebugViewMode = (m_PhysicsDebugViewMode + 1) % 7;
-        UpdatePhysicsDebugButton();
-    }
-
-    void EditorLayer::UpdateColliderOutlineButton()
-    {
-        if (!m_BtnColliderOutline)
-            return;
-
-        if (m_ShowColliderOutlines)
-            m_BtnColliderOutline->SetText("Collider: Outline >");
-        else if (m_ShowMeshColliderWire)
-            m_BtnColliderOutline->SetText("Collider: Wire >");
-        else
-            m_BtnColliderOutline->SetText("Collider: Off >");
-
-        m_BtnColliderOutline->SetActive(m_ShowColliderOutlines || m_ShowMeshColliderWire);
-
-        if (m_BtnColliderOutlineMode)
-        {
-            m_BtnColliderOutlineMode->SetText(m_ShowColliderOutlines ? "Outline: On" : "Outline: Off");
-            m_BtnColliderOutlineMode->SetActive(m_ShowColliderOutlines);
-        }
-
-        if (m_BtnMeshColliderWireMode)
-        {
-            m_BtnMeshColliderWireMode->SetText(m_ShowMeshColliderWire ? "Mesh Wire: On" : "Mesh Wire: Off");
-            m_BtnMeshColliderWireMode->SetActive(m_ShowMeshColliderWire);
-        }
-    }
-
-    void EditorLayer::HideColliderDebugDropdown()
-    {
-        if (m_ColliderDebugDropdownPanel)
-            m_ColliderDebugDropdownPanel->SetVisible(false);
-    }
-
     void EditorLayer::UpdatePhysicsDebugButton()
     {
         if (!m_BtnPhysicsDebug)
             return;
 
-        switch (m_PhysicsDebugViewMode)
+        if (!m_ShowPhysicsDebug)
         {
-            case 1:
-                m_BtnPhysicsDebug->SetText("Phys 2D: Sel");
-                m_BtnPhysicsDebug->SetActive(true);
-                break;
-            case 2:
-                m_BtnPhysicsDebug->SetText("Phys 2D: All");
-                m_BtnPhysicsDebug->SetActive(true);
-                break;
-            case 3:
-                m_BtnPhysicsDebug->SetText("Phys 3D: Sel");
-                m_BtnPhysicsDebug->SetActive(true);
-                break;
-            case 4:
-                m_BtnPhysicsDebug->SetText("Phys 3D: All");
-                m_BtnPhysicsDebug->SetActive(true);
-                break;
-            case 5:
-                m_BtnPhysicsDebug->SetText("Phys Both: Sel");
-                m_BtnPhysicsDebug->SetActive(true);
-                break;
-            case 6:
-                m_BtnPhysicsDebug->SetText("Phys Both: All");
-                m_BtnPhysicsDebug->SetActive(true);
-                break;
-            default:
-                m_BtnPhysicsDebug->SetText("Physics: Off");
-                m_BtnPhysicsDebug->SetActive(false);
-                break;
+            m_BtnPhysicsDebug->SetText("Physics: Off >");
+            m_BtnPhysicsDebug->SetActive(false);
+            UpdatePhysicsDebugOptionButtons();
+            return;
         }
+
+        std::string dimension = "Both";
+        if (m_PhysicsDebugDimension == PhysicsDebugDimension::TwoD)
+            dimension = "2D";
+        else if (m_PhysicsDebugDimension == PhysicsDebugDimension::ThreeD)
+            dimension = "3D";
+
+        m_BtnPhysicsDebug->SetText("Physics: " + dimension + (m_PhysicsDebugAllEntities ? "/All >" : "/Sel >"));
+        m_BtnPhysicsDebug->SetActive(true);
+        UpdatePhysicsDebugOptionButtons();
+    }
+
+    void EditorLayer::UpdatePhysicsDebugOptionButtons()
+    {
+        if (m_BtnPhysicsDebugEnabled)
+        {
+            m_BtnPhysicsDebugEnabled->SetText(m_ShowPhysicsDebug ? "Enabled: On" : "Enabled: Off");
+            m_BtnPhysicsDebugEnabled->SetActive(m_ShowPhysicsDebug);
+        }
+        if (m_BtnPhysicsDebugDimension)
+        {
+            const char* text = m_PhysicsDebugDimension == PhysicsDebugDimension::TwoD ? "Dimension: 2D" :
+                m_PhysicsDebugDimension == PhysicsDebugDimension::ThreeD ? "Dimension: 3D" : "Dimension: 2D + 3D";
+            m_BtnPhysicsDebugDimension->SetText(text);
+        }
+        if (m_BtnPhysicsDebugScope)
+            m_BtnPhysicsDebugScope->SetText(m_PhysicsDebugAllEntities ? "Scope: All" : "Scope: Selected");
+        if (m_BtnPhysicsColliderMode)
+        {
+            m_BtnPhysicsColliderMode->SetText(m_ShowPhysicsColliders ? "Collider Shapes: On" : "Collider Shapes: Off");
+            m_BtnPhysicsColliderMode->SetActive(m_ShowPhysicsColliders);
+        }
+        if (m_BtnPhysicsMeshWireMode)
+        {
+            m_BtnPhysicsMeshWireMode->SetText(m_ShowPhysicsMeshWire ? "Mesh Wire: On" : "Mesh Wire: Off");
+            m_BtnPhysicsMeshWireMode->SetActive(m_ShowPhysicsMeshWire);
+        }
+        if (m_BtnPhysicsBodyCenters)
+        {
+            m_BtnPhysicsBodyCenters->SetText(m_ShowPhysicsBodyCenters ? "Body Centers: On" : "Body Centers: Off");
+            m_BtnPhysicsBodyCenters->SetActive(m_ShowPhysicsBodyCenters);
+        }
+        if (m_BtnPhysicsTriggerMode)
+        {
+            m_BtnPhysicsTriggerMode->SetText(m_PhysicsDebugTriggersOnly ? "Triggers: Only" : "Triggers: Highlight");
+            m_BtnPhysicsTriggerMode->SetActive(m_PhysicsDebugTriggersOnly);
+        }
+    }
+
+    void EditorLayer::HidePhysicsDebugDropdown()
+    {
+        if (m_PhysicsDebugDropdownPanel)
+            m_PhysicsDebugDropdownPanel->SetVisible(false);
     }
 
     void EditorLayer::UpdateSceneGridButton()
@@ -2457,19 +2591,16 @@ namespace CCEngine {
 
     void EditorLayer::RenderPhysicsDebugView(const PerspectiveCamera& camera, const std::vector<Entity>& selectedEntities)
     {
-        if (!m_ActiveScene || (!m_ShowColliderOutlines && !m_ShowMeshColliderWire))
+        if (!m_ActiveScene || !m_ShowPhysicsDebug ||
+            (!m_ShowPhysicsColliders && !m_ShowPhysicsMeshWire && !m_ShowPhysicsBodyCenters))
             return;
 
-        const bool selectedColliderOverlay = m_PhysicsDebugViewMode == 0;
-        const bool draw2D = m_ShowColliderOutlines && (selectedColliderOverlay || m_PhysicsDebugViewMode == 1 || m_PhysicsDebugViewMode == 2 || m_PhysicsDebugViewMode == 5 || m_PhysicsDebugViewMode == 6);
-        const bool draw3D = m_ShowMeshColliderWire || (m_ShowColliderOutlines && (selectedColliderOverlay || m_PhysicsDebugViewMode == 3 || m_PhysicsDebugViewMode == 4 || m_PhysicsDebugViewMode == 5 || m_PhysicsDebugViewMode == 6));
-        const bool selectedOnly = selectedColliderOverlay || m_PhysicsDebugViewMode == 1 || m_PhysicsDebugViewMode == 3 || m_PhysicsDebugViewMode == 5;
+        const bool draw2D = m_PhysicsDebugDimension != PhysicsDebugDimension::ThreeD;
+        const bool draw3D = m_PhysicsDebugDimension != PhysicsDebugDimension::TwoD;
 
         std::vector<Entity> targets;
-        if (selectedOnly)
+        if (!m_PhysicsDebugAllEntities)
         {
-            // Physics Debug가 꺼져 있어도 선택한 오브젝트의 콜라이더는 보여준다.
-            // 전체 표시 토글과 선택 확인용 오버레이를 분리해야 배치 작업 중 콜라이더 크기를 바로 확인할 수 있다.
             targets = selectedEntities;
         }
         else
@@ -2483,25 +2614,48 @@ namespace CCEngine {
 
             if (draw2D)
             {
-                auto view = m_ActiveScene->GetRegistry().view<TransformComponent, BoxCollider2DComponent>();
-                targets.reserve(targets.size() + (size_t)view.size_hint());
-                for (auto entityID : view)
-                    addTarget(entityID);
+                if (m_ShowPhysicsColliders)
+                {
+                    auto view = m_ActiveScene->GetRegistry().view<TransformComponent, BoxCollider2DComponent>();
+                    targets.reserve(targets.size() + (size_t)view.size_hint());
+                    for (auto entityID : view)
+                        addTarget(entityID);
+                }
+                if (m_ShowPhysicsBodyCenters)
+                    m_ActiveScene->GetRegistry().view<TransformComponent, Rigidbody2DComponent>().each([&](auto entityID, auto&, auto&) { addTarget(entityID); });
             }
 
             if (draw3D)
             {
-                m_ActiveScene->GetRegistry().view<TransformComponent, BoxCollider3DComponent>().each([&](auto entityID, auto&, auto&) { addTarget(entityID); });
-                m_ActiveScene->GetRegistry().view<TransformComponent, SphereCollider3DComponent>().each([&](auto entityID, auto&, auto&) { addTarget(entityID); });
-                m_ActiveScene->GetRegistry().view<TransformComponent, CylinderCollider3DComponent>().each([&](auto entityID, auto&, auto&) { addTarget(entityID); });
-                m_ActiveScene->GetRegistry().view<TransformComponent, MeshCollider3DComponent>().each([&](auto entityID, auto&, auto&) { addTarget(entityID); });
+                if (m_ShowPhysicsColliders)
+                {
+                    m_ActiveScene->GetRegistry().view<TransformComponent, BoxCollider3DComponent>().each([&](auto entityID, auto&, auto&) { addTarget(entityID); });
+                    m_ActiveScene->GetRegistry().view<TransformComponent, SphereCollider3DComponent>().each([&](auto entityID, auto&, auto&) { addTarget(entityID); });
+                    m_ActiveScene->GetRegistry().view<TransformComponent, CylinderCollider3DComponent>().each([&](auto entityID, auto&, auto&) { addTarget(entityID); });
+                }
+                if (m_ShowPhysicsColliders || m_ShowPhysicsMeshWire)
+                    m_ActiveScene->GetRegistry().view<TransformComponent, MeshCollider3DComponent>().each([&](auto entityID, auto&, auto&) { addTarget(entityID); });
+                if (m_ShowPhysicsBodyCenters)
+                    m_ActiveScene->GetRegistry().view<TransformComponent, Rigidbody3DComponent>().each([&](auto entityID, auto&, auto&) { addTarget(entityID); });
             }
         }
 
         if (targets.empty())
             return;
 
+        struct PhysicsBodyCenterMarker
+        {
+            DirectX::XMFLOAT3 Position;
+            DirectX::XMFLOAT4 Color;
+            bool Is3D = false;
+        };
+        std::vector<PhysicsBodyCenterMarker> bodyCenterMarkers;
+        bodyCenterMarkers.reserve(targets.size());
+
         Renderer2D::BeginScene(camera);
+        // 물리 디버그 표시는 장면의 표면 뒤로 숨으면 원인을 찾는 용도로 쓸 수 없다.
+        // 특히 중심점은 모든 Collider를 그린 뒤 별도 오버레이로 출력해 깊이와 그리기 순서에 영향받지 않게 한다.
+        RenderCommand::SetDepthTest(false);
 
         for (Entity entity : targets)
         {
@@ -2517,82 +2671,149 @@ namespace CCEngine {
             }
 
             DirectX::XMMATRIX entityWorld = GetEditorWorldTransform(entity);
-            if (draw2D && entity.HasComponent<BoxCollider2DComponent>())
+            const bool trigger2D = draw2D && entity.HasComponent<BoxCollider2DComponent>() &&
+                entity.GetComponent<BoxCollider2DComponent>().IsTrigger;
+            const bool trigger3D = draw3D &&
+                ((entity.HasComponent<BoxCollider3DComponent>() && entity.GetComponent<BoxCollider3DComponent>().IsTrigger) ||
+                 (entity.HasComponent<SphereCollider3DComponent>() && entity.GetComponent<SphereCollider3DComponent>().IsTrigger) ||
+                 (entity.HasComponent<CylinderCollider3DComponent>() && entity.GetComponent<CylinderCollider3DComponent>().IsTrigger) ||
+                 (entity.HasComponent<MeshCollider3DComponent>() && entity.GetComponent<MeshCollider3DComponent>().IsTrigger));
+            if (m_PhysicsDebugTriggersOnly && !trigger2D && !trigger3D)
+                continue;
+
+            if (draw2D && m_ShowPhysicsColliders && entity.HasComponent<BoxCollider2DComponent>())
             {
                 const auto& collider = entity.GetComponent<BoxCollider2DComponent>();
-                DirectX::XMFLOAT4 colliderColor = collider.IsTrigger ?
-                    DirectX::XMFLOAT4{ 1.0f, 0.63f, 0.18f, 0.92f } :
-                    DirectX::XMFLOAT4{ 0.25f, 0.95f, 0.48f, 0.92f };
-
-                // 물리 디버그 뷰는 RuntimeBodyId를 읽지 않는다.
-                // 에디터에서는 Play 전에도 배치 상태를 봐야 하므로 Transform/Collider 원본 데이터가 기준이다.
-                DrawColliderBoxOutline(entityWorld, collider, colliderColor);
-
-                if (entity.HasComponent<Rigidbody2DComponent>())
+                if (!m_PhysicsDebugTriggersOnly || collider.IsTrigger)
                 {
-                    const auto& rb = entity.GetComponent<Rigidbody2DComponent>();
-                    DirectX::XMFLOAT3 center = TransformPoint(
-                        { collider.Offset.x, collider.Offset.y, 0.02f },
-                        entityWorld);
+                    DirectX::XMFLOAT4 colliderColor = collider.IsTrigger ?
+                        DirectX::XMFLOAT4{ 1.0f, 0.63f, 0.18f, 0.92f } :
+                        DirectX::XMFLOAT4{ 0.35f, 0.85f, 1.0f, 0.92f };
 
-                    DirectX::XMMATRIX markerTransform =
-                        DirectX::XMMatrixScaling(0.12f, 0.12f, 1.0f) *
-                        DirectX::XMMatrixTranslation(center.x, center.y, center.z);
-
-                    Renderer2D::DrawQuad(markerTransform, GetRigidbodyDebugColor(rb.Type), -1);
+                    // 물리 디버그 뷰는 RuntimeBodyId를 읽지 않는다.
+                    // 에디터에서는 Play 전에도 배치 상태를 봐야 하므로 Transform/Collider 원본 데이터가 기준이다.
+                    DrawColliderBoxOutline(entityWorld, collider, colliderColor);
                 }
+
+            }
+
+            if (draw2D && m_ShowPhysicsBodyCenters && entity.HasComponent<Rigidbody2DComponent>())
+            {
+                const auto& rb = entity.GetComponent<Rigidbody2DComponent>();
+                bodyCenterMarkers.push_back({
+                    TransformPoint({ 0.0f, 0.0f, 0.03f }, entityWorld),
+                    GetRigidbodyDebugColor(rb.Type),
+                    false
+                });
             }
 
             if (draw3D)
             {
                 const DirectX::XMFLOAT3 cameraPosition = camera.GetPosition();
-                if (m_ShowColliderOutlines && entity.HasComponent<BoxCollider3DComponent>())
+                if (m_ShowPhysicsColliders && entity.HasComponent<BoxCollider3DComponent>())
                 {
                     const auto& collider = entity.GetComponent<BoxCollider3DComponent>();
-                    DirectX::XMFLOAT4 color = collider.IsTrigger ? DirectX::XMFLOAT4{ 1.0f, 0.62f, 0.24f, 0.92f } : DirectX::XMFLOAT4{ 0.35f, 0.85f, 1.0f, 0.92f };
-                    DrawBoxCollider3DOutline(entityWorld, collider, cameraPosition, color);
+                    if (!m_PhysicsDebugTriggersOnly || collider.IsTrigger)
+                    {
+                        DirectX::XMFLOAT4 color = collider.IsTrigger ? DirectX::XMFLOAT4{ 1.0f, 0.62f, 0.24f, 0.92f } : DirectX::XMFLOAT4{ 0.35f, 0.85f, 1.0f, 0.92f };
+                        DrawBoxCollider3DOutline(entityWorld, collider, cameraPosition, color);
+                    }
                 }
 
-                if (m_ShowColliderOutlines && entity.HasComponent<SphereCollider3DComponent>())
+                if (m_ShowPhysicsColliders && entity.HasComponent<SphereCollider3DComponent>())
                 {
                     const auto& collider = entity.GetComponent<SphereCollider3DComponent>();
-                    DirectX::XMFLOAT4 color = collider.IsTrigger ? DirectX::XMFLOAT4{ 1.0f, 0.62f, 0.24f, 0.92f } : DirectX::XMFLOAT4{ 0.35f, 0.85f, 1.0f, 0.92f };
-                    DrawSphereCollider3DOutline(entityWorld, collider, cameraPosition, color);
+                    if (!m_PhysicsDebugTriggersOnly || collider.IsTrigger)
+                    {
+                        DirectX::XMFLOAT4 color = collider.IsTrigger ? DirectX::XMFLOAT4{ 1.0f, 0.62f, 0.24f, 0.92f } : DirectX::XMFLOAT4{ 0.35f, 0.85f, 1.0f, 0.92f };
+                        DrawSphereCollider3DOutline(entityWorld, collider, cameraPosition, color);
+                    }
                 }
 
-                if (m_ShowColliderOutlines && entity.HasComponent<CylinderCollider3DComponent>())
+                if (m_ShowPhysicsColliders && entity.HasComponent<CylinderCollider3DComponent>())
                 {
                     const auto& collider = entity.GetComponent<CylinderCollider3DComponent>();
-                    DirectX::XMFLOAT4 color = collider.IsTrigger ? DirectX::XMFLOAT4{ 1.0f, 0.62f, 0.24f, 0.92f } : DirectX::XMFLOAT4{ 0.35f, 0.85f, 1.0f, 0.92f };
-                    DrawCylinderCollider3DOutline(entityWorld, collider, cameraPosition, color);
+                    if (!m_PhysicsDebugTriggersOnly || collider.IsTrigger)
+                    {
+                        DirectX::XMFLOAT4 color = collider.IsTrigger ? DirectX::XMFLOAT4{ 1.0f, 0.62f, 0.24f, 0.92f } : DirectX::XMFLOAT4{ 0.35f, 0.85f, 1.0f, 0.92f };
+                        DrawCylinderCollider3DOutline(entityWorld, collider, cameraPosition, color);
+                    }
                 }
 
                 if (entity.HasComponent<MeshCollider3DComponent>())
                 {
                     const auto& collider = entity.GetComponent<MeshCollider3DComponent>();
-                    DirectX::XMFLOAT4 color = collider.IsTrigger ? DirectX::XMFLOAT4{ 1.0f, 0.62f, 0.24f, 0.92f } : DirectX::XMFLOAT4{ 0.7f, 0.55f, 1.0f, 0.92f };
-                    DirectX::XMMATRIX colliderWorld =
-                        DirectX::XMMatrixScaling(collider.Size.x, collider.Size.y, collider.Size.z) *
-                        DirectX::XMMatrixTranslation(collider.Offset.x, collider.Offset.y, collider.Offset.z) *
-                        entityWorld;
-                    if (m_ShowColliderOutlines)
+                    if (!m_PhysicsDebugTriggersOnly || collider.IsTrigger)
                     {
-                        DrawWireBox3D(colliderWorld, cameraPosition, color);
-                    }
-                    else if (m_ShowMeshColliderWire && entity.HasComponent<MeshComponent>())
-                    {
-                        const auto& meshComponent = entity.GetComponent<MeshComponent>();
-                        std::shared_ptr<Mesh> mesh = meshComponent.MeshData ? meshComponent.MeshData : CreateDefaultMeshForType(meshComponent.Type);
-                        DirectX::XMMATRIX meshWorld =
+                        DirectX::XMFLOAT4 color = collider.IsTrigger ? DirectX::XMFLOAT4{ 1.0f, 0.62f, 0.24f, 0.92f } : DirectX::XMFLOAT4{ 0.7f, 0.55f, 1.0f, 0.92f };
+                        DirectX::XMMATRIX colliderWorld =
+                            DirectX::XMMatrixScaling(collider.Size.x, collider.Size.y, collider.Size.z) *
                             DirectX::XMMatrixTranslation(collider.Offset.x, collider.Offset.y, collider.Offset.z) *
                             entityWorld;
-                        DrawMeshColliderWire3D(mesh, meshWorld, cameraPosition, color);
+                        if (m_ShowPhysicsColliders)
+                            DrawWireBox3D(colliderWorld, cameraPosition, color);
+                        if (m_ShowPhysicsMeshWire && entity.HasComponent<MeshComponent>())
+                        {
+                            const auto& meshComponent = entity.GetComponent<MeshComponent>();
+                            std::shared_ptr<Mesh> mesh = meshComponent.MeshData ? meshComponent.MeshData : CreateDefaultMeshForType(meshComponent.Type);
+                            DirectX::XMMATRIX meshWorld =
+                                DirectX::XMMatrixTranslation(collider.Offset.x, collider.Offset.y, collider.Offset.z) *
+                                entityWorld;
+                            DrawMeshColliderWire3D(mesh, meshWorld, cameraPosition, color);
+                        }
                     }
+                }
+
+                if (m_ShowPhysicsBodyCenters && entity.HasComponent<Rigidbody3DComponent>())
+                {
+                    const auto& rb = entity.GetComponent<Rigidbody3DComponent>();
+                    bodyCenterMarkers.push_back({
+                        TransformPoint({ 0.0f, 0.0f, 0.0f }, entityWorld),
+                        GetRigidbodyDebugColor(rb.Type),
+                        true
+                    });
                 }
             }
         }
 
+        const DirectX::XMFLOAT3 cameraPosition = camera.GetPosition();
+        for (const PhysicsBodyCenterMarker& marker : bodyCenterMarkers)
+        {
+            const float distance = Length3({
+                marker.Position.x - cameraPosition.x,
+                marker.Position.y - cameraPosition.y,
+                marker.Position.z - cameraPosition.z
+            });
+            const float markerSize = std::clamp(distance * 0.018f, 0.18f, 0.48f);
+            const float halfSize = markerSize * 0.5f;
+
+            if (marker.Is3D)
+            {
+                DirectX::XMMATRIX markerWorld =
+                    DirectX::XMMatrixScaling(markerSize, markerSize, markerSize) *
+                    DirectX::XMMatrixTranslation(marker.Position.x, marker.Position.y, marker.Position.z);
+                DrawWireBox3D(markerWorld, cameraPosition, marker.Color);
+            }
+            else
+            {
+                DirectX::XMMATRIX markerTransform =
+                    DirectX::XMMatrixScaling(markerSize, markerSize, 1.0f) *
+                    DirectX::XMMatrixTranslation(marker.Position.x, marker.Position.y, marker.Position.z);
+                Renderer2D::DrawQuad(markerTransform, marker.Color, -1);
+            }
+
+            DrawWorldDebugLine3D(
+                { marker.Position.x - halfSize, marker.Position.y, marker.Position.z },
+                { marker.Position.x + halfSize, marker.Position.y, marker.Position.z },
+                cameraPosition, 0.035f, marker.Color);
+            DrawWorldDebugLine3D(
+                { marker.Position.x, marker.Position.y - halfSize, marker.Position.z },
+                { marker.Position.x, marker.Position.y + halfSize, marker.Position.z },
+                cameraPosition, 0.035f, marker.Color);
+        }
+
         Renderer2D::EndScene();
+        RenderCommand::SetDepthTest(false);
     }
 
     void EditorLayer::RenderRootMotionDebugView(const PerspectiveCamera& camera, const std::vector<Entity>& selectedEntities)
@@ -3477,10 +3698,57 @@ namespace CCEngine {
                     m_BtnToolOptions != nullptr && m_ToolOptionsDropdownPanel != nullptr &&
                     m_BtnSceneViewOptions != nullptr && m_SceneViewDropdownPanel != nullptr;
                 const bool sceneGridReady = m_BtnSceneGrid != nullptr && m_SceneGridMode == SceneGridMode::RGB;
-                result.Passed = defaultWindowsReady && compactToolbarReady && sceneGridReady;
+                const bool physicsDebugOptionsReady = m_BtnPhysicsDebug != nullptr && m_PhysicsDebugDropdownPanel != nullptr &&
+                    m_BtnPhysicsDebugEnabled != nullptr && m_BtnPhysicsDebugDimension != nullptr &&
+                    m_BtnPhysicsDebugScope != nullptr && m_BtnPhysicsColliderMode != nullptr &&
+                    m_BtnPhysicsMeshWireMode != nullptr && m_BtnPhysicsBodyCenters != nullptr &&
+                    m_BtnPhysicsTriggerMode != nullptr && m_BtnPhysicsLegendColliders != nullptr &&
+                    m_BtnPhysicsLegendBodies != nullptr;
+                result.Passed = defaultWindowsReady && compactToolbarReady && sceneGridReady && physicsDebugOptionsReady;
                 result.Message = result.Passed
-                    ? "Root UI, compact toolbar dropdowns, and the default scene grid are ready."
-                    : "Default editor windows, toolbar dropdowns, or scene grid are incomplete.";
+                    ? "Root UI, compact toolbar dropdowns, scene grid, and physics debug options are ready."
+                    : "Default editor windows, toolbar dropdowns, scene grid, or physics debug options are incomplete.";
+                return result;
+            });
+
+        runner.AddTest("BuildSettings.MinimumWindowSize", [this]()
+            {
+                EditorQATestResult result;
+                result.Name = "BuildSettings.MinimumWindowSize";
+                OpenBuildSettingsWindow();
+                Window* owner = m_BuildSettingsPanel ? m_BuildSettingsPanel->GetOwnerWindow() : nullptr;
+                if (!owner || !owner->GetNativeWindow())
+                {
+                    result.Passed = false;
+                    result.Message = "Build Settings did not create an owned native window.";
+                    return result;
+                }
+
+                MINMAXINFO limits{};
+                SendMessageW(static_cast<HWND>(owner->GetNativeWindow()), WM_GETMINMAXINFO, 0, reinterpret_cast<LPARAM>(&limits));
+                result.Passed = limits.ptMinTrackSize.x >= 760 && limits.ptMinTrackSize.y >= 760;
+                result.Message = result.Passed
+                    ? "Build Settings enforces a 760x760 minimum native window size."
+                    : "Build Settings native minimum size is smaller than 760x760.";
+                owner->SetShouldClose(true);
+                return result;
+            });
+
+        runner.AddTest("BuildSettings.AlwaysInclude", [this]()
+            {
+                EditorQATestResult result;
+                result.Name = "BuildSettings.AlwaysInclude";
+                result.Passed = m_BuildSettingsPanel && m_BuildSettingsPanel->RunAlwaysIncludeRegressionCheck(result.Message);
+                if (!m_BuildSettingsPanel)
+                    result.Message = "Build Settings panel is missing.";
+                return result;
+            });
+
+        runner.AddTest("BuildSettings.CancelDuringSmokeTest", []()
+            {
+                EditorQATestResult result;
+                result.Name = "BuildSettings.CancelDuringSmokeTest";
+                result.Passed = RunBuildCancellationRegressionCheck(result.Message);
                 return result;
             });
 
@@ -4360,7 +4628,9 @@ namespace CCEngine {
         return true;
     }
 
-    void EditorLayer::BeginAssetPick(const std::string& label, const std::vector<std::string>& acceptedTypes, std::function<bool(const std::filesystem::path&, const std::string&)> onPicked)
+    void EditorLayer::BeginAssetPick(const std::string& label, const std::vector<std::string>& acceptedTypes,
+        std::function<bool(const std::filesystem::path&, const std::string&)> onPicked,
+        std::function<void()> onClosed)
     {
         const std::filesystem::path rootDirectory = m_AssetBrowserPanel ? m_AssetBrowserPanel->GetRootDirectory() : std::filesystem::path{};
         m_AssetPickerService.Configure(
@@ -4376,7 +4646,43 @@ namespace CCEngine {
                 },
                 [this]() { MarkHistoryPanelDirty(); }
             });
-        m_AssetPickerService.Begin(label, acceptedTypes, std::move(onPicked));
+        m_AssetPickerService.Begin(label, acceptedTypes, std::move(onPicked), std::move(onClosed));
+    }
+
+    void EditorLayer::BeginBuildAlwaysIncludePick()
+    {
+        if (!m_BuildSettingsPanel || !m_BuildSettingsPanel->IsVisible())
+            return;
+
+        Application* application = Application::Get();
+        Window* buildWindow = m_BuildSettingsPanel->GetOwnerWindow();
+        if (application && buildWindow)
+            application->ClearModalInputWindow(buildWindow);
+
+        // Build Settings는 모달 창이다. 선택기가 열려 있는 동안 입력 권한을 메인 창으로 넘기고,
+        // 선택 또는 취소가 끝나면 원래 창을 다시 모달로 복구해야 두 창이 동시에 입력을 받지 않는다.
+        BeginAssetPick("Always Include Asset",
+            { "scene", "prefab", "material", "shader", "visualshader", "animatorcontroller", "avatar", "model", "texture", "audio" },
+            [this](const std::filesystem::path& path, const std::string&)
+            {
+                return m_BuildSettingsPanel && m_BuildSettingsPanel->AddAlwaysIncludeAsset(path);
+            },
+            [this]()
+            {
+                if (!m_BuildSettingsPanel || !m_BuildSettingsPanel->IsVisible())
+                    return;
+                Window* owner = m_BuildSettingsPanel->GetOwnerWindow();
+                if (owner && !owner->ShouldClose() && owner->GetRootUI() == m_BuildSettingsPanel)
+                    Application::Get()->SetModalInputWindow(owner);
+            });
+
+        if (!application)
+            return;
+        UI::AssetBrowserPanel* picker = m_AssetPickerService.GetPanel();
+        if (picker && picker->GetOwnerWindow())
+            application->SetModalInputWindow(picker->GetOwnerWindow());
+        else
+            application->ActivateInputWindow(&application->GetWindow());
     }
 
     void EditorLayer::BeginAnimatorClipPick(Entity entity, int layerIndex, int stateIndex)
@@ -5341,6 +5647,80 @@ namespace CCEngine {
         Application::Get()->SetModalInputWindow(settingsWindow);
     }
 
+    void EditorLayer::OpenBuildSettingsWindow()
+    {
+        if (!m_BuildSettingsPanel)
+            return;
+
+        for (Window* window : Application::Get()->GetSecondaryWindows())
+        {
+            if (window && !window->ShouldClose() && window->GetRootUI() == m_BuildSettingsPanel)
+            {
+                m_BuildSettingsPanel->SetVisible(true);
+                m_BuildSettingsPanel->OnOpened();
+                Application::Get()->SetModalInputWindow(window);
+                return;
+            }
+        }
+
+        if (m_BuildSettingsPanel->GetParent())
+            m_BuildSettingsPanel->GetParent()->RemoveChild(m_BuildSettingsPanel);
+        Window* buildWindow = Application::Get()->CreateSecondaryWindow("Build Settings", 820, 820);
+		buildWindow->SetMinimumSize(760, 760);
+        m_BuildSettingsPanel->SetDockingEnabled(false);
+        m_BuildSettingsPanel->SetOwnerWindow(buildWindow);
+        m_BuildSettingsPanel->SetVisible(true);
+        m_BuildSettingsPanel->SetAnchorMin(0.0f, 0.0f);
+        m_BuildSettingsPanel->SetAnchorMax(1.0f, 1.0f);
+        m_BuildSettingsPanel->SetOffsetMin(0.0f, 0.0f);
+        m_BuildSettingsPanel->SetOffsetMax(0.0f, 0.0f);
+        buildWindow->SetRootUI(m_BuildSettingsPanel);
+        m_BuildSettingsPanel->OnOpened();
+        Application::Get()->SetModalInputWindow(buildWindow);
+    }
+
+    void EditorLayer::NavigateToBuildDiagnostic(const GameBuildMessage& message)
+    {
+        Application* application = Application::Get();
+        if (!application)
+            return;
+
+        std::filesystem::path path = message.Path;
+        if (!path.empty() && !path.is_absolute())
+            path = std::filesystem::absolute(path).lexically_normal();
+
+        if (path.filename() == "project.ccproject" ||
+            message.Message.find("Project Settings") != std::string::npos)
+        {
+            OpenProjectSettingsWindow();
+            return;
+        }
+
+        const std::string extension = path.extension().string();
+        if (extension == ".cs" || extension == ".hlsl" || extension == ".ccshader")
+        {
+            OpenCodeAssetInExternalEditor(path);
+            return;
+        }
+
+        if (!path.empty() && m_AssetBrowserPanel && m_AssetBrowserPanel->RevealAsset(path))
+        {
+            application->ClearModalInputWindow(m_BuildSettingsPanel ? m_BuildSettingsPanel->GetOwnerWindow() : nullptr);
+            application->ActivateInputWindow(&application->GetWindow());
+            return;
+        }
+
+        // 파일 위치가 없는 컴파일/검증 오류도 사라지지 않는다.
+        // Build 완료 시 같은 진단을 ConsoleLog에 넣었으므로 Console을 열어 전체 내용을 확인한다.
+        if (m_ConsolePanel)
+        {
+            m_ConsolePanel->SetVisible(true);
+            m_ConsolePanel->BringToFront();
+            application->ClearModalInputWindow(m_BuildSettingsPanel ? m_BuildSettingsPanel->GetOwnerWindow() : nullptr);
+            application->ActivateInputWindow(&application->GetWindow());
+        }
+    }
+
     void EditorLayer::OpenAssetReferenceValidatorWindow()
     {
         if (!m_AssetReferenceValidatorPanel)
@@ -5789,25 +6169,24 @@ namespace CCEngine {
         m_SceneViewDropdownPanel->SetAnchorMin(0.0f, 0.0f);
         m_SceneViewDropdownPanel->SetAnchorMax(0.0f, 0.0f);
         m_SceneViewDropdownPanel->SetOffsetMin(500.0f, 88.0f);
-        m_SceneViewDropdownPanel->SetOffsetMax(700.0f, 270.0f);
+        m_SceneViewDropdownPanel->SetOffsetMax(700.0f, 244.0f);
         m_RootUI->AddChild(m_SceneViewDropdownPanel);
 
         m_BtnSceneGrid = addDropdownButton(m_SceneViewDropdownPanel, "BtnSceneGrid", "Grid: RGB", 0.0f);
-        m_BtnPhysicsDebug = addDropdownButton(m_SceneViewDropdownPanel, "BtnPhysicsDebug", "Physics: Off", 26.0f);
-        m_BtnColliderOutline = addDropdownButton(m_SceneViewDropdownPanel, "BtnColliderOutline", "Collider: Off >", 52.0f);
-        m_BtnRootMotionDebug = addDropdownButton(m_SceneViewDropdownPanel, "BtnRootMotionDebug", "Root Motion: Off", 78.0f);
-        m_BtnRootMotionOptions = addDropdownButton(m_SceneViewDropdownPanel, "BtnRootMotionOptions", "Root Options >", 104.0f);
-        m_BtnRootMotionClear = addDropdownButton(m_SceneViewDropdownPanel, "BtnRootMotionClear", "Clear Root Path", 130.0f);
-        m_BtnRootMotionPathShorter = addDropdownButton(m_SceneViewDropdownPanel, "BtnRootMotionPathShorter", "Limit -", 156.0f, 0.0f, -100.0f);
-        m_BtnRootMotionPathLonger = addDropdownButton(m_SceneViewDropdownPanel, "BtnRootMotionPathLonger", "Limit +", 156.0f, 100.0f, 0.0f);
+        m_BtnPhysicsDebug = addDropdownButton(m_SceneViewDropdownPanel, "BtnPhysicsDebug", "Physics: Off >", 26.0f);
+        m_BtnRootMotionDebug = addDropdownButton(m_SceneViewDropdownPanel, "BtnRootMotionDebug", "Root Motion: Off", 52.0f);
+        m_BtnRootMotionOptions = addDropdownButton(m_SceneViewDropdownPanel, "BtnRootMotionOptions", "Root Options >", 78.0f);
+        m_BtnRootMotionClear = addDropdownButton(m_SceneViewDropdownPanel, "BtnRootMotionClear", "Clear Root Path", 104.0f);
+        m_BtnRootMotionPathShorter = addDropdownButton(m_SceneViewDropdownPanel, "BtnRootMotionPathShorter", "Limit -", 130.0f, 0.0f, -100.0f);
+        m_BtnRootMotionPathLonger = addDropdownButton(m_SceneViewDropdownPanel, "BtnRootMotionPathLonger", "Limit +", 130.0f, 100.0f, 0.0f);
 
         m_RootMotionDebugDropdownPanel = new UI::Panel("RootMotionDebugDropdown", { 0.18f, 0.18f, 0.18f, 1.0f });
         m_RootMotionDebugDropdownPanel->SetVisible(false);
         m_RootMotionDebugDropdownPanel->SetBlockMouseEvents(true);
         m_RootMotionDebugDropdownPanel->SetAnchorMin(0.0f, 0.0f);
         m_RootMotionDebugDropdownPanel->SetAnchorMax(0.0f, 0.0f);
-        m_RootMotionDebugDropdownPanel->SetOffsetMin(700.0f, 192.0f);
-        m_RootMotionDebugDropdownPanel->SetOffsetMax(902.0f, 322.0f);
+        m_RootMotionDebugDropdownPanel->SetOffsetMin(700.0f, 166.0f);
+        m_RootMotionDebugDropdownPanel->SetOffsetMax(902.0f, 296.0f);
         m_RootUI->AddChild(m_RootMotionDebugDropdownPanel);
 
         m_BtnRootMotionScopeMode = new UI::Button("BtnRootMotionScopeMode", "Scope: Selected");
@@ -5835,24 +6214,31 @@ namespace CCEngine {
         m_BtnRootMotionRotationMode->SetOffsetMin(0.0f, 104.0f); m_BtnRootMotionRotationMode->SetOffsetMax(0.0f, 130.0f);
         m_RootMotionDebugDropdownPanel->AddChild(m_BtnRootMotionRotationMode);
 
-        m_ColliderDebugDropdownPanel = new UI::Panel("ColliderDebugDropdown", { 0.18f, 0.18f, 0.18f, 1.0f });
-        m_ColliderDebugDropdownPanel->SetVisible(false);
-        m_ColliderDebugDropdownPanel->SetBlockMouseEvents(true);
-        m_ColliderDebugDropdownPanel->SetAnchorMin(0.0f, 0.0f);
-        m_ColliderDebugDropdownPanel->SetAnchorMax(0.0f, 0.0f);
-        m_ColliderDebugDropdownPanel->SetOffsetMin(700.0f, 140.0f);
-        m_ColliderDebugDropdownPanel->SetOffsetMax(872.0f, 192.0f);
-        m_RootUI->AddChild(m_ColliderDebugDropdownPanel);
+        m_PhysicsDebugDropdownPanel = new UI::Panel("PhysicsDebugDropdown", { 0.18f, 0.18f, 0.18f, 1.0f });
+        m_PhysicsDebugDropdownPanel->SetVisible(false);
+        m_PhysicsDebugDropdownPanel->SetBlockMouseEvents(true);
+        m_PhysicsDebugDropdownPanel->SetAnchorMin(0.0f, 0.0f);
+        m_PhysicsDebugDropdownPanel->SetAnchorMax(0.0f, 0.0f);
+        m_PhysicsDebugDropdownPanel->SetOffsetMin(700.0f, 114.0f);
+        m_PhysicsDebugDropdownPanel->SetOffsetMax(980.0f, 348.0f);
+        m_RootUI->AddChild(m_PhysicsDebugDropdownPanel);
 
-        m_BtnColliderOutlineMode = new UI::Button("BtnColliderOutlineMode", "Outline: Off");
-        m_BtnColliderOutlineMode->SetAnchorMin(0.0f, 0.0f); m_BtnColliderOutlineMode->SetAnchorMax(1.0f, 0.0f);
-        m_BtnColliderOutlineMode->SetOffsetMin(0.0f, 0.0f); m_BtnColliderOutlineMode->SetOffsetMax(0.0f, 26.0f);
-        m_ColliderDebugDropdownPanel->AddChild(m_BtnColliderOutlineMode);
-
-        m_BtnMeshColliderWireMode = new UI::Button("BtnMeshColliderWireMode", "Mesh Wire: Off");
-        m_BtnMeshColliderWireMode->SetAnchorMin(0.0f, 0.0f); m_BtnMeshColliderWireMode->SetAnchorMax(1.0f, 0.0f);
-        m_BtnMeshColliderWireMode->SetOffsetMin(0.0f, 26.0f); m_BtnMeshColliderWireMode->SetOffsetMax(0.0f, 52.0f);
-        m_ColliderDebugDropdownPanel->AddChild(m_BtnMeshColliderWireMode);
+        m_BtnPhysicsDebugEnabled = addDropdownButton(m_PhysicsDebugDropdownPanel, "BtnPhysicsDebugEnabled", "Enabled: Off", 0.0f);
+        m_BtnPhysicsDebugDimension = addDropdownButton(m_PhysicsDebugDropdownPanel, "BtnPhysicsDebugDimension", "Dimension: 2D + 3D", 26.0f);
+        m_BtnPhysicsDebugScope = addDropdownButton(m_PhysicsDebugDropdownPanel, "BtnPhysicsDebugScope", "Scope: Selected", 52.0f);
+        m_BtnPhysicsColliderMode = addDropdownButton(m_PhysicsDebugDropdownPanel, "BtnPhysicsColliderMode", "Collider Shapes: On", 78.0f);
+        m_BtnPhysicsMeshWireMode = addDropdownButton(m_PhysicsDebugDropdownPanel, "BtnPhysicsMeshWireMode", "Mesh Wire: Off", 104.0f);
+        m_BtnPhysicsBodyCenters = addDropdownButton(m_PhysicsDebugDropdownPanel, "BtnPhysicsBodyCenters", "Body Centers: On", 130.0f);
+        m_BtnPhysicsTriggerMode = addDropdownButton(m_PhysicsDebugDropdownPanel, "BtnPhysicsTriggerMode", "Triggers: Highlight", 156.0f);
+        m_BtnPhysicsLegendColliders = addDropdownButton(m_PhysicsDebugDropdownPanel, "BtnPhysicsLegendColliders", "Shapes: Solid Cyan / Trigger Orange", 182.0f);
+        m_BtnPhysicsLegendBodies = addDropdownButton(m_PhysicsDebugDropdownPanel, "BtnPhysicsLegendBodies", "Bodies: S Gray / D Green / K Blue", 208.0f);
+        const DirectX::XMFLOAT4 legendColor = { 0.16f, 0.16f, 0.17f, 1.0f };
+        m_BtnPhysicsLegendColliders->SetNormalColor(legendColor);
+        m_BtnPhysicsLegendColliders->SetHoverColor(legendColor);
+        m_BtnPhysicsLegendColliders->SetClickColor(legendColor);
+        m_BtnPhysicsLegendBodies->SetNormalColor(legendColor);
+        m_BtnPhysicsLegendBodies->SetHoverColor(legendColor);
+        m_BtnPhysicsLegendBodies->SetClickColor(legendColor);
 
         m_BtnPlay = new UI::Button("BtnPlay", ">");
         m_BtnPlay->SetAnchorMin(0.5f, 0.5f); m_BtnPlay->SetAnchorMax(0.5f, 0.5f);
@@ -5872,7 +6258,7 @@ namespace CCEngine {
         m_ViewportWindow = new UI::WindowPanel("ViewportWindowUI", "Scene View");
         m_ViewportWindow->SetAnchorMin(0.2f, 0.0f);
         m_ViewportWindow->SetAnchorMax(0.8f, 0.55f);
-        m_ViewportWindow->SetOffsetMin(0.0f, 48.0f);
+        m_ViewportWindow->SetOffsetMin(0.0f, UI::DockManager::MainWindowReservedTop);
         m_ViewportWindow->SetOffsetMax(0.0f, 0.0f);
         m_RootUI->AddChild(m_ViewportWindow);
 
@@ -5936,7 +6322,7 @@ namespace CCEngine {
         m_FileDropdownPanel->SetVisible(false);
         m_FileDropdownPanel->SetBlockMouseEvents(true);
         m_FileDropdownPanel->SetAnchorMin(0.0f, 0.0f); m_FileDropdownPanel->SetAnchorMax(0.0f, 0.0f);
-        m_FileDropdownPanel->SetOffsetMin(0.0f, 48.0f); m_FileDropdownPanel->SetOffsetMax(150.0f, 48.0f + 150.0f);
+        m_FileDropdownPanel->SetOffsetMin(0.0f, 48.0f); m_FileDropdownPanel->SetOffsetMax(180.0f, 48.0f + 175.0f);
         m_RootUI->AddChild(m_FileDropdownPanel);
 
         m_BtnOpen = new UI::Button("BtnOpen", "Open Scene");
@@ -5964,9 +6350,14 @@ namespace CCEngine {
         m_BtnInstantiatePrefab->SetOffsetMin(0.0f, 100.0f); m_BtnInstantiatePrefab->SetOffsetMax(0.0f, 125.0f);
         m_FileDropdownPanel->AddChild(m_BtnInstantiatePrefab);
 
+        m_BtnBuildSettings = new UI::Button("BtnBuildSettings", "Build Settings...");
+        m_BtnBuildSettings->SetAnchorMin(0.0f, 0.0f); m_BtnBuildSettings->SetAnchorMax(1.0f, 0.0f);
+        m_BtnBuildSettings->SetOffsetMin(0.0f, 125.0f); m_BtnBuildSettings->SetOffsetMax(0.0f, 150.0f);
+        m_FileDropdownPanel->AddChild(m_BtnBuildSettings);
+
         m_BtnExit = new UI::Button("BtnExit", "Exit");
         m_BtnExit->SetAnchorMin(0.0f, 0.0f); m_BtnExit->SetAnchorMax(1.0f, 0.0f);
-        m_BtnExit->SetOffsetMin(0.0f, 125.0f); m_BtnExit->SetOffsetMax(0.0f, 150.0f);
+        m_BtnExit->SetOffsetMin(0.0f, 150.0f); m_BtnExit->SetOffsetMax(0.0f, 175.0f);
         m_FileDropdownPanel->AddChild(m_BtnExit);
 
         m_EditDropdownPanel = new UI::Panel("EditDropdownUI", { 0.18f, 0.18f, 0.18f, 1.0f });
@@ -6045,6 +6436,16 @@ namespace CCEngine {
             [this]() { ApplyProjectGameResolution(); });
         m_ProjectSettingsPanel->SetKeyBindingPickerCallback(
             [this](UI::KeyBindingInput* targetInput) { OpenKeyBindingPickerWindow(targetInput); });
+
+        m_BuildSettingsPanel = new UI::BuildSettingsPanel("BuildSettingsPanelUI");
+        m_BuildSettingsPanel->SetProjectSettings(&m_ProjectSettings);
+        m_BuildSettingsPanel->SetDiagnosticNavigationCallback(
+            [this](const GameBuildMessage& message) { NavigateToBuildDiagnostic(message); });
+        m_BuildSettingsPanel->SetAlwaysIncludePickRequestedCallback(
+            [this]() { BeginBuildAlwaysIncludePick(); });
+        m_BuildSettingsPanel->SetDockingEnabled(false);
+        m_BuildSettingsPanel->SetVisible(false);
+        m_BuildSettingsPanel->SetBlockMouseEvents(true);
 
         m_AssetReferenceValidatorPanel = new UI::AssetReferenceValidatorPanel("AssetReferenceValidatorPanelUI");
         m_AssetReferenceValidatorPanel->SetVisible(false);
@@ -6150,7 +6551,7 @@ namespace CCEngine {
                 m_ToolOptionsDropdownPanel->SetVisible(false);
                 m_SceneViewDropdownPanel->SetVisible(false);
                 HideRootMotionDebugDropdown();
-                HideColliderDebugDropdown();
+                HidePhysicsDebugDropdown();
                 BringEditorOverlaysToFront();
             });
         m_BtnEditMenu->SetOnClick([this]()
@@ -6161,7 +6562,7 @@ namespace CCEngine {
                 m_ToolOptionsDropdownPanel->SetVisible(false);
                 m_SceneViewDropdownPanel->SetVisible(false);
                 HideRootMotionDebugDropdown();
-                HideColliderDebugDropdown();
+                HidePhysicsDebugDropdown();
                 BringEditorOverlaysToFront();
             });
         m_BtnWindowMenu->SetOnClick([this]()
@@ -6172,7 +6573,7 @@ namespace CCEngine {
                 m_ToolOptionsDropdownPanel->SetVisible(false);
                 m_SceneViewDropdownPanel->SetVisible(false);
                 HideRootMotionDebugDropdown();
-                HideColliderDebugDropdown();
+                HidePhysicsDebugDropdown();
                 BringEditorOverlaysToFront();
             });
 
@@ -6189,6 +6590,7 @@ namespace CCEngine {
         m_BtnSaveAs->SetOnClick([this]() { m_FileDropdownPanel->SetVisible(false); SaveSceneAs(); });
         m_BtnSavePrefab->SetOnClick([this]() { m_FileDropdownPanel->SetVisible(false); SaveSelectedPrefab(); });
         m_BtnInstantiatePrefab->SetOnClick([this]() { m_FileDropdownPanel->SetVisible(false); InstantiatePrefab(); });
+        m_BtnBuildSettings->SetOnClick([this]() { m_FileDropdownPanel->SetVisible(false); OpenBuildSettingsWindow(); });
         m_BtnExit->SetOnClick([this]() { CCEngine::Application::Get()->GetWindow().SetShouldClose(true); });
         m_BtnEditUndo->SetOnClick([this]()
             {
@@ -6244,7 +6646,7 @@ namespace CCEngine {
                 m_EditDropdownPanel->SetVisible(false);
                 m_WindowDropdownPanel->SetVisible(false);
                 HideRootMotionDebugDropdown();
-                HideColliderDebugDropdown();
+                HidePhysicsDebugDropdown();
                 BringEditorOverlaysToFront();
             });
         m_BtnSceneViewOptions->SetOnClick([this]()
@@ -6255,7 +6657,7 @@ namespace CCEngine {
                 m_EditDropdownPanel->SetVisible(false);
                 m_WindowDropdownPanel->SetVisible(false);
                 HideRootMotionDebugDropdown();
-                HideColliderDebugDropdown();
+                HidePhysicsDebugDropdown();
                 BringEditorOverlaysToFront();
             });
         m_BtnToolSpace->SetOnClick([this]()
@@ -6292,7 +6694,19 @@ namespace CCEngine {
                 }
                 UpdateSceneGridButton();
             });
-        m_BtnPhysicsDebug->SetOnClick([this]() { CyclePhysicsDebugViewMode(); });
+        m_BtnPhysicsDebug->SetOnClick([this]()
+            {
+                if (!m_PhysicsDebugDropdownPanel)
+                    return;
+
+                m_PhysicsDebugDropdownPanel->SetVisible(!m_PhysicsDebugDropdownPanel->IsVisible());
+                if (m_FileDropdownPanel) m_FileDropdownPanel->SetVisible(false);
+                if (m_EditDropdownPanel) m_EditDropdownPanel->SetVisible(false);
+                if (m_WindowDropdownPanel) m_WindowDropdownPanel->SetVisible(false);
+                HideRootMotionDebugDropdown();
+                m_PhysicsDebugDropdownPanel->BringToFront();
+                UpdatePhysicsDebugOptionButtons();
+            });
         m_BtnRootMotionDebug->SetOnClick([this]()
             {
                 m_ShowRootMotionDebug = !m_ShowRootMotionDebug;
@@ -6309,7 +6723,7 @@ namespace CCEngine {
                 if (m_FileDropdownPanel) m_FileDropdownPanel->SetVisible(false);
                 if (m_EditDropdownPanel) m_EditDropdownPanel->SetVisible(false);
                 if (m_WindowDropdownPanel) m_WindowDropdownPanel->SetVisible(false);
-                HideColliderDebugDropdown();
+                HidePhysicsDebugDropdown();
                 m_RootMotionDebugDropdownPanel->BringToFront();
                 UpdateRootMotionDebugOptionButtons();
             });
@@ -6350,35 +6764,45 @@ namespace CCEngine {
                 m_ShowRootMotionRotation = !m_ShowRootMotionRotation;
                 UpdateRootMotionDebugOptionButtons();
             });
-        m_BtnColliderOutline->SetOnClick([this]()
+        m_BtnPhysicsDebugEnabled->SetOnClick([this]()
             {
-                if (!m_ColliderDebugDropdownPanel)
-                    return;
-
-                // 메인 버튼은 상태를 바로 바꾸지 않고 메뉴만 연다.
-                // 실제 표시 모드는 아래 항목에서 하나만 선택하게 해 두어 상태 충돌을 막는다.
-                m_ColliderDebugDropdownPanel->SetVisible(!m_ColliderDebugDropdownPanel->IsVisible());
-                if (m_FileDropdownPanel) m_FileDropdownPanel->SetVisible(false);
-                if (m_EditDropdownPanel) m_EditDropdownPanel->SetVisible(false);
-                if (m_WindowDropdownPanel) m_WindowDropdownPanel->SetVisible(false);
-                HideRootMotionDebugDropdown();
-                m_ColliderDebugDropdownPanel->BringToFront();
+                m_ShowPhysicsDebug = !m_ShowPhysicsDebug;
+                UpdatePhysicsDebugButton();
             });
-        m_BtnColliderOutlineMode->SetOnClick([this]()
+        m_BtnPhysicsDebugDimension->SetOnClick([this]()
             {
-                m_ShowColliderOutlines = !m_ShowColliderOutlines;
-                if (m_ShowColliderOutlines)
-                    m_ShowMeshColliderWire = false;
-                HideColliderDebugDropdown();
-                UpdateColliderOutlineButton();
+                switch (m_PhysicsDebugDimension)
+                {
+                    case PhysicsDebugDimension::Both: m_PhysicsDebugDimension = PhysicsDebugDimension::TwoD; break;
+                    case PhysicsDebugDimension::TwoD: m_PhysicsDebugDimension = PhysicsDebugDimension::ThreeD; break;
+                    default: m_PhysicsDebugDimension = PhysicsDebugDimension::Both; break;
+                }
+                UpdatePhysicsDebugButton();
             });
-        m_BtnMeshColliderWireMode->SetOnClick([this]()
+        m_BtnPhysicsDebugScope->SetOnClick([this]()
             {
-                m_ShowMeshColliderWire = !m_ShowMeshColliderWire;
-                if (m_ShowMeshColliderWire)
-                    m_ShowColliderOutlines = false;
-                HideColliderDebugDropdown();
-                UpdateColliderOutlineButton();
+                m_PhysicsDebugAllEntities = !m_PhysicsDebugAllEntities;
+                UpdatePhysicsDebugButton();
+            });
+        m_BtnPhysicsColliderMode->SetOnClick([this]()
+            {
+                m_ShowPhysicsColliders = !m_ShowPhysicsColliders;
+                UpdatePhysicsDebugOptionButtons();
+            });
+        m_BtnPhysicsMeshWireMode->SetOnClick([this]()
+            {
+                m_ShowPhysicsMeshWire = !m_ShowPhysicsMeshWire;
+                UpdatePhysicsDebugOptionButtons();
+            });
+        m_BtnPhysicsBodyCenters->SetOnClick([this]()
+            {
+                m_ShowPhysicsBodyCenters = !m_ShowPhysicsBodyCenters;
+                UpdatePhysicsDebugOptionButtons();
+            });
+        m_BtnPhysicsTriggerMode->SetOnClick([this]()
+            {
+                m_PhysicsDebugTriggersOnly = !m_PhysicsDebugTriggersOnly;
+                UpdatePhysicsDebugOptionButtons();
             });
 
         m_BtnPlay->SetOnClick([this]() {

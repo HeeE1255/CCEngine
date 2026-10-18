@@ -54,6 +54,24 @@ namespace CCEngine
         static ShaderCacheStatus GetHlslCacheStatus(const std::filesystem::path& sourcePath);
         static bool GetLastCompileResult(const std::filesystem::path& sourcePath, ShaderCompileResult& outResult);
         static ShaderCompileResult CompileHlslFile(const std::filesystem::path& sourcePath, bool forceRecompile);
+        static ShaderCompileResult CompileHlslFile(
+            const std::filesystem::path& sourcePath,
+            bool forceRecompile,
+            const std::vector<std::string>& keywords);
+        static bool LoadRuntimeBytecodeManifest(const std::filesystem::path& manifestPath, std::string& error);
+        static bool TryGetRuntimeBytecode(
+            const std::filesystem::path& sourcePath,
+            std::filesystem::path& vertexBytecode,
+            std::filesystem::path& pixelBytecode);
+        static bool TryGetRuntimeBytecode(
+            const std::filesystem::path& sourcePath,
+            const std::vector<std::string>& keywords,
+            std::filesystem::path& vertexBytecode,
+            std::filesystem::path& pixelBytecode);
+        static std::vector<std::string> NormalizeKeywords(const std::vector<std::string>& keywords);
+        static std::string MakeVariantKey(const std::vector<std::string>& keywords);
+        static void SetRuntimeBytecodeOnly(bool enabled);
+        static bool IsRuntimeBytecodeOnly();
         static void ClearCache();
 
     private:
@@ -63,6 +81,7 @@ namespace CCEngine
             ShaderStage stage,
             const std::string& entryPoint,
             const std::string& targetProfile,
-            bool forceRecompile);
+            bool forceRecompile,
+            const std::vector<std::string>& keywords);
     };
 }

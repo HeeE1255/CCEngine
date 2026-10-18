@@ -27,6 +27,7 @@ namespace CCEngine
         std::unordered_map<std::string, AssetMetadata> s_GuidToMetadata;
         std::unordered_map<std::string, std::string> s_PathToGuid;
         std::unordered_map<std::string, std::filesystem::path> s_RecentAssetPathRedirects;
+        std::unordered_map<std::string, std::filesystem::path> s_AddressToPath;
         std::filesystem::path s_LastScanRoot = "assets";
         bool s_HasScanned = false;
         bool s_IsDirty = true;
@@ -120,6 +121,7 @@ namespace CCEngine
                 case AssetKind::Avatar: return "AvatarImporter";
                 case AssetKind::Model: return "ModelImporter";
                 case AssetKind::Texture: return "TextureImporter";
+                case AssetKind::Audio: return "AudioImporter";
                 case AssetKind::Script: return "ScriptImporter";
                 default: return "UnknownImporter";
             }
@@ -138,6 +140,7 @@ namespace CCEngine
                 case AssetKind::Avatar:
                 case AssetKind::Model:
                 case AssetKind::Texture:
+                case AssetKind::Audio:
                 case AssetKind::Script:
                     return 1;
                 default:
@@ -746,6 +749,20 @@ namespace CCEngine
                     report);
             }
 
+            if (object.contains("AudioComponent") && object["AudioComponent"].is_object())
+            {
+                ValidateGuidPathPair(
+                    object["AudioComponent"],
+                    "AudioGuid",
+                    "AudioPath",
+                    AssetKind::Audio,
+                    sourceFile,
+                    jsonLocation + "/AudioComponent",
+                    "Audio Clip",
+                    repairFiles,
+                    report);
+            }
+
             if (object.contains("Material") && object["Material"].is_object())
             {
                 ValidateGuidPathPair(
@@ -1064,6 +1081,130 @@ namespace CCEngine
         }
     }
 
+    bool AssetDatabase::LoadRuntimeManifest(const std::filesystem::path& manifestPath, std::string& error)
+    {
+        std::ifstream input(manifestPath);
+        if (!input.is_open())
+        {
+            error = "Runtime asset manifest not found: " + manifestPath.string();
+            return false;
+        }
+
+        nlohmann::json manifest;
+        try
+        {
+            input >> manifest;
+        }
+        catch (const std::exception& exception)
+        {
+            error = "Runtime asset manifest parse failed: " + std::string(exception.what());
+            return false;
+        }
+
+        const uint32_t manifestVersion = manifest.value("Version", 0u);
+        if ((manifestVersion != 1u && manifestVersion != 2u) ||
+            !manifest.contains("Assets") || !manifest["Assets"].is_array())
+        {
+            error = "Unsupported or malformed runtime asset manifest.";
+            return false;
+        }
+
+        std::error_code ec;
+        const auto contentRoot = std::filesystem::absolute(manifestPath.parent_path(), ec).lexically_normal();
+        if (ec)
+        {
+            error = "Failed to resolve runtime content root: " + ec.message();
+            return false;
+        }
+
+        std::unordered_map<std::string, AssetMetadata> guidToMetadata;
+        std::unordered_map<std::string, std::string> pathToGuid;
+        std::unordered_map<std::string, std::filesystem::path> addressToPath;
+        for (const auto& entry : manifest["Assets"])
+        {
+            if (!entry.is_object())
+                continue;
+
+            const std::string guid = entry.value("Guid", "");
+            const std::filesystem::path storedPath = entry.value("Path", "");
+            const AssetKind kind = AssetKindFromString(entry.value("Type", "Unknown"));
+            if (storedPath.empty() || storedPath.is_absolute())
+            {
+                error = "Runtime asset manifest contains an invalid asset path.";
+                return false;
+            }
+
+            const auto sourcePath = (contentRoot / storedPath).lexically_normal();
+            // 배포 Manifest 검증은 파일 존재 여부와 분리한다. std::filesystem::relative는
+            // 경로를 실제로 조회해 샌드박스/다른 드라이브에서 정상 경로도 실패할 수 있다.
+            const auto relative = sourcePath.lexically_relative(contentRoot);
+            bool escapesContentRoot = relative.empty() || relative.is_absolute();
+            if (!escapesContentRoot)
+            {
+                for (const auto& part : relative)
+                {
+                    if (part == "..")
+                    {
+                        escapesContentRoot = true;
+                        break;
+                    }
+                }
+            }
+            if (escapesContentRoot)
+            {
+                error = "Runtime asset path escapes ContentRoot: " + storedPath.generic_string();
+                return false;
+            }
+            if ((!std::filesystem::is_regular_file(sourcePath, ec) || ec) && kind != AssetKind::Shader)
+            {
+                error = "Runtime asset is missing: " + sourcePath.string();
+                return false;
+            }
+
+            if (entry.contains("Addresses") && entry["Addresses"].is_array())
+            {
+                for (const auto& addressValue : entry["Addresses"])
+                {
+                    if (!addressValue.is_string())
+                        continue;
+                    const std::string address = NormalizeKey(addressValue.get<std::string>());
+                    if (address.empty())
+                        continue;
+                    auto [addressIterator, addressInserted] = addressToPath.emplace(address, sourcePath);
+                    if (!addressInserted && NormalizeKey(addressIterator->second) != NormalizeKey(sourcePath))
+                    {
+                        error = "Runtime asset manifest contains duplicate address: " + address;
+                        return false;
+                    }
+                }
+            }
+
+            if (guid.empty())
+                continue;
+
+            AssetMetadata metadata;
+            metadata.Guid = guid;
+            metadata.Type = kind;
+            metadata.SourcePath = sourcePath;
+            auto [iterator, inserted] = guidToMetadata.emplace(guid, metadata);
+            if (!inserted && NormalizeKey(iterator->second.SourcePath) != NormalizeKey(sourcePath))
+            {
+                error = "Runtime asset manifest contains duplicate GUID: " + guid;
+                return false;
+            }
+            pathToGuid[NormalizeKey(sourcePath)] = guid;
+        }
+
+        s_GuidToMetadata = std::move(guidToMetadata);
+        s_PathToGuid = std::move(pathToGuid);
+        s_AddressToPath = std::move(addressToPath);
+        s_LastScanRoot = contentRoot / "assets";
+        s_HasScanned = true;
+        s_IsDirty = false;
+        error.clear();
+        return true;
+    }
+
     void AssetDatabase::Shutdown()
     {
         // 에셋 DB는 실행 중에는 계속 유지되는 캐시다.
@@ -1071,6 +1212,7 @@ namespace CCEngine
         std::unordered_map<std::string, AssetMetadata>().swap(s_GuidToMetadata);
         std::unordered_map<std::string, std::string>().swap(s_PathToGuid);
         std::unordered_map<std::string, std::filesystem::path>().swap(s_RecentAssetPathRedirects);
+        std::unordered_map<std::string, std::filesystem::path>().swap(s_AddressToPath);
         std::vector<OrphanMetaFile>().swap(s_LastOrphanMetas);
         std::unordered_set<std::string>().swap(s_LoggedOrphanMetaKeys);
         s_LastScanRoot = "assets";
@@ -1130,6 +1272,17 @@ namespace CCEngine
         return it->second.SourcePath;
     }
 
+    std::filesystem::path AssetDatabase::GetPathFromAddress(const std::string& address)
+    {
+        if (address.empty())
+            return {};
+
+        // 주소는 배포 위치와 무관한 논리 키다. 대소문자와 역슬래시 차이 때문에
+        // 같은 에셋이 서로 다른 키가 되지 않도록 경로 캐시와 같은 규칙으로 정규화한다.
+        const auto found = s_AddressToPath.find(NormalizeKey(address));
+        return found == s_AddressToPath.end() ? std::filesystem::path{} : found->second;
+    }
+
     AssetKind AssetDatabase::GetAssetKind(const std::filesystem::path& assetPath)
     {
         std::string extension = assetPath.extension().string();
@@ -1144,6 +1297,7 @@ namespace CCEngine
         if (extension == ".ccavatar") return AssetKind::Avatar;
         if (extension == ".fbx" || extension == ".obj" || extension == ".gltf" || extension == ".glb") return AssetKind::Model;
         if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".tga") return AssetKind::Texture;
+        if (extension == ".wav" || extension == ".ogg" || extension == ".mp3" || extension == ".flac") return AssetKind::Audio;
         if (extension == ".cs") return AssetKind::Script;
         return AssetKind::Unknown;
     }
@@ -1603,6 +1757,7 @@ namespace CCEngine
             case AssetKind::Avatar: return "Avatar";
             case AssetKind::Model: return "Model";
             case AssetKind::Texture: return "Texture";
+            case AssetKind::Audio: return "Audio";
             case AssetKind::Script: return "Script";
             default: return "Unknown";
         }
@@ -1619,6 +1774,7 @@ namespace CCEngine
         if (text == "Avatar") return AssetKind::Avatar;
         if (text == "Model") return AssetKind::Model;
         if (text == "Texture") return AssetKind::Texture;
+        if (text == "Audio") return AssetKind::Audio;
         if (text == "Script") return AssetKind::Script;
         return AssetKind::Unknown;
     }

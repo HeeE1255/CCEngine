@@ -1,4 +1,7 @@
 #pragma once
+#if defined(CC_ENABLE_OPENGL_RHI)
+#include "OpenGLTextureStorage.h"
+#else
 #include "Renderer/Texture.h"
 #include <string>
 
@@ -24,3 +27,4 @@ namespace CCEngine
         uint32_t m_RendererID = 0; // OpenGL에서 텍스처 객체를 식별하는 ID
     };
 }
+#endif

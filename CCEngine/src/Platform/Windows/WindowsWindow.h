@@ -17,6 +17,9 @@ namespace CCEngine
 			inline unsigned int GetHeight() const override { return m_Data.Height; }
 			inline void SetWidth(unsigned int width) { m_Data.Width = width; }
 			inline void SetHeight(unsigned int height) { m_Data.Height = height; }
+			inline WindowMode GetWindowMode() const { return m_Data.Mode; }
+			inline unsigned int GetMinimumWidth() const { return m_MinimumWidth; }
+			inline unsigned int GetMinimumHeight() const { return m_MinimumHeight; }
 
 			// 창이 닫혀야 하는지 여부 반환 (예: 사용자가 닫기 버튼을 눌렀는지)
 			virtual bool ShouldClose() const override { return m_ShouldClose;}
@@ -29,6 +32,7 @@ namespace CCEngine
 			virtual UI::Widget* GetRootUI() const override { return m_RootUI; }
 
 			virtual void SetPosition(int x, int y) override;
+			virtual void SetMinimumSize(unsigned int width, unsigned int height) override;
 			virtual std::pair<int, int> GetScreenMousePosition() const override;
 
 			virtual void SetShouldClose(bool shouldClose) override;
@@ -51,10 +55,13 @@ namespace CCEngine
 			{
                 std::string Title;
 				unsigned int Width = 0, Height = 0;
+				WindowMode Mode = WindowMode::Windowed;
 				bool VSync = false; //수직동기화 여부
 			};
 
 			WindowData m_Data;
 			UI::Widget* m_RootUI = nullptr;
+			unsigned int m_MinimumWidth = 0;
+			unsigned int m_MinimumHeight = 0;
 	};
 }

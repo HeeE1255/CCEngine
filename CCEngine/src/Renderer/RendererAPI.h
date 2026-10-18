@@ -11,7 +11,7 @@ namespace CCEngine
         // 우리가 지원할 그래픽스 API 종류
         enum class API
         {
-            None = 0, DirectX11 = 1, Vulkan = 2, OpenGL = 3
+            None = 0, DirectX11 = 1, Vulkan = 2, OpenGL = 3, DirectX12 = 4
         };
 
         enum class BlendMode
@@ -45,7 +45,10 @@ namespace CCEngine
         virtual void UnbindTextures(uint32_t startSlot, uint32_t count) = 0;
 
         inline static API GetAPI() { return s_API; }
-        static void SetAPI(API api) { s_API = api; }
+        static void SetAPI(API api);
+        static const char* GetAPIName(API api);
+        static const char* GetUnavailableReason(API api);
+        static void RequireAvailable(API api);
 
     private:
         static API s_API;
