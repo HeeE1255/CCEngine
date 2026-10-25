@@ -3,6 +3,7 @@
 #include <EntryPoint.h>
 #include <Renderer/Renderer.h>
 #include <Renderer/ShaderCompiler.h>
+#include <Renderer/RendererAPI.h>
 #include <Runtime/GameLayer.h>
 #include <Runtime/RuntimeManifest.h>
 #include <Renderer/GraphicsContext.h>
@@ -15,6 +16,7 @@
 #include <vector>
 #include <algorithm>
 #include <cstdlib>
+#include <stdexcept>
 
 #ifdef CC_PLATFORM_WINDOWS
 #include <Windows.h>
@@ -60,7 +62,7 @@ namespace
         {
             m_SmokeReportPath = FindSmokeReportPath(arguments);
             CCEngine::ShaderCompiler::SetRuntimeBytecodeOnly(!manifest.DevelopmentBuild);
-            if (startupError.empty())
+            if (startupError.empty() && manifest.GraphicsAPI == "DirectX11")
             {
                 std::filesystem::path contentRoot;
                 std::filesystem::path shaderManifest;
@@ -74,8 +76,6 @@ namespace
             }
 
 
-            CCEngine::Renderer::Init();
-
             if (!startupError.empty())
             {
 #ifdef CC_PLATFORM_WINDOWS
@@ -88,6 +88,8 @@ namespace
                 GetWindow().SetShouldClose(true);
                 return;
             }
+
+            CCEngine::Renderer::Init();
 
             m_GameLayer = new CCEngine::GameLayer(manifest, runtimeRoot);
             PushLayer(m_GameLayer);
@@ -231,7 +233,42 @@ CCEngine::Application* CCEngine::CreateApplication(const std::vector<std::string
             ConsoleLog::ConfigureFile(temporaryRoot / "CCEngine" / "Logs" / logFolder / "Player.log", fileLevel);
     }
     if (!error.empty())
+    {
         ConsoleLog::Error(error);
+        throw std::runtime_error(error);
+    }
 
-    return new GameApplication(commandLineArgs, manifest, manifestPath.parent_path(), error);
+    // 배포 셰이더는 한 API용이다. 실행 인수로 다른 API나 개발 PC 패키지를 섞지 않는다.
+    const auto api = RendererAPI::ParseAPIName(manifest.GraphicsAPI);
+    std::vector<std::string> arguments;
+    for (const auto& argument : commandLineArgs)
+    {
+        if (argument == "-dx11" || argument == "-dx12" || argument == "-opengl" || argument == "-vulkan")
+        {
+            if (argument != RendererAPI::GetAPIArgument(api))
+                throw std::runtime_error("Player API override does not match packaged GraphicsAPI.");
+            continue;
+        }
+        if (argument.rfind("--shader-package=", 0) == 0 || argument.rfind("--shader-source-root=", 0) == 0)
+            throw std::runtime_error("Player shader packages must come from GameProject.json.");
+        arguments.push_back(argument);
+    }
+    arguments.emplace_back(RendererAPI::GetAPIArgument(api));
+    RendererAPI::RequireAvailable(api);
+    if (api != RendererAPI::API::DirectX11)
+    {
+        std::filesystem::path contentRoot;
+        if (!RuntimeManifest::ResolvePathInsideRoot(manifestPath.parent_path(), manifest.ContentRoot, contentRoot))
+            throw std::runtime_error("Invalid runtime ContentRoot.");
+        arguments.push_back("--shader-source-root=" + contentRoot.string());
+        for (const auto& package : manifest.BackendShaderPackages)
+        {
+            std::filesystem::path resolved;
+            if (package.empty() || !RuntimeManifest::ResolvePathInsideRoot(contentRoot, package, resolved) ||
+                !std::filesystem::is_regular_file(resolved))
+                throw std::runtime_error("Missing or invalid backend shader package: " + package);
+            arguments.push_back("--shader-package=" + resolved.string());
+        }
+    }
+    return new GameApplication(arguments, manifest, manifestPath.parent_path(), error);
 }

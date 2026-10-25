@@ -6,9 +6,16 @@
 #include "Core/ProjectSettings.h"
 #include "Renderer/MaterialAsset.h"
 #include "Renderer/ShaderCompiler.h"
+#include "Renderer/RendererAPI.h"
+#include "Renderer/BackendShaderPackage.h"
 #include "Runtime/RuntimeManifest.h"
 #include "Scripting/ScriptCompiler.h"
 #include "json.hpp"
+#if defined(CC_ENABLE_DX12_RHI)
+#include "Platform/DirectX12/DX12Context.h"
+#include "Platform/DirectX12/DX12Buffer.h"
+#include "Platform/DirectX12/DX12Shader.h"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -18,6 +25,9 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
+#include <memory>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
@@ -38,6 +48,156 @@ namespace CCEngine
 #define CC_STRINGIZE_DETAIL(value) #value
 #define CC_STRINGIZE(value) CC_STRINGIZE_DETAIL(value)
         constexpr const char* BuildMarkerName = ".ccengine-build";
+
+        class EditorPackageLease
+        {
+        public:
+            explicit EditorPackageLease(const std::filesystem::path& directory, bool create = true)
+            {
+#ifdef CC_PLATFORM_WINDOWS
+                const auto path = directory / ".ccengine-editor-package";
+                // PID만 기록하면 비정상 종료와 PID 재사용을 구별할 수 없다.
+                // 읽는 프로세스끼리는 공유하고 삭제 공유는 금지한다. 정리 작업은
+                // 공유 없는 핸들을 요구하므로 사용자가 하나라도 남으면 실패한다.
+                m_Handle = CreateFileW(path.c_str(), create ? GENERIC_READ | GENERIC_WRITE : GENERIC_READ,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                    create ? CREATE_NEW : OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+                if (m_Handle == INVALID_HANDLE_VALUE)
+                    throw std::runtime_error("Cannot acquire editor shader package lease. Win32=" + std::to_string(GetLastError()));
+                constexpr char marker[] = "CCEngine.EditorShaderPackage.v1\n";
+                DWORD written = 0;
+                BY_HANDLE_FILE_INFORMATION info{};
+                bool valid = GetFileInformationByHandle(m_Handle, &info) &&
+                    !(info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY));
+                if (valid && create)
+                    valid = WriteFile(m_Handle, marker, sizeof(marker) - 1, &written, nullptr) &&
+                        written == sizeof(marker) - 1 && FlushFileBuffers(m_Handle);
+                else if (valid)
+                {
+                    char contents[sizeof(marker)]{};
+                    valid = ReadFile(m_Handle, contents, sizeof(contents), &written, nullptr) &&
+                        written == sizeof(marker) - 1 && std::string(contents, written) == marker;
+                }
+                if (!valid)
+                {
+                    CloseHandle(m_Handle);
+                    m_Handle = INVALID_HANDLE_VALUE;
+                    throw std::runtime_error("Invalid or inaccessible editor shader package ownership marker.");
+                }
+#else
+                throw std::runtime_error("Editor shader package leases require Windows.");
+#endif
+            }
+            ~EditorPackageLease()
+            {
+#ifdef CC_PLATFORM_WINDOWS
+                if (m_Handle != INVALID_HANDLE_VALUE) CloseHandle(m_Handle);
+#endif
+            }
+            EditorPackageLease(const EditorPackageLease&) = delete;
+            EditorPackageLease& operator=(const EditorPackageLease&) = delete;
+        private:
+#ifdef CC_PLATFORM_WINDOWS
+            HANDLE m_Handle = INVALID_HANDLE_VALUE;
+#endif
+        };
+
+        void RetainEditorPackageLease(std::shared_ptr<EditorPackageLease> lease)
+        {
+            // 컴파일 함수가 반환된 뒤에도 셰이더를 지연 로딩할 수 있다.
+            // 호출자에게 경로만 넘기는 현재 계약에서는 프로세스 종료까지 보존한다.
+            static std::mutex mutex;
+            static std::vector<std::shared_ptr<EditorPackageLease>> leases;
+            std::lock_guard<std::mutex> guard(mutex);
+            leases.push_back(std::move(lease));
+        }
+
+        void PruneEditorPackages(const std::filesystem::path& parent)
+        {
+#ifdef CC_PLATFORM_WINDOWS
+            // 이 함수는 엔진이 만든 API별 run 디렉터리에만 호출한다.
+            // 재귀 삭제 대신 전체 구조를 먼저 확인하고 확인한 파일만 제거한다.
+            const auto plain = [](const std::filesystem::path& path, bool directory)
+            {
+                const DWORD attributes = GetFileAttributesW(path.c_str());
+                return attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
+                    bool(attributes & FILE_ATTRIBUTE_DIRECTORY) == directory;
+            };
+            if (!plain(parent, true)) return;
+            const auto root = std::filesystem::canonical(parent);
+            for (const auto& entry : std::filesystem::directory_iterator(root))
+            {
+                try
+                {
+                    const auto run = entry.path();
+                    const auto name = run.filename().string();
+                    if (name.size() <= 4 || name.compare(0, 4, "run-") != 0 ||
+                        !std::all_of(name.begin() + 4, name.end(), [](char c) { return c >= '0' && c <= '9'; }) ||
+                        !plain(run, true)) continue;
+                    const auto marker = run / ".ccengine-editor-package";
+                    if (!plain(marker, false) || !plain(run / "BackendShaders" / "packages.json", false)) continue;
+                    // DELETE 권한을 요구하면 사용 측의 삭제 공유 없는 핸들과 충돌한다.
+                    // 표식 삭제 때까지 핸들을 유지하여 검사와 삭제 사이 재사용을 막는다.
+                    struct Lease
+                    {
+                        HANDLE Handle = INVALID_HANDLE_VALUE;
+                        ~Lease() { if (Handle != INVALID_HANDLE_VALUE) CloseHandle(Handle); }
+                    } lease;
+                    lease.Handle = CreateFileW(marker.c_str(), GENERIC_READ | DELETE, FILE_SHARE_DELETE, nullptr,
+                        OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+                    if (lease.Handle == INVALID_HANDLE_VALUE) continue;
+                    BY_HANDLE_FILE_INFORMATION info{};
+                    constexpr char signature[] = "CCEngine.EditorShaderPackage.v1\n";
+                    char contents[sizeof(signature)]{}; DWORD read = 0;
+                    if (!GetFileInformationByHandle(lease.Handle, &info) ||
+                        (info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) ||
+                        !ReadFile(lease.Handle, contents, sizeof(contents), &read, nullptr) ||
+                        read != sizeof(signature) - 1 || std::string(contents, read) != signature) continue;
+                    const auto cutoff = std::filesystem::file_time_type::clock::now() - std::chrono::hours(24 * 30);
+                    std::vector<std::filesystem::path> files, directories;
+                    bool valid = std::filesystem::last_write_time(run) < cutoff;
+                    for (std::filesystem::recursive_directory_iterator it(run), end; valid && it != end; ++it)
+                    {
+                        const auto path = it->path();
+                        const auto relative = path.lexically_relative(run);
+                        std::vector<std::string> parts;
+                        for (const auto& part : relative) parts.push_back(part.string());
+                        const bool directory = it->is_directory();
+                        if (!plain(path, directory) || std::filesystem::last_write_time(path) >= cutoff)
+                        { valid = false; break; }
+                        bool known = path == marker;
+                        if (!parts.empty() && parts[0] == "BackendShaders")
+                        {
+                            if (parts.size() == 1) known = directory;
+                            else if (parts.size() == 2 && !directory &&
+                                (parts[1] == "packages.json" || parts[1] == "tool-check.json")) known = true;
+                            else if (parts[1].size() == 64 && std::all_of(parts[1].begin(), parts[1].end(),
+                                [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); }))
+                            {
+                                if (parts.size() == 2) known = directory;
+                                else if (parts.size() == 3) known = directory ? parts[2] == "bytecode" : parts[2] == "manifest.json";
+                                else if (parts.size() == 4 && parts[2] == "bytecode" && !directory)
+                                    known = parts[3] == "vertex.dxil" || parts[3] == "pixel.dxil" ||
+                                        parts[3] == "vertex.spv" || parts[3] == "pixel.spv" ||
+                                        parts[3] == "vertex.vert.glsl" || parts[3] == "pixel.frag.glsl";
+                            }
+                        }
+                        if (!known) { valid = false; break; }
+                        if (path != marker) (directory ? directories : files).push_back(path);
+                    }
+                    if (!valid) continue;
+                    for (const auto& path : files) std::filesystem::remove(path);
+                    std::sort(directories.begin(), directories.end(), [](const auto& a, const auto& b)
+                        { return a.native().size() > b.native().size(); });
+                    for (const auto& path : directories) std::filesystem::remove(path);
+                    if (!DeleteFileW(marker.c_str())) continue;
+                    CloseHandle(lease.Handle); lease.Handle = INVALID_HANDLE_VALUE;
+                    std::filesystem::remove(run);
+                }
+                catch (const std::exception&) { /* 정리 실패는 현재 패키지 준비를 중단하지 않는다. */ }
+            }
+#endif
+        }
 
         class IncrementalBuildCache;
         enum class ReuseResult
@@ -812,7 +972,10 @@ namespace CCEngine
             manifest["ProductName"] = request.ProductName;
             manifest["ProductVersion"] = request.ProductVersion;
             manifest["UpdateChannel"] = request.UpdateChannel;
-            manifest["Platform"] = "Windows-x64-D3D11";
+            manifest["Platform"] = request.GraphicsAPI == "DirectX12" ? "Windows-x64-D3D12" :
+                request.GraphicsAPI == "OpenGL" ? "Windows-x64-OpenGL" :
+                request.GraphicsAPI == "Vulkan" ? "Windows-x64-Vulkan" : "Windows-x64-D3D11";
+            manifest["GraphicsAPI"] = request.GraphicsAPI;
             manifest["PackageType"] = "LooseFiles";
             manifest["DevelopmentBuild"] = request.DevelopmentBuild;
             manifest["Files"] = nlohmann::json::array();
@@ -943,12 +1106,260 @@ namespace CCEngine
             return true;
         }
 
+        std::string BackendPackageTarget(const std::string& api)
+        {
+            if (api == "DirectX12") return "dx12";
+            if (api == "OpenGL") return "opengl";
+            if (api == "Vulkan") return "vulkan";
+            throw std::runtime_error("Unsupported backend shader package API: " + api);
+        }
+
+        bool CompileBackendPackages(const GameBuildRequest& request, const std::filesystem::path& staging,
+            const nlohmann::json& jobs, GameBuildReport& report, std::vector<std::string>& packages, bool checkOnly = false)
+        {
+            const auto requestPath = staging / "ShaderBuildRequest.json";
+            const auto logPath = staging / "ShaderBuild.log";
+            const auto packageRoot = staging / "BackendShaders";
+            try
+            {
+                const auto target = checkOnly ? std::string("dx12") : BackendPackageTarget(request.GraphicsAPI);
+                const std::wstring targetArgument(target.begin(), target.end());
+                if (request.ShaderCompilerScript.empty())
+                    throw std::runtime_error("Set ShaderCompilerScript to tools/CompileShaderBackends.py in the build profile.");
+                const auto root = std::filesystem::absolute(request.ProjectRoot).lexically_normal();
+                const auto script = std::filesystem::absolute(root / request.ShaderCompilerScript).lexically_normal();
+                if (!std::filesystem::is_regular_file(script))
+                    throw std::runtime_error("Backend shader compiler script is missing: " + script.string());
+                if (!checkOnly) {
+                    std::ofstream output(requestPath);
+                    output << jobs.dump(2);
+                    output.flush();
+                    if (!output) throw std::runtime_error("Cannot write shader build request.");
+                }
+#ifdef CC_PLATFORM_WINDOWS
+                // 쉘을 거치지 않아 경로와 define이 명령으로 해석되지 않는다. 인수 끝의
+                // 역슬래시까지 따옴표 규칙대로 처리해야 공백이 있는 도구 경로도 안전하다.
+                auto quote = [](const std::wstring& value)
+                {
+                    std::wstring result = L"\"";
+                    size_t slashes = 0;
+                    for (wchar_t c : value)
+                    {
+                        if (c == L'\\') { ++slashes; continue; }
+                        result.append(c == L'\"' ? slashes * 2 + 1 : slashes, L'\\');
+                        slashes = 0;
+                        result += c;
+                    }
+                    result.append(slashes * 2, L'\\');
+                    return result + L"\"";
+                };
+                if (request.PythonExecutable.empty() || request.DXCExecutable.empty() || request.SpirvCrossExecutable.empty())
+                    throw std::runtime_error("Python, DXC and SPIRV-Cross tool paths must not be empty.");
+                std::wstring executable(32768, L'\0');
+                const DWORD executableLength = GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
+                if (!executableLength || executableLength >= executable.size())
+                    throw std::runtime_error("Cannot locate shader reflection tool directory.");
+                executable.resize(executableLength);
+                const auto reflector = std::filesystem::path(executable).parent_path() / "CCBuild.exe";
+                if ((checkOnly || target == "dx12") && !std::filesystem::is_regular_file(reflector))
+                    throw std::runtime_error("DXIL reflection requires CCBuild.exe beside the editor.");
+                std::wstring command = quote(std::filesystem::path(request.PythonExecutable).wstring());
+                std::vector<std::wstring> args = { script.wstring(), L"--source-root", root.wstring(),
+                    L"--output", packageRoot.wstring(), L"--target", targetArgument, L"--build-request", requestPath.wstring(),
+                    L"--build-log", logPath.wstring(), L"--dxc", std::filesystem::path(request.DXCExecutable).wstring(),
+                    L"--spirv-cross", std::filesystem::path(request.SpirvCrossExecutable).wstring(), L"--timeout", L"60",
+                    L"--cache", (root / "local" / "shader-cache" / (target + "-build")).wstring(),
+                    L"--reflector", reflector.wstring() };
+                if (checkOnly)
+                    args = {script.wstring(), L"--check-tools", L"--target", L"dx12", L"opengl", L"vulkan",
+                        L"--build-log", logPath.wstring(), L"--dxc", std::filesystem::path(request.DXCExecutable).wstring(),
+                        L"--spirv-cross", std::filesystem::path(request.SpirvCrossExecutable).wstring(),
+                        L"--reflector", reflector.wstring(), L"--timeout", L"30"};
+                for (const auto& argument : args) command += L" " + quote(argument);
+                struct Handle { HANDLE Value = nullptr; ~Handle() { if (Value) CloseHandle(Value); } };
+                Handle job;
+                job.Value = CreateJobObjectW(nullptr, nullptr);
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                if (!job.Value || !SetInformationJobObject(job.Value, JobObjectExtendedLimitInformation, &limits, sizeof(limits)))
+                    throw std::runtime_error("Cannot create shader compiler process job.");
+                STARTUPINFOW startup{}; startup.cb = sizeof(startup);
+                PROCESS_INFORMATION process{};
+                if (!CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE,
+                    CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr, root.c_str(), &startup, &process))
+                    throw std::runtime_error("Cannot start Python shader compiler. Win32=" + std::to_string(GetLastError()));
+                Handle processHandle; processHandle.Value = process.hProcess;
+                Handle threadHandle; threadHandle.Value = process.hThread;
+                if (!AssignProcessToJobObject(job.Value, process.hProcess))
+                {
+                    TerminateProcess(process.hProcess, 1);
+                    WaitForSingleObject(process.hProcess, 5000);
+                    throw std::runtime_error("Cannot attach shader compiler to cancellation job.");
+                }
+                if (ResumeThread(process.hThread) == static_cast<DWORD>(-1))
+                    throw std::runtime_error("Cannot resume shader compiler.");
+                const auto started = std::chrono::steady_clock::now();
+                for (;;)
+                {
+                    const DWORD status = WaitForSingleObject(process.hProcess, 100);
+                    if (status == WAIT_OBJECT_0) break;
+                    if (status != WAIT_TIMEOUT || (request.CancelRequested && request.CancelRequested->load()) ||
+                        std::chrono::steady_clock::now() - started > std::chrono::minutes(5))
+                    {
+                        // Python만 종료하면 하위 DXC가 남는다. 작업 전체를 끝낸 뒤 staging을 정리한다.
+                        TerminateJobObject(job.Value, 1);
+                        WaitForSingleObject(process.hProcess, 5000);
+                        throw std::runtime_error("Shader compilation cancelled, timed out or failed to wait.");
+                    }
+                }
+                DWORD exitCode = 1;
+                if (!GetExitCodeProcess(process.hProcess, &exitCode) || exitCode != 0)
+                {
+                    // 긴 성공 로그보다 마지막 오류가 중요하다. 파일 전체를 읽으면
+                    // 대규모 프로젝트의 실패 처리에서 메모리가 다시 급증할 수 있다.
+                    std::ifstream log(logPath, std::ios::binary | std::ios::ate);
+                    std::string diagnostic;
+                    if (log)
+                    {
+                        const auto length = log.tellg();
+                        const auto count = (std::min)(static_cast<std::streamoff>(length), std::streamoff(16384));
+                        if (count > 0)
+                        {
+                            log.seekg(-count, std::ios::end);
+                            diagnostic.resize(static_cast<size_t>(count));
+                            log.read(diagnostic.data(), static_cast<std::streamsize>(count));
+                            diagnostic.resize(static_cast<size_t>(log.gcount()));
+                        }
+                    }
+                    throw std::runtime_error("Shader tool execution failed. " + diagnostic);
+                }
+#else
+                throw std::runtime_error("Backend shader packaging process runner requires Windows.");
+#endif
+                if (checkOnly)
+                {
+                    std::ifstream log(logPath);
+                    nlohmann::json result; log >> result;
+                    if (result.at("schema") != 1 || result.at("success") != true ||
+                        result.at("scope") != "offline-compile-reflection-not-gpu" ||
+                        result.at("targets") != nlohmann::json::array({"dx12", "opengl", "vulkan"}))
+                        throw std::runtime_error("Invalid shader tool diagnostic report.");
+                    for (const char* stage : {"vertex", "pixel"})
+                        if (result.at("stages").at(stage) != nlohmann::json::array({"dx12", "vulkan", "opengl"}))
+                            throw std::runtime_error("Shader diagnostic stage outputs are incomplete.");
+                    for (const char* tool : {"python", "dxc", "spirvCross"})
+                    {
+                        const auto version = result.at("tools").at(tool).value("version", std::string("Unavailable"));
+                        if (version.size() > 80 || version.find_first_of("\r\n\t") != std::string::npos)
+                            throw std::runtime_error("Invalid shader tool version text.");
+                        AddMessage(report, GameBuildMessageSeverity::Info, "Tool Version",
+                            std::string(tool) + ": " + version);
+                    }
+                    return true;
+                }
+                std::ifstream input(packageRoot / "packages.json");
+                nlohmann::json index; input >> index;
+                if (index.at("schema") != 1 || index.at("graphicsAPI") != request.GraphicsAPI || !index.at("packages").is_array() ||
+                    index.at("packages").size() != jobs.at("shaders").size())
+                    throw std::runtime_error("Invalid backend package index.");
+                auto variantIdentity = [](const nlohmann::json& source, const nlohmann::json& defines)
+                {
+                    auto keywords = defines.get<std::vector<std::string>>();
+                    std::sort(keywords.begin(), keywords.end());
+                    keywords.erase(std::unique(keywords.begin(), keywords.end()), keywords.end());
+                    return nlohmann::json::array({ source.get<std::string>(), keywords }).dump();
+                };
+                std::unordered_set<std::string> expected;
+                for (const auto& shader : jobs.at("shaders"))
+                    if (!expected.insert(variantIdentity(shader.at("source"), shader.at("defines"))).second)
+                        throw std::runtime_error("Duplicate requested shader variant.");
+                auto resolveFile = [](const std::filesystem::path& root, const std::string& relative)
+                {
+                    std::filesystem::path path, relation;
+                    if (!RuntimeManifest::ResolvePathInsideRoot(root, relative, path) ||
+                        !std::filesystem::is_regular_file(path) ||
+                        !PathUtils::TryMakeRelativeInside(std::filesystem::canonical(path),
+                            std::filesystem::canonical(root), relation))
+                        throw std::runtime_error("Invalid backend shader file: " + relative);
+                    return path;
+                };
+                std::vector<std::string> verifiedPackages;
+                std::unordered_set<std::string> seenPackages;
+                for (const auto& item : index.at("packages"))
+                {
+                    const auto path = resolveFile(packageRoot, item.get<std::string>());
+                    if (!seenPackages.insert(Lowercase(std::filesystem::canonical(path).generic_string())).second)
+                        throw std::runtime_error("Duplicate backend package path.");
+                    std::ifstream packageInput(path);
+                    nlohmann::json package; packageInput >> package;
+                    if (package.at("schema") != 1 || package.at("success") != true ||
+                        package.at("bindingContract") != "cc-hlsl-rhi-v1" ||
+                        (target == "dx12" && package.at("reflectionContract") != "cc-dxil-spirv-layout-v1") ||
+                        package.at("targets") != nlohmann::json::array({ target }) ||
+                        !package.at("shaders").is_array() || package.at("shaders").size() != 1)
+                        throw std::runtime_error("Invalid backend package contract.");
+                    const auto& shader = package.at("shaders").at(0);
+                    ShaderPropertyParser::ParseSource(shader.at("materialPropertySource").get<std::string>());
+                    if (shader.at("stageLinkContract") != "cc-vs-ps-link-v1")
+                        throw std::runtime_error("Shader stage linkage was not validated.");
+                    if (shader.at("cpuBufferContract") != "cc-renderer-buffers-v1")
+                        throw std::runtime_error("Shader CPU buffer layout was not validated.");
+                    if (shader.at("renderContract") != "cc-scene-io-v1")
+                        throw std::runtime_error("Shader scene input/output contract was not validated.");
+                    if (!shader.at("textureBindings").is_object())
+                        throw std::runtime_error("Shader texture binding metadata is missing.");
+                    if (shader.at("interpolationContract") != "cc-stage-interpolation-v1")
+                        throw std::runtime_error("Shader interpolation was not validated.");
+                    if (!shader.at("vertexInputs").is_array())
+                        throw std::runtime_error("Shader vertex input metadata is missing.");
+                    if (expected.erase(variantIdentity(shader.at("source"), package.at("defines"))) != 1)
+                        throw std::runtime_error("Unexpected or duplicate compiled shader variant.");
+                    for (const char* stageName : { "vertex", "pixel" })
+                    {
+                        const bool vertex = std::string(stageName) == "vertex";
+                        const auto& outputs = shader.at("stages").at(stageName).at("outputs");
+                        if (!outputs.is_object() || outputs.size() != 1 || !outputs.contains(target))
+                            throw std::runtime_error("Shader output API does not match the build target.");
+                        const auto& stage = outputs.at(target);
+                        // 파일 확장자가 아닌 API별 실행 계약을 확인한다. GLSL/SPIR-V는
+                        // DXIL의 profile 대신 버전 또는 실행 환경과 main 진입점을 사용한다.
+                        if (target == "dx12" ?
+                            (stage.at("entry") != (vertex ? "VSMain" : "PSMain") ||
+                                stage.at("profile") != (vertex ? "vs_6_0" : "ps_6_0")) :
+                            (stage.at("entry") != "main" || (target == "opengl" ?
+                                stage.at("version") != 450 : stage.at("environment") != "vulkan1.1")))
+                            throw std::runtime_error("Invalid backend shader stage contract.");
+                        const auto bytecode = resolveFile(path.parent_path(),
+                            shader.at("directory").get<std::string>() + "/" + stage.at("file").get<std::string>());
+                        if (std::filesystem::file_size(bytecode) == 0)
+                            throw std::runtime_error("Empty backend shader artifact.");
+                        VerifyBackendShaderHash(bytecode, stage.at("sha256").get<std::string>());
+                    }
+                    verifiedPackages.push_back(path.lexically_relative(staging).generic_string());
+                }
+                if (!expected.empty()) throw std::runtime_error("Missing compiled shader variants.");
+                for (const auto& entry : std::filesystem::recursive_directory_iterator(packageRoot))
+                    if (entry.is_regular_file()) { ++report.FilesWritten; report.BytesWritten += entry.file_size(); }
+                std::filesystem::remove(requestPath);
+                std::filesystem::remove(logPath);
+                packages = std::move(verifiedPackages);
+                return true;
+            }
+            catch (const std::exception& error)
+            {
+                AddMessage(report, GameBuildMessageSeverity::Error, "Compile Shaders", error.what(), requestPath);
+                return false;
+            }
+        }
+
         bool CompileAndStageShaders(
             const std::filesystem::path& staging,
             const std::vector<AssetDependency>& dependencies,
             GameBuildReport& report,
             IncrementalBuildCache* incremental,
-            bool allowShaderFallback)
+            bool allowShaderFallback,
+            const GameBuildRequest& request,
+            std::vector<std::string>& backendPackages)
         {
             constexpr const char* CompilerKey = "Windows-x64-D3D11-SM5-v2-variants";
             nlohmann::json manifest;
@@ -972,7 +1383,7 @@ namespace CCEngine
                 if (dependency.Kind != AssetKind::Material)
                     continue;
                 MaterialAsset material;
-                if (!material.LoadFromFile(dependency.SourcePath))
+                if (!material.LoadFromFile(dependency.SourcePath, false))
                     continue;
 
                 std::filesystem::path shaderPath;
@@ -988,8 +1399,16 @@ namespace CCEngine
                     if (shader != dependencyByRuntimePath.end())
                         shaderPath = shader->second;
                 }
+                if (shaderPath.empty() && material.ShaderGuid.empty() && material.ShaderPath.empty())
+                {
+                    const auto shader = dependencyByRuntimePath.find(Lowercase("assets/shaders/" + material.ShaderName + ".hlsl"));
+                    if (shader != dependencyByRuntimePath.end()) shaderPath = shader->second;
+                }
                 if (shaderPath.empty())
-                    continue;
+                {
+                    AddMessage(report, GameBuildMessageSeverity::Error, "Compile Shaders", "Cannot resolve material shader.", dependency.SourcePath);
+                    return false;
+                }
 
                 std::vector<std::string> keywords;
                 for (const auto& [name, value] : material.ShaderProperties)
@@ -1001,6 +1420,24 @@ namespace CCEngine
                 auto& variants = materialVariants[Lowercase(shaderPath.lexically_normal().generic_string())];
                 if (std::find(variants.begin(), variants.end(), keywords) == variants.end())
                     variants.push_back(std::move(keywords));
+            }
+
+            if (request.GraphicsAPI != "DirectX11")
+            {
+                nlohmann::json jobs = { { "schema", 1 }, { "shaders", nlohmann::json::array() } };
+                for (const auto& dependency : dependencies)
+                {
+                    if (dependency.Kind != AssetKind::Shader || !ShaderCompiler::IsHlslSource(dependency.SourcePath)) continue;
+                    std::vector<std::vector<std::string>> variants = { {} };
+                    const auto found = materialVariants.find(Lowercase(dependency.SourcePath.lexically_normal().generic_string()));
+                    if (found != materialVariants.end())
+                        for (const auto& keywords : found->second)
+                            if (std::find(variants.begin(), variants.end(), keywords) == variants.end()) variants.push_back(keywords);
+                    for (const auto& keywords : variants)
+                        jobs["shaders"].push_back({ { "source", (std::filesystem::path("assets") / dependency.RelativePath).generic_string() },
+                            { "defines", keywords } });
+                }
+                return CompileBackendPackages(request, staging, jobs, report, backendPackages);
             }
 
             std::unordered_map<std::string, nlohmann::json> previousShaders;
@@ -1079,7 +1516,7 @@ namespace CCEngine
 
                     if (!reused)
                     {
-                        ShaderCompileResult compiled = ShaderCompiler::CompileHlslFile(dependency.SourcePath, true, keywords);
+                        ShaderCompileResult compiled = ShaderCompiler::CompileDX11ForBuild(dependency.SourcePath, staging / relativeDirectory, keywords);
                         if (!compiled.Success && allowShaderFallback)
                         {
                             const auto fallback = std::find_if(dependencies.begin(), dependencies.end(), [](const AssetDependency& candidate)
@@ -1091,7 +1528,7 @@ namespace CCEngine
                                 AddMessage(report, GameBuildMessageSeverity::Warning, "Compile Shaders",
                                     "Shader failed in Development build. Error Shader bytecode was staged for this variant.\n" + compiled.Summary,
                                     dependency.SourcePath);
-                                compiled = ShaderCompiler::CompileHlslFile(fallback->SourcePath, true, keywords);
+                                compiled = ShaderCompiler::CompileDX11ForBuild(fallback->SourcePath, staging / relativeDirectory, keywords);
                             }
                         }
                         if (!compiled.Success)
@@ -1099,9 +1536,8 @@ namespace CCEngine
                             AddMessage(report, GameBuildMessageSeverity::Error, "Compile Shaders", compiled.Summary, dependency.SourcePath);
                             return false;
                         }
-                        if (!CopyFileTracked(compiled.Vertex.BytecodePath, staging / vertexRelative, report, "Compile Shaders", true, incremental) ||
-                            !CopyFileTracked(compiled.Pixel.BytecodePath, staging / pixelRelative, report, "Compile Shaders", true, incremental))
-                            return false;
+                        report.FilesWritten += 2;
+                        report.BytesWritten += std::filesystem::file_size(staging / vertexRelative) + std::filesystem::file_size(staging / pixelRelative);
                         vertexHash = HashFile(staging / vertexRelative);
                         pixelHash = HashFile(staging / pixelRelative);
                     }
@@ -1109,6 +1545,7 @@ namespace CCEngine
                     nlohmann::json shader;
                     shader["Guid"] = dependency.Guid;
                     shader["SourcePath"] = sourcePath;
+                    shader["MaterialPropertySource"] = ShaderPropertyParser::LoadDeclarationSource(dependency.SourcePath);
                     shader["SourceHash"] = sourceHash;
                     shader["Keywords"] = keywords;
                     shader["VariantKey"] = variantKey;
@@ -1685,6 +2122,225 @@ namespace CCEngine
 #endif
     }
 
+    int RunDX12DeviceSmokeCheck(const char* vertexBytecode, const char* pixelBytecode)
+    {
+#if defined(CC_ENABLE_DX12_RHI) && defined(CC_PLATFORM_WINDOWS)
+        try
+        {
+            // 일반 API 선택 게이트는 유지한다. 전용 QA 셰이더를 전달한 경우에만
+            // draw까지 검사하며, 기본 검사 성공을 에디터 전체 출력 성공으로 취급하지 않는다.
+            const bool drawRequested = vertexBytecode && *vertexBytecode;
+            if (drawRequested != bool(pixelBytecode && *pixelBytecode))
+                throw std::invalid_argument("Both --rhi-vertex and --rhi-pixel are required for draw smoke.");
+            struct NativeWindow
+            {
+                HWND Handle = CreateWindowExW(0, L"STATIC", L"RHI Smoke", WS_OVERLAPPEDWINDOW,
+                    0, 0, 160, 160, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+                ~NativeWindow() { if (Handle) DestroyWindow(Handle); }
+            } firstWindow, secondWindow;
+            if (!firstWindow.Handle || !secondWindow.Handle) throw std::runtime_error("Cannot create smoke windows.");
+            DX12Context first(firstWindow.Handle);
+            first.Init();
+            auto check = [](DX12Context& context, float red, float green)
+            {
+                context.MakeCurrent(); context.BindBackBuffer(); context.Clear(red, green, 0, 1);
+                std::vector<uint8_t> pixels; uint32_t width = 0, height = 0;
+                if (!context.ReadBackBuffer(pixels, width, height) || width == 0 || height == 0 || pixels.size() != size_t(width) * height * 4)
+                    throw std::runtime_error("DX12 readback failed.");
+                for (size_t i = 0; i < pixels.size(); i += 4)
+                    if (pixels[i] != static_cast<uint8_t>(red * 255) || pixels[i + 1] != static_cast<uint8_t>(green * 255) ||
+                        pixels[i + 2] != 0 || pixels[i + 3] != 255)
+                        throw std::runtime_error("DX12 clear/readback pixel mismatch.");
+                context.SwapBuffers(false);
+            };
+            check(first, 1, 0);
+            {
+                DX12Context second(secondWindow.Handle, false, first.SharedDevice());
+                second.Init(); check(second, 0, 1); check(first, 1, 0);
+                second.ResizeBuffers(96, 64); check(second, 0, 1);
+            }
+            check(first, 1, 0);
+            if (drawRequested)
+            {
+                first.MakeCurrent();
+                auto shader = DX12Shader::FromBytecodeFiles(first, vertexBytecode, pixelBytecode);
+                const float positions[] = { -.8f, -.8f, -.8f, .8f, .8f, .8f, .8f, -.8f };
+                const uint32_t indices[] = { 0, 1, 2, 0, 2, 3 };
+                DX12VertexBuffer vertex(first, sizeof(positions), positions);
+                vertex.SetLayout({ { ShaderDataType::Float2, "POSITION" } });
+                DX12IndexBuffer index(first, indices, 6);
+                DX12ConstantBuffer uniform(first, sizeof(float) * 4);
+                auto draw = [&](DX12Context& context, bool clip, bool blue)
+                {
+                    context.MakeCurrent();
+                    context.ResizeBuffers(96, 64);
+                    context.BindBackBuffer();
+                    context.Viewport(0, 0, 96, 64);
+                    context.Clear(1, 0, 0, 1);
+                    const float color[] = { 0, blue ? 0.f : 1.f, blue ? 1.f : 0.f, 1 };
+                    uniform.SetData(color, sizeof(color));
+                    uniform.Bind(0); shader->Bind(); vertex.Bind(); index.Bind();
+                    context.Scissor(0, 0, 48, 64); context.ScissorEnabled(clip);
+                    context.Draw(6, RendererAPI::BlendMode::Opaque, RendererAPI::CullMode::None, false);
+                    std::vector<uint8_t> pixels; uint32_t width = 0, height = 0;
+                    if (!context.ReadBackBuffer(pixels, width, height) || width != 96 || height != 64 || pixels.size() != 96 * 64 * 4)
+                        throw std::runtime_error("DX12 draw readback size mismatch.");
+                    auto pixel = [&](uint32_t x, uint32_t y, bool foreground)
+                    {
+                        const size_t offset = (size_t(y) * width + x) * 4;
+                        const uint8_t expected[] = { uint8_t(foreground ? 0 : 255),
+                            uint8_t(foreground && !blue ? 255 : 0), uint8_t(foreground && blue ? 255 : 0), 255 };
+                        for (size_t channel = 0; channel < 4; ++channel)
+                            if (pixels[offset + channel] != expected[channel])
+                                throw std::runtime_error("DX12 shader draw/scissor pixel mismatch.");
+                    };
+                    // 배경과 양쪽 내부를 따로 검사해야 Clear만 수행된 화면이나 클립 누락을 잡는다.
+                    pixel(2, 2, false); pixel(24, 32, true); pixel(72, 32, !clip);
+                    context.ScissorEnabled(false);
+                    context.SwapBuffers(false);
+                };
+                draw(first, false, false);
+                {
+                    DX12Context second(secondWindow.Handle, false, first.SharedDevice());
+                    second.Init();
+                    draw(second, true, true);
+                    draw(first, true, false);
+                }
+                draw(first, false, true);
+                std::cout << "PASS DX12 DXIL indexed draw, uniform update, scissor, shared resources, secondary close\n";
+            }
+            std::cout << "PASS DX12 clear/readback, shared windows, resize, secondary close\n";
+            return 0;
+        }
+        catch (const std::exception& error) { std::cerr << "FAIL DX12 smoke: " << error.what() << '\n'; return 1; }
+#else
+        std::cerr << "DX12 backend was not compiled.\n";
+        return 2;
+#endif
+    }
+
+    void RetainEditorShaderPackageUsage(const std::vector<std::filesystem::path>& packages)
+    {
+        std::unordered_set<std::string> directories;
+        std::vector<std::shared_ptr<EditorPackageLease>> acquired;
+        for (const auto& package : packages)
+        {
+            // 실제 파일 위치로 찾으므로 외부 경로의 링크로 같은 run을 열어도 보호한다.
+            auto directory = std::filesystem::canonical(package).parent_path();
+            while (!directory.empty())
+            {
+                const auto marker = directory / ".ccengine-editor-package";
+                if (std::filesystem::exists(std::filesystem::symlink_status(marker)))
+                {
+                    if (directories.insert(Lowercase(directory.generic_string())).second)
+                        acquired.push_back(std::make_shared<EditorPackageLease>(directory, false));
+                    break;
+                }
+                const auto parent = directory.parent_path();
+                if (parent == directory) break;
+                directory = parent;
+            }
+        }
+        // 표식 없는 배포/사용자 패키지는 소유권을 주장하거나 수정하지 않는다.
+        for (auto& lease : acquired) RetainEditorPackageLease(std::move(lease));
+    }
+
+    bool PrepareEditorBackendPackages(const std::filesystem::path& projectRoot, const std::string& graphicsAPI,
+        std::vector<std::filesystem::path>& packages, std::string& error)
+    {
+        packages.clear();
+        try
+        {
+            BackendPackageTarget(graphicsAPI);
+            const auto root = std::filesystem::canonical(projectRoot);
+            GameBuildProfile profile;
+            if (!profile.Load(root / "BuildProfile.ccbuildprofile", error)) return false;
+            const auto& tools = profile.Data();
+            GameBuildRequest request;
+            request.ProjectRoot = root;
+            request.GraphicsAPI = graphicsAPI;
+            request.ShaderCompilerScript = tools.ShaderCompilerScript;
+            request.PythonExecutable = tools.PythonExecutable;
+            request.DXCExecutable = tools.DXCExecutable;
+            request.SpirvCrossExecutable = tools.SpirvCrossExecutable;
+            std::vector<AssetDependency> dependencies;
+            std::unordered_set<std::string> guids;
+            const auto assets = root / "assets";
+            for (const auto& entry : std::filesystem::recursive_directory_iterator(assets))
+            {
+                if (!entry.is_regular_file()) continue;
+                const auto extension = Lowercase(entry.path().extension().string());
+                if (extension != ".hlsl" && extension != ".ccmat") continue;
+                std::filesystem::path relative;
+                if (!PathUtils::TryMakeRelativeInside(std::filesystem::canonical(entry.path()), assets, relative))
+                    throw std::runtime_error("Editor shader asset escapes assets root.");
+                AssetDependency dependency;
+                dependency.SourcePath = entry.path();
+                dependency.RelativePath = entry.path().lexically_relative(assets);
+                dependency.Kind = extension == ".hlsl" ? AssetKind::Shader : AssetKind::Material;
+                const auto metaPath = std::filesystem::path(entry.path().string() + ".meta");
+                if (std::filesystem::is_regular_file(metaPath))
+                {
+                    std::ifstream metaFile(metaPath);
+                    nlohmann::json meta; metaFile >> meta;
+                    dependency.Guid = meta.value("guid", std::string());
+                    if (!dependency.Guid.empty() && !guids.insert(dependency.Guid).second)
+                        throw std::runtime_error("Duplicate editor shader/material GUID: " + dependency.Guid);
+                }
+                dependencies.push_back(std::move(dependency));
+            }
+            std::sort(dependencies.begin(), dependencies.end(), [](const auto& a, const auto& b)
+            { return a.RelativePath.generic_string() < b.RelativePath.generic_string(); });
+            // 시작 씬만 수집하면 다른 에셋을 열 때 셰이더가 빠진다. 편집용은 모든
+            // shader/material을 대상으로 하고 반복 컴파일 비용은 캐시로 줄인다.
+            const auto parent = root / "local" / "editor-shaders" / BackendPackageTarget(graphicsAPI);
+            std::filesystem::create_directories(parent);
+            try { PruneEditorPackages(parent); }
+            catch (const std::exception&) { /* 캐시 관리 실패와 새 패키지 준비 실패는 구분한다. */ }
+            const auto staging = parent / ("run-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+            if (!std::filesystem::create_directory(staging)) throw std::runtime_error("Editor shader staging already exists.");
+            auto lease = std::make_shared<EditorPackageLease>(staging);
+            GameBuildReport report;
+            std::vector<std::string> relativePackages;
+            if (!CompileAndStageShaders(staging, dependencies, report, nullptr, false, request, relativePackages))
+            {
+                error = report.Messages.empty() ? "Editor shader preparation failed." : report.Messages.back().Message;
+                return false;
+            }
+            std::vector<std::filesystem::path> prepared;
+            prepared.reserve(relativePackages.size());
+            for (const auto& path : relativePackages) prepared.push_back(staging / path);
+            RetainEditorPackageLease(std::move(lease));
+            packages.swap(prepared);
+            error.clear();
+            return true;
+        }
+        catch (const std::exception& exception) { error = exception.what(); return false; }
+    }
+
+    GameBuildReport GameBuildService::CheckShaderTools(const GameBuildRequest& request) const
+    {
+        GameBuildReport report;
+        try
+        {
+            // 매 실행 별도 로그를 남겨 여러 에디터의 진단 결과가 덮어써지지 않게 한다.
+            const auto directory = std::filesystem::absolute(request.ProjectRoot) / "local" / "shader-diagnostics" /
+                (std::to_string(GetCurrentProcessId()) + "-" + std::to_string(GetTickCount64()));
+            std::filesystem::create_directories(directory);
+            report.OutputDirectory = directory;
+            std::vector<std::string> unused;
+            report.Success = CompileBackendPackages(request, directory, nlohmann::json::object(), report, unused, true);
+            report.Messages.push_back({report.Success ? GameBuildMessageSeverity::Info : GameBuildMessageSeverity::Error,
+                "Shader Tools", report.Success ? "Offline tool checks passed for DX12, OpenGL and Vulkan." :
+                "Tool checks failed. Open the diagnostic log.", directory / "ShaderBuild.log"});
+        }
+        catch (const std::exception& error)
+        {
+            report.Messages.push_back({GameBuildMessageSeverity::Error, "Shader Tools", error.what(), {}});
+        }
+        return report;
+    }
+
     GameBuildReport GameBuildService::Build(const GameBuildRequest& request) const
     {
         GameBuildReport report;
@@ -1712,6 +2368,21 @@ namespace CCEngine
         };
 
         publishProgress("Validate", 0.02f);
+
+        try
+        {
+            const auto api = RendererAPI::ParseAPIName(request.GraphicsAPI);
+            if (api != RendererAPI::API::DirectX11)
+                BackendPackageTarget(request.GraphicsAPI);
+            // 패키징 코드 존재와 배포 가능 상태는 다르다. GPU 검증 전의 백엔드는
+            // staging 생성 전에 거절해 실행 불가능한 산출물이 정상 빌드로 게시되지 않게 한다.
+            RendererAPI::RequireAvailable(api);
+        }
+        catch (const std::exception& error)
+        {
+            AddMessage(report, GameBuildMessageSeverity::Error, "Validate Graphics API", error.what());
+            return report;
+        }
 
         const std::string validateStage = "Validate";
         std::error_code ec;
@@ -1945,6 +2616,7 @@ namespace CCEngine
         runtimeManifest.AssetRoot = "assets";
         runtimeManifest.AssetManifest = "RuntimeAssetManifest.json";
         runtimeManifest.ShaderManifest = "ShaderBuildManifest.json";
+        runtimeManifest.GraphicsAPI = request.GraphicsAPI;
         runtimeManifest.StartSceneGuid = projectSettings.Data().StartSceneGuid;
         const auto startSceneRelativeToProject = startScene.lexically_relative(projectRoot);
         runtimeManifest.StartScenePath = startSceneRelativeToProject.generic_string();
@@ -1952,17 +2624,11 @@ namespace CCEngine
         runtimeManifest.GameHeight = projectSettings.Data().GameHeight;
         runtimeManifest.PlayerWindowMode = request.PlayerWindowMode;
         runtimeManifest.DevelopmentBuild = request.DevelopmentBuild;
-        if (startSceneRelativeToProject.empty() || startSceneRelativeToProject.is_absolute() ||
-            !RuntimeManifest::Save(staging / "GameProject.json", runtimeManifest, fileError))
+        if (startSceneRelativeToProject.empty() || startSceneRelativeToProject.is_absolute())
         {
             AddMessage(report, GameBuildMessageSeverity::Error, "Manifest", fileError.empty() ? "Start scene path is outside the project." : fileError, staging / "GameProject.json");
             copySucceeded = false;
         }
-        else
-        {
-            ++report.FilesWritten;
-        }
-
         if (copySucceeded)
         {
             publishProgress("Compile Shaders", 0.68f);
@@ -1971,10 +2637,20 @@ namespace CCEngine
                 dependencies.Assets,
                 report,
                 &incremental,
-                request.DevelopmentBuild && request.AllowDevelopmentShaderFallback);
+                request.DevelopmentBuild && request.AllowDevelopmentShaderFallback,
+                request,
+                runtimeManifest.BackendShaderPackages);
         }
         if (cancellationRequested())
             copySucceeded = false;
+        if (copySucceeded)
+        {
+            copySucceeded = RuntimeManifest::Save(staging / "GameProject.json", runtimeManifest, fileError);
+            if (!copySucceeded)
+                AddMessage(report, GameBuildMessageSeverity::Error, "Manifest", fileError, staging / "GameProject.json");
+            else
+                ++report.FilesWritten;
+        }
         if (copySucceeded)
         {
             publishProgress("Write Manifests", 0.84f);
@@ -2139,6 +2815,11 @@ namespace CCEngine
         request.DevelopmentBuild = data.Configuration == GameBuildConfiguration::Development;
         request.ManagedRuntime = data.ManagedRuntime;
         request.PlayerWindowMode = data.PlayerWindowMode;
+        request.GraphicsAPI = data.GraphicsAPI;
+        request.ShaderCompilerScript = data.ShaderCompilerScript;
+        request.PythonExecutable = data.PythonExecutable;
+        request.DXCExecutable = data.DXCExecutable;
+        request.SpirvCrossExecutable = data.SpirvCrossExecutable;
         request.IncludeDebugSymbols = data.IncludeDebugSymbols;
         request.ExcludeLicensedSampleAssets = data.ExcludeLicensedSampleAssets;
         request.VerifyPlayerFrame = data.VerifyPlayerFrame;

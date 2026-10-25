@@ -8,18 +8,36 @@
 
 namespace CCEngine
 {
-    thread_local VulkanContext* VulkanContext::s_Current = nullptr;
-    VulkanContext::VulkanContext(void* hwnd) : m_Window(static_cast<HWND>(hwnd)) {}
+    VulkanContext::VulkanContext(void* hwnd, std::shared_ptr<VulkanDevice> device)
+        : m_Window(static_cast<HWND>(hwnd)), m_SharedDevice(std::move(device)) {}
+    std::shared_ptr<GraphicsDevice> VulkanContext::GetGraphicsDevice() const { return m_SharedDevice; }
+    uint64_t VulkanContext::NextID() { return m_SharedDevice->NextID(); }
+    VulkanContext& VulkanContext::CurrentFor(const std::shared_ptr<VulkanDevice>& device)
+    {
+        auto* context = dynamic_cast<VulkanContext*>(GraphicsContext::GetCurrent());
+        if (!context || context->m_SharedDevice != device)
+            throw std::logic_error("Resource belongs to another Vulkan device");
+        context->MakeCurrent();
+        return *context;
+    }
     VulkanContext::~VulkanContext() { Release(); }
     VulkanContext& VulkanContext::Current()
     {
-        if (!s_Current) throw std::logic_error("No current VulkanContext");
-        return *s_Current;
+        auto* context = dynamic_cast<VulkanContext*>(GraphicsContext::GetCurrent());
+        if (!context) throw std::logic_error("No current VulkanContext");
+        context->MakeCurrent();
+        return *context;
     }
     void VulkanContext::MakeCurrent()
     {
         if (!m_Device) throw std::logic_error("Vulkan context is not initialized");
-        s_Current = this;
+        const bool switching = GraphicsContext::GetCurrent() != this;
+        m_SharedDevice->AcquireRecording(this);
+        if (switching && m_Target && m_API && !m_InPass)
+        {
+            const auto view = m_API->CaptureView();
+            BeginPass(); m_API->RestoreView(view);
+        }
         SetCurrentContext();
     }
     uint32_t VulkanContext::MemoryType(uint32_t bits, VkMemoryPropertyFlags flags) const
@@ -35,50 +53,19 @@ namespace CCEngine
         if (!IsWindow(m_Window)) throw std::invalid_argument("Invalid Vulkan window");
         try
         {
-            VkApplicationInfo application{ VK_STRUCTURE_TYPE_APPLICATION_INFO };
-            application.pApplicationName = "CCEngine"; application.apiVersion = VK_API_VERSION_1_1;
-            const char* extensions[] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME };
-            VkInstanceCreateInfo instance{ VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
-            instance.pApplicationInfo = &application; instance.enabledExtensionCount = 2; instance.ppEnabledExtensionNames = extensions;
-            CheckVulkan(vkCreateInstance(&instance, nullptr, &m_Instance), "vkCreateInstance");
+            if (!m_SharedDevice) m_SharedDevice = std::make_shared<VulkanDevice>();
+            m_SharedDevice->CheckThread();
+            m_Instance = m_SharedDevice->Instance();
             VkWin32SurfaceCreateInfoKHR surface{ VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR };
             surface.hinstance = GetModuleHandleW(nullptr); surface.hwnd = m_Window;
             CheckVulkan(vkCreateWin32SurfaceKHR(m_Instance, &surface, nullptr, &m_Surface), "vkCreateWin32SurfaceKHR");
-            uint32_t count = 0; CheckVulkan(vkEnumeratePhysicalDevices(m_Instance, &count, nullptr), "vkEnumeratePhysicalDevices");
-            std::vector<VkPhysicalDevice> devices(count);
-            CheckVulkan(vkEnumeratePhysicalDevices(m_Instance, &count, devices.data()), "vkEnumeratePhysicalDevices");
-            for (VkPhysicalDevice candidate : devices)
-            {
-                VkPhysicalDeviceProperties properties{}; vkGetPhysicalDeviceProperties(candidate, &properties);
-                VkPhysicalDeviceFeatures features{}; vkGetPhysicalDeviceFeatures(candidate, &features);
-                if (properties.apiVersion < VK_API_VERSION_1_1 || !features.independentBlend) continue;
-                uint32_t extensionCount = 0;
-                CheckVulkan(vkEnumerateDeviceExtensionProperties(candidate, nullptr, &extensionCount, nullptr), "Device extensions");
-                std::vector<VkExtensionProperties> available(extensionCount);
-                CheckVulkan(vkEnumerateDeviceExtensionProperties(candidate, nullptr, &extensionCount, available.data()), "Device extensions");
-                if (std::none_of(available.begin(), available.end(), [](const auto& e) { return std::strcmp(e.extensionName, VK_KHR_SWAPCHAIN_EXTENSION_NAME) == 0; })) continue;
-                uint32_t queueCount = 0; vkGetPhysicalDeviceQueueFamilyProperties(candidate, &queueCount, nullptr);
-                std::vector<VkQueueFamilyProperties> queues(queueCount); vkGetPhysicalDeviceQueueFamilyProperties(candidate, &queueCount, queues.data());
-                for (uint32_t i = 0; i < queueCount; ++i)
-                {
-                    VkBool32 present = VK_FALSE;
-                    CheckVulkan(vkGetPhysicalDeviceSurfaceSupportKHR(candidate, i, m_Surface, &present), "Surface support");
-                    if ((queues[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) && present)
-                    { m_Physical = candidate; m_QueueFamily = i; m_Properties = properties; break; }
-                }
-                if (m_Physical) break;
-            }
-            if (!m_Physical) throw std::runtime_error("No Vulkan 1.1 graphics/present device with independentBlend");
-            const float priority = 1;
-            VkDeviceQueueCreateInfo queue{ VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO };
-            queue.queueFamilyIndex = m_QueueFamily; queue.queueCount = 1; queue.pQueuePriorities = &priority;
-            VkPhysicalDeviceFeatures features{}; features.independentBlend = VK_TRUE;
-            const char* deviceExtensions[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
-            VkDeviceCreateInfo device{ VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
-            device.queueCreateInfoCount = 1; device.pQueueCreateInfos = &queue; device.pEnabledFeatures = &features;
-            device.enabledExtensionCount = 1; device.ppEnabledExtensionNames = deviceExtensions;
-            CheckVulkan(vkCreateDevice(m_Physical, &device, nullptr, &m_Device), "vkCreateDevice");
-            vkGetDeviceQueue(m_Device, m_QueueFamily, 0, &m_Queue);
+            m_SharedDevice->EnsureSurface(m_Surface);
+            m_Device = m_SharedDevice->Native();
+            m_Physical = m_SharedDevice->Physical();
+            m_Properties = m_SharedDevice->Properties();
+            m_QueueFamily = m_SharedDevice->QueueFamily();
+            m_Queue = m_SharedDevice->Queue();
+            m_SharedDevice->Attach(this);
             VkCommandPoolCreateInfo pool{ VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
             pool.queueFamilyIndex = m_QueueFamily; pool.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
             CheckVulkan(vkCreateCommandPool(m_Device, &pool, nullptr, &m_CommandPool), "vkCreateCommandPool");
@@ -122,6 +109,7 @@ namespace CCEngine
             const uint32_t black = 0; Upload(*m_EmptyImage, &black, sizeof(black)); Flush();
             VulkanRendererServices services;
             services.TextureSlots = m_TextureSlots;
+            services.Device = m_SharedDevice;
             services.EmptyTexture = { m_Sampler, m_EmptyImage->View, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
             services.ResizeSwapchain = [this](uint32_t w, uint32_t h) { ResizeBuffers(w, h); };
             services.ValidateIndexCount = [this](uint32_t count)
@@ -136,6 +124,7 @@ namespace CCEngine
     }
     void VulkanContext::DestroySwapchain()
     {
+        m_BackbufferReadable = false;
         m_Target = nullptr; m_Backbuffers.clear();
         for (auto semaphore : m_PresentSemaphores) vkDestroySemaphore(m_Device, semaphore, nullptr);
         m_PresentSemaphores.clear();
@@ -144,6 +133,7 @@ namespace CCEngine
     }
     void VulkanContext::ResizeBuffers(uint32_t width, uint32_t height)
     {
+        m_SharedDevice->AcquireRecording(this);
         Flush(); CheckVulkan(vkDeviceWaitIdle(m_Device), "vkDeviceWaitIdle(resize)");
         DestroySwapchain();
         m_Extent = { width, height };
@@ -176,6 +166,10 @@ namespace CCEngine
         if (capabilities.maxImageCount) info.minImageCount = std::min(info.minImageCount, capabilities.maxImageCount);
         info.imageFormat = format.format; info.imageColorSpace = format.colorSpace; info.imageExtent = m_Extent;
         info.imageArrayLayers = 1; info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT; info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        // Surface가 전송 읽기를 허용할 때만 요청한다. 캡처 미지원 때문에
+        // 정상 렌더링 가능한 장치의 swapchain 생성까지 실패시키지 않는다.
+        m_BackbufferReadable = (capabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
+        if (m_BackbufferReadable) info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         info.preTransform = capabilities.currentTransform; info.presentMode = mode; info.clipped = VK_TRUE;
         for (auto alpha : { VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR, VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR, VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR })
             if (capabilities.supportedCompositeAlpha & alpha) { info.compositeAlpha = alpha; break; }
@@ -223,6 +217,32 @@ namespace CCEngine
         if (!m_InPass) return;
         m_API->SetClearColor(r, g, b, a); m_API->Clear();
     }
+    bool VulkanContext::ReadBackBuffer(std::vector<uint8_t>& pixels, uint32_t& width, uint32_t& height)
+    {
+        pixels.clear(); width = height = 0;
+        // Present 이후에는 소유권이 Surface로 넘어간다. 새 이미지를 acquire해서
+        // 이전 프레임인 것처럼 반환하지 않고 현재 확보한 이미지에만 접근한다.
+        if (!m_BackbufferReadable || !m_Acquired || !m_Device || m_SharedDevice->Failed() ||
+            m_ImageIndex >= m_Backbuffers.size()) return false;
+        try
+        {
+            MakeCurrent();
+            auto& image = *m_Backbuffers[m_ImageIndex]->Colors[0];
+            const auto w = image.Extent.width, h = image.Extent.height;
+            if (!w || !h || size_t(w) > std::numeric_limits<size_t>::max() / 4 / h) return false;
+            const bool bgra = image.Format == VK_FORMAT_B8G8R8A8_UNORM || image.Format == VK_FORMAT_B8G8R8A8_SRGB;
+            if (!bgra && image.Format != VK_FORMAT_R8G8B8A8_UNORM && image.Format != VK_FORMAT_R8G8B8A8_SRGB)
+                return false;
+            std::vector<uint8_t> result(size_t(w) * h * 4);
+            // 기존 ReadImage가 acquire 대기, 전송 완료, 이미지 layout 복원을 담당한다.
+            ReadImage(image, 0, 0, w, h, result.data());
+            if (bgra)
+                for (size_t i = 0; i < result.size(); i += 4) std::swap(result[i], result[i + 2]);
+            pixels.swap(result); width = w; height = h;
+            return true;
+        }
+        catch (...) { return false; }
+    }
     void VulkanContext::SwapBuffers(bool vsync)
     {
         if (!m_Acquired && m_Swapchain) BindBackBuffer();
@@ -230,7 +250,9 @@ namespace CCEngine
         EndPass();
         BeginRecording();
         Transition(m_Command, *m_Backbuffers[m_ImageIndex]->Colors[0], VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
-        Submit(true); m_Target = nullptr;
+        try { Submit(true); }
+        catch (...) { m_SharedDevice->MarkFailed(); throw; }
+        m_Target = nullptr;
         if (m_VSync != vsync || m_Recreate)
         {
             m_VSync = vsync; RECT rect{}; GetClientRect(m_Window, &rect); ResizeBuffers(rect.right, rect.bottom);
@@ -238,10 +260,16 @@ namespace CCEngine
     }
     void VulkanContext::Release() noexcept
     {
+        if (m_Device && !m_SharedDevice->Failed())
+        {
+            try { m_SharedDevice->AcquireRecording(this); Flush(); }
+            catch (...) { m_SharedDevice->MarkFailed(); }
+        }
         m_Releasing = true;
         if (m_Device)
         {
-            vkDeviceWaitIdle(m_Device);
+            if (vkDeviceWaitIdle(m_Device) != VK_SUCCESS) m_SharedDevice->MarkFailed();
+            m_SharedDevice->EndRecording(this);
             m_Recording = m_InPass = false; m_Target = nullptr;
             DestroySwapchain();
             m_Vertex.reset(); m_Index.reset(); m_Shader.reset();
@@ -259,12 +287,12 @@ namespace CCEngine
             if (m_Acquire) vkDestroySemaphore(m_Device, m_Acquire, nullptr);
             if (m_Fence) vkDestroyFence(m_Device, m_Fence, nullptr);
             if (m_CommandPool) vkDestroyCommandPool(m_Device, m_CommandPool, nullptr);
-            vkDestroyDevice(m_Device, nullptr); m_Device = VK_NULL_HANDLE;
+            m_Device = VK_NULL_HANDLE;
         }
         if (m_Surface) vkDestroySurfaceKHR(m_Instance, m_Surface, nullptr);
-        if (m_Instance) vkDestroyInstance(m_Instance, nullptr);
+        if (m_SharedDevice) m_SharedDevice->Detach(this);
         m_Surface = VK_NULL_HANDLE; m_Instance = VK_NULL_HANDLE;
-        if (s_Current == this) s_Current = nullptr;
+
     }
 }
 #endif

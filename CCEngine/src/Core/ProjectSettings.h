@@ -1,6 +1,7 @@
 #pragma once
 #include "Core.h"
 #include <string>
+#include <vector>
 
 namespace CCEngine
 {
@@ -18,11 +19,14 @@ namespace CCEngine
         std::string MoveUpKey = "E";
         std::string MoveDownKey = "Q";
         std::string VisualStudioPath;
+        std::string EditorGraphicsAPI = "DirectX11";
     };
 
     class CC_API ProjectSettings
     {
     public:
+        static std::vector<std::string> ResolveEditorGraphicsArguments(
+            const std::vector<std::string>& arguments, const std::string& filepath = "project.ccproject");
         bool Load(const std::string& filepath = "project.ccproject");
         bool Save(const std::string& filepath = "project.ccproject") const;
         void Normalize();

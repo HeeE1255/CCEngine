@@ -15,6 +15,7 @@ namespace CCEngine
 
 			inline unsigned int GetWidth() const override { return m_Data.Width; }
 			inline unsigned int GetHeight() const override { return m_Data.Height; }
+			bool IsWindowMinimized() const override;
 			inline void SetWidth(unsigned int width) { m_Data.Width = width; }
 			inline void SetHeight(unsigned int height) { m_Data.Height = height; }
 			inline WindowMode GetWindowMode() const { return m_Data.Mode; }

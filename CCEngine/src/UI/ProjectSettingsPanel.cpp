@@ -1,5 +1,6 @@
 #include "UI/ProjectSettingsPanel.h"
 #include "Renderer/UIRenderer.h"
+#include "Renderer/RendererAPI.h"
 #include "Core/ConsoleLog.h"
 #include "UI/Button.h"
 #include "UI/KeyBindingInput.h"
@@ -102,6 +103,43 @@ namespace CCEngine::UI
         m_BtnApplyResolution->SetOffsetMin(SidebarWidth + 120.0f, 208.0f);
         m_BtnApplyResolution->SetOffsetMax(SidebarWidth + 415.0f, 234.0f);
         AddChild(m_BtnApplyResolution);
+
+        const RendererAPI::API graphicsAPIs[] = { RendererAPI::API::DirectX11,
+            RendererAPI::API::DirectX12, RendererAPI::API::OpenGL, RendererAPI::API::Vulkan };
+        const char* graphicsLabels[] = { "DX11", "DX12", "OpenGL", "Vulkan" };
+        for (int i = 0; i < 4; ++i)
+        {
+            const auto api = graphicsAPIs[i];
+            const bool available = RendererAPI::GetUnavailableReason(api) == nullptr;
+            auto* button = new Button("EditorGraphicsAPI" + std::to_string(i),
+                std::string(graphicsLabels[i]) + (available ? "" : " (N/A)"));
+            button->SetAnchorMin(0.0f, 0.0f);
+            button->SetAnchorMax(0.0f, 0.0f);
+            const float column = static_cast<float>(i % 2) * 212.0f;
+            const float row = static_cast<float>(i / 2) * 28.0f;
+            button->SetOffsetMin(SidebarWidth + 18.0f + column, 310.0f + row);
+            button->SetOffsetMax(SidebarWidth + 226.0f + column, 336.0f + row);
+            if (!available)
+            {
+                button->SetNormalColor({ 0.14f, 0.14f, 0.14f, 1.0f });
+                button->SetHoverColor({ 0.14f, 0.14f, 0.14f, 1.0f });
+                button->SetClickColor({ 0.14f, 0.14f, 0.14f, 1.0f });
+            }
+            button->SetOnClick([this, api]()
+                {
+                    if (!m_Settings) return;
+                    if (const char* reason = RendererAPI::GetUnavailableReason(api))
+                    {
+                        ConsoleLog::Warning(std::string(RendererAPI::GetAPIName(api)) + ": " + reason);
+                        return;
+                    }
+                    // 실행 중인 장치는 건드리지 않는다. 기존 저장 버튼으로 기록한 뒤
+                    // 다음 프로세스 시작 때 씬과 UI가 같은 API로 만들어진다.
+                    m_Settings->Data().EditorGraphicsAPI = RendererAPI::GetAPIName(api);
+                });
+            AddChild(button);
+            m_GraphicsAPIButtons[i] = button;
+        }
 
         auto configureInputBinding = [this](KeyBindingInput*& input, const char* name, const char* binding, float y, std::string ProjectSettingsData::* target)
             {
@@ -289,6 +327,8 @@ namespace CCEngine::UI
         if (m_GameWidthInput) m_GameWidthInput->SetVisible(isGraphics);
         if (m_GameHeightInput) m_GameHeightInput->SetVisible(isGraphics);
         if (m_BtnApplyResolution) m_BtnApplyResolution->SetVisible(isGraphics);
+        for (auto* button : m_GraphicsAPIButtons)
+            if (button) button->SetVisible(isGraphics);
         if (m_MoveForwardInput) m_MoveForwardInput->SetVisible(isInput);
         if (m_MoveBackwardInput) m_MoveBackwardInput->SetVisible(isInput);
         if (m_MoveLeftInput) m_MoveLeftInput->SetVisible(isInput);
@@ -404,6 +444,18 @@ namespace CCEngine::UI
             UIRenderer::DrawString("Width", detailX + 120.0f, y + 50.0f, { 0.62f, 0.62f, 0.62f, 1.0f });
             UIRenderer::DrawString("Height", detailX + 285.0f, y + 50.0f, { 0.62f, 0.62f, 0.62f, 1.0f });
             UIRenderer::DrawString("Used as the default resolution for play/build output.", detailX, y + 122.0f, { 0.62f, 0.62f, 0.62f, 1.0f });
+            const std::string currentAPI = RendererAPI::GetAPIName(RendererAPI::GetAPI());
+            UIRenderer::DrawString("Editor API", detailX, m_CalculatedPos.y + 270.0f, { 0.68f, 0.68f, 0.68f, 1.0f });
+            UIRenderer::DrawString(currentAPI, detailX + 120.0f, m_CalculatedPos.y + 270.0f, { 0.88f, 0.88f, 0.88f, 1.0f });
+            UIRenderer::DrawString("Next Launch", detailX, m_CalculatedPos.y + 296.0f, { 0.68f, 0.68f, 0.68f, 1.0f });
+            UIRenderer::DrawString(data.EditorGraphicsAPI.substr(0, 24), detailX + 120.0f,
+                m_CalculatedPos.y + 296.0f, { 0.88f, 0.88f, 0.88f, 1.0f });
+            const char* names[] = { "DirectX11", "DirectX12", "OpenGL", "Vulkan" };
+            for (int i = 0; i < 4; ++i)
+                m_GraphicsAPIButtons[i]->SetActive(data.EditorGraphicsAPI == names[i]);
+            if (currentAPI != data.EditorGraphicsAPI)
+                UIRenderer::DrawString("Pending: save and restart editor", detailX,
+                    m_CalculatedPos.y + 384.0f, { 0.95f, 0.75f, 0.35f, 1.0f });
         }
         else
         {

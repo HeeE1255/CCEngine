@@ -3,6 +3,10 @@
 #include <stdint.h> 
 #include <string>
 #include <vector>
+#include <stdexcept>
+#include <unordered_set>
+#include <algorithm>
+#include <cctype>
 
 namespace CCEngine
 {
@@ -66,6 +70,24 @@ namespace CCEngine
 
         inline uint32_t GetStride() const { return m_Stride; }
         inline const std::vector<BufferElement>& GetElements() const { return m_Elements; }
+        void Validate(uint32_t actualStride = 0) const
+        {
+            if (!m_Stride || m_Stride > 2048 || (actualStride && actualStride != m_Stride))
+                throw std::invalid_argument("Invalid vertex stride or CPU vertex size mismatch");
+            std::unordered_set<std::string> names;
+            uint32_t end = 0;
+            for (const auto& element : m_Elements)
+            {
+                // 범위 검사는 뺄셈으로 수행해 잘못된 offset의 정수 오버플로를 피한다.
+                if (element.Name.empty() || !names.insert(element.Name).second ||
+                    !element.Size || element.Size != ShaderDataTypeSize(element.Type) ||
+                    element.Type == ShaderDataType::Bool || element.Normalized ||
+                    element.Offset % 4 || element.Offset < end || element.Offset > m_Stride ||
+                    element.Size > m_Stride - element.Offset)
+                    throw std::invalid_argument("Invalid vertex element: " + element.Name);
+                end = element.Offset + element.Size;
+            }
+        }
 
         std::vector<BufferElement>::iterator begin() { return m_Elements.begin(); }
         std::vector<BufferElement>::iterator end() { return m_Elements.end(); }
@@ -89,6 +111,65 @@ namespace CCEngine
         std::vector<BufferElement> m_Elements;
         uint32_t m_Stride = 0;
     };
+
+    struct VertexInput
+    {
+        std::string Semantic;
+        ShaderDataType Type = ShaderDataType::None;
+        uint32_t Location = 0;
+    };
+
+    struct ResolvedVertexInput
+    {
+        ShaderDataType Type;
+        uint32_t Location, Offset;
+    };
+
+    inline std::string NormalizeVertexSemantic(std::string name)
+    {
+        std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+        // HLSL에서 생략한 semantic index는 0이다. TEXCOORD와 TEXCOORD0을 같은 입력으로 본다.
+        if (!name.empty() && name.back() == '0' && (name.size() == 1 || !std::isdigit(static_cast<unsigned char>(name[name.size() - 2]))))
+            name.pop_back();
+        return name;
+    }
+
+    inline void ValidateVertexInputs(const std::vector<VertexInput>& inputs)
+    {
+        std::unordered_set<std::string> semantics;
+        std::unordered_set<uint32_t> locations;
+        for (const auto& input : inputs)
+        {
+            const auto name = NormalizeVertexSemantic(input.Semantic);
+            const bool scalarVector = (input.Type >= ShaderDataType::Float && input.Type <= ShaderDataType::Float4) ||
+                (input.Type >= ShaderDataType::Int && input.Type <= ShaderDataType::Int4);
+            if (name.empty() || !scalarVector || input.Location >= 32 ||
+                !semantics.insert(name).second || !locations.insert(input.Location).second)
+                throw std::invalid_argument("Invalid shader vertex input: " + input.Semantic);
+        }
+    }
+
+    inline std::vector<ResolvedVertexInput> ResolveVertexInputs(const BufferLayout& layout, const std::vector<VertexInput>& inputs)
+    {
+        layout.Validate();
+        ValidateVertexInputs(inputs);
+        std::unordered_set<std::string> names;
+        for (const auto& element : layout)
+            if (!names.insert(NormalizeVertexSemantic(element.Name)).second)
+                throw std::invalid_argument("Duplicate vertex semantic: " + element.Name);
+        std::vector<ResolvedVertexInput> result;
+        for (const auto& input : inputs)
+        {
+            const auto semantic = NormalizeVertexSemantic(input.Semantic);
+            auto found = std::find_if(layout.begin(), layout.end(), [&](const BufferElement& element) {
+                return NormalizeVertexSemantic(element.Name) == semantic;
+            });
+            if (found == layout.end() || found->Type != input.Type)
+                throw std::invalid_argument("Missing or incompatible vertex input: " + input.Semantic);
+            result.push_back({input.Type, input.Location, found->Offset});
+        }
+        return result;
+    }
 
     class CC_API VertexBuffer
     {

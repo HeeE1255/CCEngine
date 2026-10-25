@@ -127,6 +127,8 @@ namespace CCEngine
             throw std::logic_error("DX12 draw requires valid target, shader and buffers");
         if (!m_Layout.GetStride() || m_Layout.GetStride() > 2048 || m_Layout.GetStride() > m_Vertex->Size)
             throw std::invalid_argument("Invalid DX12 vertex stride");
+        // 바인딩 순서와 캐시 적중 여부에 관계없이 실제 draw의 입력 계약을 먼저 검사한다.
+        if (m_Program->HasInputs) ResolveVertexInputs(m_Layout, m_Program->Inputs);
         if (!m_Viewport.Width || !m_Viewport.Height ||
             (m_ScissorEnabled && (m_Scissor.left == m_Scissor.right || m_Scissor.top == m_Scissor.bottom))) return;
         auto* pipeline = Pipeline(blend, cull, depth);

@@ -1,9 +1,11 @@
 #include "Core/ProjectSettings.h"
 #include "Core/ConsoleLog.h"
+#include "Renderer/RendererAPI.h"
 #include "json.hpp"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 
 namespace CCEngine
 {
@@ -31,6 +33,53 @@ namespace CCEngine
     }
     }
 
+    std::vector<std::string> ProjectSettings::ResolveEditorGraphicsArguments(
+        const std::vector<std::string>& arguments, const std::string& filepath)
+    {
+        // 창을 만든 뒤에는 장치와 UI 자원이 이미 묶인다. 설정은 반드시 생성 전에 읽고,
+        // 명시적인 실행 인수는 손상된 설정 파일을 수정할 수 있는 복구 경로로 남긴다.
+        for (const auto& argument : arguments)
+            if (argument == "-dx11" || argument == "-dx12" || argument == "-opengl" || argument == "-vulkan")
+                return arguments;
+
+        std::string name = "DirectX11";
+        if (std::filesystem::exists(filepath))
+        {
+            try
+            {
+                std::ifstream input(filepath);
+                if (!input) throw std::runtime_error("Cannot read project settings.");
+                nlohmann::json settings;
+                input >> settings;
+                if (!settings.is_object()) throw std::runtime_error("Project settings must be an object.");
+                name = settings.value("EditorGraphicsAPI", name);
+            }
+            catch (const std::exception& error)
+            {
+                throw std::runtime_error("Editor graphics settings: " + std::string(error.what())
+                    + " Start with -dx11 to recover. File: " + filepath);
+            }
+        }
+
+        struct Choice { const char* Name; const char* Flag; RendererAPI::API API; };
+        const Choice choices[] = {
+            { "DirectX11", "-dx11", RendererAPI::API::DirectX11 },
+            { "DirectX12", "-dx12", RendererAPI::API::DirectX12 },
+            { "OpenGL", "-opengl", RendererAPI::API::OpenGL },
+            { "Vulkan", "-vulkan", RendererAPI::API::Vulkan }
+        };
+        for (const auto& choice : choices)
+        {
+            if (name != choice.Name) continue;
+            if (const char* reason = RendererAPI::GetUnavailableReason(choice.API))
+                throw std::runtime_error(name + ": " + reason + " Start with -dx11 to recover.");
+            auto resolved = arguments;
+            resolved.emplace_back(choice.Flag);
+            return resolved;
+        }
+        throw std::runtime_error("Unknown EditorGraphicsAPI: " + name + ". Start with -dx11 to recover.");
+    }
+
     bool ProjectSettings::Load(const std::string& filepath)
     {
         std::ifstream in(filepath);
@@ -46,6 +95,7 @@ namespace CCEngine
         try
         {
             in >> data;
+            if (!data.is_object()) throw std::runtime_error("Project settings must be an object.");
         }
         catch (...)
         {
@@ -66,6 +116,9 @@ namespace CCEngine
         m_Data.MoveUpKey = data.value("MoveUpKey", m_Data.MoveUpKey);
         m_Data.MoveDownKey = data.value("MoveDownKey", m_Data.MoveDownKey);
         m_Data.VisualStudioPath = data.value("VisualStudioPath", m_Data.VisualStudioPath);
+        // 복구 인수로 실행한 경우에도 잘못된 API 필드 때문에 설정 창 진입을 막지 않는다.
+        if (data.contains("EditorGraphicsAPI") && data["EditorGraphicsAPI"].is_string())
+            m_Data.EditorGraphicsAPI = data["EditorGraphicsAPI"].get<std::string>();
         Normalize();
 
         ConsoleLog::Info("Project settings loaded: " + filepath);
@@ -89,6 +142,7 @@ namespace CCEngine
         data["MoveUpKey"] = safeData.MoveUpKey;
         data["MoveDownKey"] = safeData.MoveDownKey;
         data["VisualStudioPath"] = safeData.VisualStudioPath;
+        data["EditorGraphicsAPI"] = safeData.EditorGraphicsAPI;
 
         try
         {
@@ -110,6 +164,12 @@ namespace CCEngine
         }
 
         out << data.dump(4);
+        out.flush();
+        if (!out)
+        {
+            ConsoleLog::Error("Failed to write project settings: " + filepath);
+            return false;
+        }
         ConsoleLog::Info("Project settings saved: " + filepath);
         return true;
     }

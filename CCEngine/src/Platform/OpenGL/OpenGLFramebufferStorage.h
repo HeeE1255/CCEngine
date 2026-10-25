@@ -22,7 +22,8 @@ namespace CCEngine
         void ClearAttachment(uint32_t index, int value) override;
     private:
         struct Storage;
-        OpenGLContext& m_Context;
+        OpenGLContext& Context() const { return OpenGLContext::CurrentFor(m_Device); }
+        std::shared_ptr<OpenGLDevice> m_Device;
         FramebufferSpecification m_Spec{};
         std::unique_ptr<Storage> m_Storage;
     };

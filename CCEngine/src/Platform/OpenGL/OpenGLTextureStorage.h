@@ -18,7 +18,8 @@ namespace CCEngine
         void SetData(void* data, uint32_t size) override;
         RendererHandle GetRendererID() const override { return reinterpret_cast<RendererHandle>(static_cast<uintptr_t>(m_Texture)); }
     private:
-        OpenGLContext& m_Context;
+        OpenGLContext& Context() const { return OpenGLContext::CurrentFor(m_Device); }
+        std::shared_ptr<OpenGLDevice> m_Device;
         GLuint m_Texture = 0;
         uint32_t m_Width = 0, m_Height = 0;
         void Allocate(const void* pixels);

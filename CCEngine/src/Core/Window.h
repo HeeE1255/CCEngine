@@ -40,6 +40,7 @@ namespace CCEngine
 
 		virtual unsigned int GetWidth() const = 0;
 		virtual unsigned int GetHeight() const = 0;
+		virtual bool IsWindowMinimized() const { return false; }
 		virtual bool ShouldClose() const = 0; // 창이 닫혀야 하는지 여부 반환 (예: 사용자가 닫기 버튼을 눌렀는지)
 		virtual GraphicsContext* GetContext() const = 0;
 		virtual void SetRootUI(UI::Widget* rootWidget) = 0;

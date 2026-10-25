@@ -40,10 +40,11 @@ namespace CCEngine::UI
     private:
         void SyncControls();
         void SaveProfile();
-        void StartBuild(bool runAfterBuild);
+        void StartBuild(bool runAfterBuild, bool checkTools = false);
         void CancelBuild();
         void OpenOutputFolder();
         void RefreshModeButtons();
+        void ShowShaderTools(bool show);
         void RemoveSelectedAlwaysInclude();
         int GetAlwaysIncludeIndexAt(float mouseX, float mouseY) const;
         int GetMessageIndexAt(float mouseX, float mouseY) const;
@@ -70,6 +71,14 @@ namespace CCEngine::UI
         Button* m_BuildAndRun = nullptr;
         Button* m_Cancel = nullptr;
         Button* m_OpenOutput = nullptr;
+        Button* m_ShaderTools = nullptr;
+        TextInput* m_ToolInputs[4] = {};
+        std::vector<Widget*> m_ToolControls;
+        bool m_ShowShaderTools = false;
+        bool m_CheckingTools = false;
+        Button* m_CheckTools = nullptr;
+        std::filesystem::path m_ToolLog;
+        std::vector<std::string> m_ToolVersions;
 
         std::future<GameBuildReport> m_BuildTask;
         std::shared_ptr<std::atomic_bool> m_CancelRequested;

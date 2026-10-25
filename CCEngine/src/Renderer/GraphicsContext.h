@@ -43,7 +43,5 @@ namespace CCEngine
     protected:
         GraphicsContext() = default;
         void SetCurrentContext();
-    private:
-        static thread_local GraphicsContext* s_Current;
     };
 }

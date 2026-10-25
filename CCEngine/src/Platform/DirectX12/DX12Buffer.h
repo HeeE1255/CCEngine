@@ -24,7 +24,7 @@ namespace CCEngine
         void Bind() const override { DX12Context::CurrentFor(m_Device).BindVertex(m_Buffer, m_Layout); }
         void Unbind() const override { DX12Context::CurrentFor(m_Device).BindVertex(nullptr, {}); }
         const BufferLayout& GetLayout() const override { return m_Layout; }
-        void SetLayout(const BufferLayout& layout) override { m_Layout = layout; }
+        void SetLayout(const BufferLayout& layout) override { layout.Validate(); m_Layout = layout; }
         void SetData(const void* data, uint32_t size) override { Update(data, size); }
     private:
         BufferLayout m_Layout;

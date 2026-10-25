@@ -30,14 +30,16 @@ cbuffer TransformBuffer : register(b1)
 
 cbuffer BoneBuffer : register(b2)
 {
-    matrix g_FinalBoneMatrices[100];
+    matrix g_FinalBoneMatrices[512];
 };
 
 cbuffer SceneBuffer : register(b3)
 {
     LightInfo g_Lights[4];
     int g_LightCount;
-    float3 g_ScenePad2;
+    float g_ScenePad0;
+    float g_ScenePad1;
+    float g_ScenePad2;
 };
 
 cbuffer MaterialPropertyBuffer : register(b4)

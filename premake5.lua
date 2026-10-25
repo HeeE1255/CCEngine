@@ -1,3 +1,8 @@
+newoption {
+    trigger = "with-dx12",
+    description = "Compile the experimental DX12 backend (runtime selection remains disabled)"
+}
+
 workspace "CCEngine"
     architecture "x64"
     startproject "Sandbox"
@@ -96,6 +101,11 @@ project "CCEngine"
         "Box2D",
         "assimp-vc145-mt.lib" -- [Assimp 추가] 라이브러리 링크 (파일명이 일치하는지 꼭 확인하세요!)
     }
+
+    if _OPTIONS["with-dx12"] then
+        defines { "CC_ENABLE_DX12_RHI" }
+        links { "d3d12", "bcrypt" }
+    end
 
     postbuildcommands {
 	("{COPY} %{prj.location}/vendor/Assimp/bin/*.dll %{cfg.targetdir}")

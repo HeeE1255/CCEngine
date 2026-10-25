@@ -566,6 +566,7 @@ namespace CCEngine
 		break;
 
 
+
 		}
 		return DefWindowProc(hWnd, message, wParam, lParam);
 	}
@@ -692,6 +693,11 @@ namespace CCEngine
 		}
 		DragAcceptFiles(m_Window, TRUE);
 		ShowWindow(m_Window, SW_SHOW);
+	}
+
+	bool WindowsWindow::IsWindowMinimized() const
+	{
+		return m_Window && IsIconic(m_Window) != FALSE;
 	}
 
 	void WindowsWindow::Shutdown()

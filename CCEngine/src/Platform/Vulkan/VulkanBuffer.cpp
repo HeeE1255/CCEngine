@@ -19,7 +19,7 @@ namespace CCEngine
         }
     }
     VulkanBufferStorage::VulkanBufferStorage(VulkanContext& context, uint32_t size, VkBufferUsageFlags usage, const void* data)
-        : m_Context(context), m_Usage(usage), m_Shadow(size, 0)
+        : m_Device(context.SharedDevice()), m_Usage(usage), m_Shadow(size, 0)
     {
         if (!size) throw std::invalid_argument("Empty GPU buffer");
         if (data) std::memcpy(m_Shadow.data(), data, size);
@@ -32,8 +32,8 @@ namespace CCEngine
         auto shadow = m_Shadow;
         std::memcpy(shadow.data(), data, size);
         // 아직 제출되지 않은 draw도 이전 값을 참조한다. 덮어쓰기 대신 새 할당을 바인딩하고 이전 할당은 fence 뒤에 해제한다.
-        auto replacement = std::make_shared<VulkanBufferAllocation>(m_Context, shadow.size(), m_Usage, shadow.data());
-        m_Context.ReplaceBuffer(m_Buffer, replacement);
+        auto replacement = std::make_shared<VulkanBufferAllocation>(Context(), shadow.size(), m_Usage, shadow.data());
+        m_Device->ReplaceBuffer(m_Buffer, replacement);
         m_Buffer = std::move(replacement); m_Shadow.swap(shadow);
     }
     VulkanVertexBuffer::VulkanVertexBuffer(VulkanContext& context, uint32_t size, const void* data)

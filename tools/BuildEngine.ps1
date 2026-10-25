@@ -3,7 +3,8 @@ param(
     [string]$Configuration = "Debug",
     [ValidateSet("x64")]
     [string]$Platform = "x64",
-    [switch]$Clean
+    [switch]$Clean,
+    [switch]$EnableDX12
 )
 
 $ErrorActionPreference = "Stop"
@@ -52,12 +53,13 @@ $toolchainReport = [ordered]@{
     MSBuildVersion = $version
     Configuration = $Configuration
     Platform = $Platform
+    EnableDX12 = [bool]$EnableDX12
     ProcessArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString()
 }
 $toolchainReport | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $reportRoot "toolchain-$Configuration.json") -Encoding UTF8
 
 $target = if ($Clean) { "Rebuild" } else { "Build" }
-& $msbuild $solution "/t:$target" "/p:Configuration=$Configuration" "/p:Platform=$Platform" "/p:PreferredToolArchitecture=x64" "/m:1" "/v:minimal"
+& $msbuild $solution "/t:$target" "/p:Configuration=$Configuration" "/p:Platform=$Platform" "/p:PreferredToolArchitecture=x64" "/p:CCEnableDX12=$($EnableDX12.IsPresent.ToString().ToLowerInvariant())" "/m:1" "/v:minimal"
 if ($LASTEXITCODE -ne 0) {
     throw "CCEngine $Configuration $Platform 빌드 실패: exit $LASTEXITCODE"
 }

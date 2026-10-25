@@ -28,6 +28,11 @@ namespace CCEngine
         std::string ProductVersion = "0.1.0";
         std::string UpdateChannel = "Stable";
         std::string ExecutableName = "Game";
+        std::string GraphicsAPI = "DirectX11";
+        std::string ShaderCompilerScript;
+        std::string PythonExecutable = "python.exe";
+        std::string DXCExecutable = "dxc.exe";
+        std::string SpirvCrossExecutable = "spirv-cross.exe";
         std::filesystem::path OutputDirectory = "Build/Windows";
         GameBuildConfiguration Configuration = GameBuildConfiguration::Development;
         ManagedRuntimeDeployment ManagedRuntime = ManagedRuntimeDeployment::SelfContained;

@@ -13,12 +13,13 @@ namespace CCEngine
         ~VulkanTexture2D() override;
         VulkanTexture2D(const VulkanTexture2D&) = delete;
         VulkanTexture2D& operator=(const VulkanTexture2D&) = delete;
-        void Bind(uint32_t slot = 0) const override { m_Context.Commands().BindTexture(slot, m_Handle); }
-        void Unbind(uint32_t slot = 0) const override { m_Context.Commands().BindTexture(slot, nullptr); }
+        void Bind(uint32_t slot = 0) const override { Context().Commands().BindTexture(slot, m_Handle); }
+        void Unbind(uint32_t slot = 0) const override { Context().Commands().BindTexture(slot, nullptr); }
         void SetData(void* data, uint32_t size) override;
         RendererHandle GetRendererID() const override { return m_Handle; }
     private:
-        VulkanContext& m_Context;
+        std::shared_ptr<VulkanDevice> m_Device;
+        VulkanContext& Context() const { return VulkanContext::CurrentFor(m_Device); }
         VkExtent2D m_Extent{};
         std::shared_ptr<VulkanImageAllocation> m_Image;
         RendererHandle m_Handle = nullptr;

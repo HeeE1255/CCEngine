@@ -1,6 +1,7 @@
 #include "Build/GameBuildProfile.h"
 
 #include "json.hpp"
+#include "Renderer/RendererAPI.h"
 
 #include <algorithm>
 #include <cctype>
@@ -121,6 +122,12 @@ namespace CCEngine
             m_Data.ProductVersion = json.value("ProductVersion", m_Data.ProductVersion);
             m_Data.UpdateChannel = json.value("UpdateChannel", m_Data.UpdateChannel);
             m_Data.ExecutableName = json.value("ExecutableName", m_Data.ExecutableName);
+            m_Data.GraphicsAPI = json.value("GraphicsAPI", std::string("DirectX11"));
+            RendererAPI::ParseAPIName(m_Data.GraphicsAPI);
+            m_Data.ShaderCompilerScript = json.value("ShaderCompilerScript", std::string());
+            m_Data.PythonExecutable = json.value("PythonExecutable", std::string("python.exe"));
+            m_Data.DXCExecutable = json.value("DXCExecutable", std::string("dxc.exe"));
+            m_Data.SpirvCrossExecutable = json.value("SpirvCrossExecutable", std::string("spirv-cross.exe"));
             m_Data.OutputDirectory = json.value("OutputDirectory", m_Data.OutputDirectory.generic_string());
             m_Data.Configuration = json.value("Configuration", std::string("Development")) == "Release"
                 ? GameBuildConfiguration::Release : GameBuildConfiguration::Development;
@@ -169,6 +176,13 @@ namespace CCEngine
         json["ProductVersion"] = data.ProductVersion;
         json["UpdateChannel"] = data.UpdateChannel;
         json["ExecutableName"] = data.ExecutableName;
+        try { RendererAPI::ParseAPIName(data.GraphicsAPI); }
+        catch (const std::exception& exception) { error = exception.what(); return false; }
+        json["GraphicsAPI"] = data.GraphicsAPI;
+        json["ShaderCompilerScript"] = data.ShaderCompilerScript;
+        json["PythonExecutable"] = data.PythonExecutable;
+        json["DXCExecutable"] = data.DXCExecutable;
+        json["SpirvCrossExecutable"] = data.SpirvCrossExecutable;
         json["OutputDirectory"] = data.OutputDirectory.generic_string();
         json["Configuration"] = ConfigurationName(data.Configuration);
         json["ManagedRuntime"] = RuntimeName(data.ManagedRuntime);

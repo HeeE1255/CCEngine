@@ -51,6 +51,8 @@ namespace CCEngine
     {
     public:
         static bool IsHlslSource(const std::filesystem::path& path);
+        static ShaderCompileResult CompileDX11ForBuild(const std::filesystem::path& sourcePath,
+            const std::filesystem::path& outputDirectory, const std::vector<std::string>& keywords);
         static ShaderCacheStatus GetHlslCacheStatus(const std::filesystem::path& sourcePath);
         static bool GetLastCompileResult(const std::filesystem::path& sourcePath, ShaderCompileResult& outResult);
         static ShaderCompileResult CompileHlslFile(const std::filesystem::path& sourcePath, bool forceRecompile);
@@ -73,6 +75,7 @@ namespace CCEngine
         static void SetRuntimeBytecodeOnly(bool enabled);
         static bool IsRuntimeBytecodeOnly();
         static void ClearCache();
+        static std::string GetRuntimeMaterialPropertySource(const std::filesystem::path& pixelBytecode);
 
     private:
         static ShaderCompileStageResult CompileStage(

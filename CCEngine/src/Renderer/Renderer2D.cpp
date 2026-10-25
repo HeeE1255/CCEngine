@@ -6,6 +6,7 @@
 #include "Utils/MathUtils.h"
 #include <vector>
 #include <stdexcept>
+#include <cstddef>
 
 namespace CCEngine
 {
@@ -40,6 +41,11 @@ namespace CCEngine
     };
 
     static Renderer2DData s_Data;
+    static_assert(sizeof(QuadVertex) == 44);
+    static_assert(offsetof(QuadVertex, Color) == 12);
+    static_assert(offsetof(QuadVertex, TexCoord) == 28);
+    static_assert(offsetof(QuadVertex, TexIndex) == 36);
+    static_assert(offsetof(QuadVertex, EntityID) == 40);
 
     void Renderer2D::Init()
     {
@@ -53,6 +59,7 @@ namespace CCEngine
             { ShaderDataType::Float,  "TEXINDEX" },
             { ShaderDataType::Int,    "ENTITY_ID" }
         };
+        layout.Validate(sizeof(QuadVertex));
         s_Data.QuadVertexBuffer->SetLayout(layout);
 
         s_Data.QuadVertexBufferBase = new QuadVertex[s_Data.MaxVertices];

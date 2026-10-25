@@ -95,6 +95,8 @@ namespace CCEngine
         // 여기서 전역 Context를 다시 변경하면 보조 창을 잘못 리사이즈할 수 있다.
         if (width == 0 || height == 0)
             return;
-        RenderCommand::SetViewport(0, 0, width, height);
+        // 창 크기와 현재 렌더 대상의 크기는 다를 수 있다. WM_SIZE 시점에는
+        // 대상이 없거나 오프스크린 대상이 남아 있으므로 viewport를 변경하지 않는다.
+        // 각 Context/Framebuffer의 Bind에서 대상 크기에 맞는 viewport를 설정한다.
     }
 }

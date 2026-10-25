@@ -19,6 +19,7 @@ namespace CCEngine
         virtual bool IsValid() const override { return m_IsValid; }
 
     private:
+        bool ReadTextureBindings(const void* bytes, size_t size);
         // DX11 전용 셰이더 객체들
         ID3D11VertexShader* m_VertexShader = nullptr;
         ID3D11PixelShader* m_PixelShader = nullptr;
@@ -26,6 +27,7 @@ namespace CCEngine
         
         ID3DBlob* m_VSBlob = nullptr;               // 셰이더 원본 데이터 보관용
         ID3D11InputLayout* m_InputLayout = nullptr; // 정점 입력 레이아웃
+        std::string m_InputLayoutKey;
         bool m_IsValid = false;
     };
 }

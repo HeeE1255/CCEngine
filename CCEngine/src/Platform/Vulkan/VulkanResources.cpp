@@ -9,9 +9,11 @@ namespace CCEngine
         if (result != VK_SUCCESS) throw std::runtime_error(std::string(operation) + ": VkResult=" + std::to_string(result));
     }
     VulkanBufferAllocation::VulkanBufferAllocation(VulkanContext& context, VkDeviceSize size, VkBufferUsageFlags usage, const void* data)
-        : Context(context), Size(size)
+        : Owner(context.SharedDevice()), Size(size)
     {
         if (!size || size > SIZE_MAX) throw std::invalid_argument("Invalid Vulkan buffer size");
+        if (!Owner) throw std::logic_error("Vulkan resource requires an initialized device");
+        Owner->RequireReady();
         const VkDevice device = context.Device();
         try
         {
@@ -38,13 +40,15 @@ namespace CCEngine
     }
     VulkanBufferAllocation::~VulkanBufferAllocation()
     {
-        const auto device = Context.Device(); const auto buffer = Buffer; const auto memory = Memory;
-        Context.Defer([device, buffer, memory]() { vkDestroyBuffer(device, buffer, nullptr); vkFreeMemory(device, memory, nullptr); });
+        const auto device = Owner->Native(); const auto buffer = Buffer; const auto memory = Memory;
+        Owner->Defer([device, buffer, memory]() { vkDestroyBuffer(device, buffer, nullptr); vkFreeMemory(device, memory, nullptr); });
     }
     VulkanImageAllocation::VulkanImageAllocation(VulkanContext& context, VkExtent2D size, VkFormat format,
         VkImageUsageFlags usage, VkImageAspectFlags aspect, VkImage external)
-        : Context(context), Image(external), Format(format), Extent(size), Aspect(aspect), Owned(!external)
+        : Owner(context.SharedDevice()), Image(external), Format(format), Extent(size), Aspect(aspect), Owned(!external)
     {
+        if (!Owner) throw std::logic_error("Vulkan resource requires an initialized device");
+        Owner->RequireReady();
         if (!size.width || !size.height || size.width > context.Properties().limits.maxImageDimension2D || size.height > context.Properties().limits.maxImageDimension2D)
             throw std::invalid_argument("Invalid Vulkan image size");
         const VkDevice device = context.Device();
@@ -83,8 +87,8 @@ namespace CCEngine
     }
     VulkanImageAllocation::~VulkanImageAllocation()
     {
-        const auto device = Context.Device(); const auto image = Image; const auto view = View; const auto memory = Memory; const bool owned = Owned;
-        Context.Defer([device, image, view, memory, owned]()
+        const auto device = Owner->Native(); const auto image = Image; const auto view = View; const auto memory = Memory; const bool owned = Owned;
+        Owner->Defer([device, image, view, memory, owned]()
         {
             vkDestroyImageView(device, view, nullptr);
             if (owned) vkDestroyImage(device, image, nullptr);
@@ -93,7 +97,7 @@ namespace CCEngine
     }
     VulkanRenderTarget::VulkanRenderTarget(VulkanContext& context, VkExtent2D extent,
         std::vector<std::shared_ptr<VulkanImageAllocation>> colors, std::shared_ptr<VulkanImageAllocation> depth, bool backbuffer)
-        : Context(context), ID(context.NextID()), Extent(extent), Colors(std::move(colors)), Depth(std::move(depth)), Backbuffer(backbuffer)
+        : Owner(context.SharedDevice()), ID(context.NextID()), Extent(extent), Colors(std::move(colors)), Depth(std::move(depth)), Backbuffer(backbuffer), WindowOwner(backbuffer ? &context : nullptr)
     {
         std::vector<VkAttachmentDescription> attachments;
         const auto& limits = context.Properties().limits;
@@ -102,7 +106,7 @@ namespace CCEngine
             throw std::invalid_argument("Render target exceeds device limits");
         auto validate = [&](const std::shared_ptr<VulkanImageAllocation>& image)
         {
-            if (!image || &image->Context != &context || image->Extent.width != extent.width || image->Extent.height != extent.height)
+            if (!image || image->Owner != context.SharedDevice() || image->Extent.width != extent.width || image->Extent.height != extent.height)
                 throw std::invalid_argument("Render target attachment mismatch");
         };
         for (const auto& color : Colors) validate(color);
@@ -158,14 +162,14 @@ namespace CCEngine
     }
     VulkanRenderTarget::~VulkanRenderTarget()
     {
-        Context.ReleaseTarget(*this);
-        const auto device = Context.Device(); const auto framebuffer = Framebuffer; const auto pass = Pass;
-        Context.Defer([device, framebuffer, pass]() { vkDestroyFramebuffer(device, framebuffer, nullptr); vkDestroyRenderPass(device, pass, nullptr); });
+        Owner->ReleaseTarget(*this);
+        const auto device = Owner->Native(); const auto framebuffer = Framebuffer; const auto pass = Pass;
+        Owner->Defer([device, framebuffer, pass]() { vkDestroyFramebuffer(device, framebuffer, nullptr); vkDestroyRenderPass(device, pass, nullptr); });
     }
     VulkanShaderProgram::~VulkanShaderProgram()
     {
-        const auto device = Context.Device(); const auto vertex = Vertex; const auto fragment = Fragment;
-        Context.Defer([device, vertex, fragment]() { if (vertex) vkDestroyShaderModule(device, vertex, nullptr); if (fragment) vkDestroyShaderModule(device, fragment, nullptr); });
+        const auto device = Owner->Native(); const auto vertex = Vertex; const auto fragment = Fragment;
+        Owner->Defer([device, vertex, fragment]() { if (vertex) vkDestroyShaderModule(device, vertex, nullptr); if (fragment) vkDestroyShaderModule(device, fragment, nullptr); });
     }
 }
 #endif

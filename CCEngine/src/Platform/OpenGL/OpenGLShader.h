@@ -18,9 +18,12 @@ namespace CCEngine
         void Unbind() const override;
         void BindLayout(const BufferLayout& layout) override;
         bool IsValid() const override { return m_Program != 0; }
+        void SetUniformRepack(std::vector<UniformRepackLayout> layouts);
     private:
-        OpenGLContext& m_Context;
+        OpenGLContext& Context() const { return OpenGLContext::CurrentFor(m_Device); }
+        std::shared_ptr<OpenGLDevice> m_Device;
         GLuint m_Program = 0;
+        std::shared_ptr<const std::vector<UniformRepackLayout>> m_UniformLayouts;
     };
 }
 #endif

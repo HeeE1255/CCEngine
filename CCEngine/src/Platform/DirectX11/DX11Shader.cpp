@@ -5,9 +5,35 @@
 #include <fstream>
 #include <iostream>
 #include <vector>
+#include <wrl/client.h>
+#include <d3d11shader.h>
 
 namespace CCEngine
 {
+    bool DX11Shader::ReadTextureBindings(const void* bytes, size_t size)
+    {
+        Microsoft::WRL::ComPtr<ID3D11ShaderReflection> reflection;
+        if (FAILED(D3DReflect(bytes, size, IID_PPV_ARGS(&reflection))))
+            return false;
+        D3D11_SHADER_DESC desc{};
+        if (FAILED(reflection->GetDesc(&desc))) return false;
+        TextureBindings bindings;
+        for (UINT i = 0; i < desc.BoundResources; ++i)
+        {
+            D3D11_SHADER_INPUT_BIND_DESC resource{};
+            if (FAILED(reflection->GetResourceBindingDesc(i, &resource))) return false;
+            if (resource.Type != D3D_SIT_TEXTURE) continue;
+            for (UINT element = 0; element < resource.BindCount; ++element)
+            {
+                std::string name = resource.Name;
+                if (resource.BindCount > 1) name += "[" + std::to_string(element) + "]";
+                bindings.emplace(name, resource.BindPoint + element);
+            }
+        }
+        try { SetTextureBindings(std::move(bindings)); }
+        catch (const std::exception& error) { std::cerr << error.what() << '\n'; return false; }
+        return true;
+    }
     static DXGI_FORMAT ShaderDataTypeToDXGIFormat(ShaderDataType type)
     {
         switch (type)
@@ -54,6 +80,7 @@ namespace CCEngine
 
     DX11Shader::DX11Shader(const std::string& filepath)
     {
+        SetMaterialPropertySource(ShaderPropertyParser::LoadDeclarationSource(filepath));
         std::wstring pathWide(filepath.begin(), filepath.end());
 
         ID3DBlob* vsBlob = nullptr;
@@ -123,8 +150,9 @@ namespace CCEngine
         }
 
         m_VSBlob = vsBlob;
+        const bool bindingsValid = ReadTextureBindings(psBlob->GetBufferPointer(), psBlob->GetBufferSize());
         psBlob->Release();
-        m_IsValid = true;
+        m_IsValid = bindingsValid;
 
         std::cout << "[Shader] 셰이더 로드 및 컴파일 완료: " << filepath << std::endl;
     }
@@ -155,7 +183,7 @@ namespace CCEngine
         if (!m_VSBlob)
             return;
 
-        m_IsValid = true;
+        m_IsValid = ReadTextureBindings(pixelBytes.data(), pixelBytes.size());
     }
 
     DX11Shader::~DX11Shader()
@@ -203,6 +231,17 @@ namespace CCEngine
 
     void DX11Shader::BindLayout(const BufferLayout& layout)
     {
+        layout.Validate();
+        std::string key = std::to_string(layout.GetStride());
+        for (const auto& element : layout)
+            key += "/" + element.Name + ":" + std::to_string(static_cast<int>(element.Type))
+                + ":" + std::to_string(element.Offset);
+        // 같은 셰이더라도 다른 정점 버퍼를 그리면 이전 InputLayout을 재사용할 수 없다.
+        if (m_InputLayout && key != m_InputLayoutKey)
+        {
+            m_InputLayout->Release();
+            m_InputLayout = nullptr;
+        }
         if (m_InputLayout == nullptr)
         {
             if (!m_IsValid || !m_VSBlob)
@@ -224,13 +263,16 @@ namespace CCEngine
                 dx11Layout.push_back(desc);
             }
 
-            DX11Context::Get()->GetDevice()->CreateInputLayout(
+            const HRESULT result = DX11Context::Get()->GetDevice()->CreateInputLayout(
                 dx11Layout.data(),
                 (UINT)dx11Layout.size(),
                 m_VSBlob->GetBufferPointer(),
                 m_VSBlob->GetBufferSize(),
                 &m_InputLayout
             );
+            if (FAILED(result))
+                throw std::runtime_error("DX11 vertex layout does not match the shader signature");
+            m_InputLayoutKey = std::move(key);
         }
 
         DX11Context::Get()->GetDeviceContext()->IASetInputLayout(m_InputLayout);

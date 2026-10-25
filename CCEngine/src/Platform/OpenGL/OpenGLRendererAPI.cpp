@@ -1,4 +1,5 @@
 #include "OpenGLRendererAPI.h"
+#include "OpenGLContext.h"
 #if defined(CC_ENABLE_OPENGL_RHI)
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -132,7 +133,12 @@ namespace CCEngine
     void OpenGLRendererAPI::DrawIndexed(uint32_t count)
     {
         RequireTarget();
-        if (count) m_GL->DrawElements(GL_TRIANGLES, Dimension(count), GL_UNSIGNED_INT, nullptr);
+        if (count)
+        {
+            static_cast<OpenGLContext&>(m_Context).ApplyVertexLayout();
+            static_cast<OpenGLContext&>(m_Context).ApplyUniformLayouts();
+            m_GL->DrawElements(GL_TRIANGLES, Dimension(count), GL_UNSIGNED_INT, nullptr);
+        }
     }
     void OpenGLRendererAPI::SetViewport(uint32_t x, uint32_t y, uint32_t width, uint32_t height)
     {
@@ -186,8 +192,10 @@ namespace CCEngine
             throw std::invalid_argument("Unknown cull mode");
         if (mode == CullMode::Back) m_GL->Enable(GL_CULL_FACE); else m_GL->Disable(GL_CULL_FACE);
         m_GL->CullFace(GL_BACK);
-        // DX11의 좌상단 원점에서 시계 방향인 면은 GL의 좌하단 원점에서는 반시계 방향이다.
-        m_GL->FrontFace(GL_CCW);
+        // 공통 메시 인덱스는 투영 후 시계 방향이다. GLSL 변환은 Y를 뒤집지 않고
+        // ClipControl도 LOWER_LEFT를 사용하므로 원점 차이를 이유로 방향을 반전하면 안 된다.
+        // 반대로 지정하면 평면은 사라지고 닫힌 메시의 안쪽 면만 남는다.
+        m_GL->FrontFace(GL_CW);
     }
     void OpenGLRendererAPI::BindTexture(uint32_t slot, RendererHandle handle)
     {

@@ -2,6 +2,7 @@
 #include "Core.h"
 #include "Renderer/Buffer.h"
 #include "Renderer/RendererHandle.h"
+#include <string>
 
 namespace CCEngine
 {
@@ -47,6 +48,8 @@ namespace CCEngine
         inline static API GetAPI() { return s_API; }
         static void SetAPI(API api);
         static const char* GetAPIName(API api);
+        static API ParseAPIName(const std::string& name);
+        static const char* GetAPIArgument(API api);
         static const char* GetUnavailableReason(API api);
         static void RequireAvailable(API api);
 

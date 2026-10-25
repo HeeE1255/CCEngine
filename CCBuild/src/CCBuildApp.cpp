@@ -1,4 +1,9 @@
 #include <Build/GameBuildService.h>
+#include <Build/TextureBindingSmoke.h>
+#include <Build/RenderStateSmoke.h>
+#include <Build/FactorySmoke.h>
+#include <Renderer/BackendShaderPackage.h>
+#include "ShaderReflectionCommand.h"
 
 #include <filesystem>
 #include <iostream>
@@ -61,6 +66,54 @@ namespace
 
 int main(int argc, char** argv)
 {
+    const auto reflectDXIL = FindValue(argc, argv, "reflect-dxil");
+    if (!reflectDXIL.empty())
+        return RunShaderReflectionCommand(reflectDXIL, FindValue(argc, argv, "dxcompiler"));
+    if (FindValue(argc, argv, "rhi-smoke") == "dx12")
+        return CCEngine::RunDX12DeviceSmokeCheck(
+            FindValue(argc, argv, "rhi-vertex").c_str(), FindValue(argc, argv, "rhi-pixel").c_str());
+    const auto validateManifest = FindValue(argc, argv, "validate-rhi-manifest");
+    if (!validateManifest.empty())
+    {
+        try
+        {
+            CCEngine::ValidateBackendShaderManifest(validateManifest);
+            std::cout << "PASS backend shader manifest validation\n";
+            return 0;
+        }
+        catch (const std::exception& error)
+        {
+            std::cerr << error.what() << '\n';
+            return 1;
+        }
+    }
+    const auto editorProject = FindValue(argc, argv, "prepare-editor-shaders");
+    const auto textureBackend = FindValue(argc, argv, "rhi-texture-smoke");
+    const auto stateBackend = FindValue(argc, argv, "rhi-render-state-smoke");
+    const auto factoryBackend = FindValue(argc, argv, "rhi-factory-smoke");
+    if (!factoryBackend.empty())
+        return CCEngine::RunFactorySmokeCheck(factoryBackend.c_str(), FindValue(argc, argv, "rhi-factory-scope").c_str());
+    if (!stateBackend.empty())
+        return CCEngine::RunRenderStateSmokeCheck(stateBackend.c_str(), FindValue(argc, argv, "rhi-manifest").c_str());
+    if (!textureBackend.empty())
+        return CCEngine::RunTextureBindingSmokeCheck(textureBackend.c_str(), FindValue(argc, argv, "rhi-manifest").c_str());
+    const auto inputBackend = FindValue(argc, argv, "rhi-input-smoke");
+    if (!inputBackend.empty())
+        return CCEngine::RunVertexMappingSmokeCheck(inputBackend.c_str(), FindValue(argc, argv, "rhi-manifest").c_str());
+    if (!editorProject.empty())
+    {
+        std::vector<std::filesystem::path> packages;
+        std::string error;
+        const auto requestedAPI = FindValue(argc, argv, "graphics-api");
+        if (!CCEngine::PrepareEditorBackendPackages(editorProject,
+            requestedAPI.empty() ? "DirectX12" : requestedAPI, packages, error))
+        {
+            std::cerr << error << '\n';
+            return 1;
+        }
+        std::cout << "PASS editor shader preparation: " << packages.size() << " packages\n";
+        return 0;
+    }
     const std::filesystem::path binaryDirectory = FindValue(argc, argv, "binaries");
     const uint64_t availableDiskBytesOverride = FindUnsignedValue(argc, argv, "test-available-bytes");
     if (!binaryDirectory.empty() && !ValidateBuilderDependencies(binaryDirectory))

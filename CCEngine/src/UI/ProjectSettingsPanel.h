@@ -53,5 +53,6 @@ namespace CCEngine::UI
         Button* m_BtnBrowseVisualStudio = nullptr;
         Button* m_BtnSaveSettings = nullptr;
         Button* m_BtnApplyResolution = nullptr;
+        Button* m_GraphicsAPIButtons[4] = {};
     };
 }

@@ -45,7 +45,7 @@ namespace CCEngine
         void BindIndex(std::shared_ptr<DX12BufferAllocation> buffer, uint32_t count);
         void BindUniform(uint32_t slot, std::shared_ptr<DX12BufferAllocation> buffer);
         void BindProgram(std::shared_ptr<DX12Program> program);
-        void SetLayout(const BufferLayout& layout) { m_Layout = layout; }
+        void SetLayout(const BufferLayout& layout) { layout.Validate(); m_Layout = layout; }
         void ReplaceBuffer(const std::shared_ptr<DX12BufferAllocation>& oldBuffer, const std::shared_ptr<DX12BufferAllocation>& next);
         RendererHandle RegisterTexture(std::shared_ptr<DX12Image> image);
         void UpdateTexture(RendererHandle handle, std::shared_ptr<DX12Image> image);

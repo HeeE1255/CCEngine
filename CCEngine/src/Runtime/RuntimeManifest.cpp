@@ -1,6 +1,7 @@
 #include "Runtime/RuntimeManifest.h"
 
 #include "Core/PathUtils.h"
+#include "Renderer/RendererAPI.h"
 #include "json.hpp"
 
 #include <algorithm>
@@ -73,6 +74,9 @@ namespace CCEngine
             data.AssetRoot = json.value("AssetRoot", data.AssetRoot);
             data.AssetManifest = json.value("AssetManifest", data.AssetManifest);
             data.ShaderManifest = json.value("ShaderManifest", data.ShaderManifest);
+            data.GraphicsAPI = json.value("GraphicsAPI", std::string("DirectX11"));
+            RendererAPI::ParseAPIName(data.GraphicsAPI);
+            data.BackendShaderPackages = json.value("BackendShaderPackages", std::vector<std::string>{});
             data.StartScenePath = json.value("StartScenePath", data.StartScenePath);
             data.StartSceneGuid = json.value("StartSceneGuid", data.StartSceneGuid);
             data.GameWidth = json.value("GameWidth", data.GameWidth);
@@ -87,7 +91,7 @@ namespace CCEngine
         }
 
         Normalize(data);
-        if (data.Version != 1)
+        if (data.Version != 1 && data.Version != 2)
         {
             error = "Unsupported runtime manifest version: " + std::to_string(data.Version);
             return false;
@@ -95,6 +99,13 @@ namespace CCEngine
         if (data.StartScenePath.empty() && data.StartSceneGuid.empty())
         {
             error = "Runtime manifest has no start scene.";
+            return false;
+        }
+        if ((data.Version == 1 && data.GraphicsAPI != "DirectX11") ||
+            (data.GraphicsAPI != "DirectX11" && data.BackendShaderPackages.empty()) ||
+            (data.GraphicsAPI == "DirectX11" && !data.BackendShaderPackages.empty()))
+        {
+            error = "Runtime graphics API, manifest version and shader packages do not match.";
             return false;
         }
 
@@ -107,8 +118,19 @@ namespace CCEngine
         RuntimeManifestData data = source;
         Normalize(data);
 
+        try { RendererAPI::ParseAPIName(data.GraphicsAPI); }
+        catch (const std::exception& exception) { error = exception.what(); return false; }
+        if ((data.GraphicsAPI != "DirectX11" && data.BackendShaderPackages.empty()) ||
+            (data.GraphicsAPI == "DirectX11" && !data.BackendShaderPackages.empty()))
+        {
+            error = "Graphics API and backend shader packages do not match.";
+            return false;
+        }
+
         nlohmann::json json;
-        json["Version"] = data.Version;
+        json["Version"] = data.GraphicsAPI == "DirectX11" ? 1 : 2;
+        json["GraphicsAPI"] = data.GraphicsAPI;
+        json["BackendShaderPackages"] = data.BackendShaderPackages;
         json["ProjectName"] = data.ProjectName;
         json["ContentRoot"] = data.ContentRoot;
         json["AssetRoot"] = data.AssetRoot;
@@ -138,6 +160,12 @@ namespace CCEngine
         }
 
         output << json.dump(4);
+        output.flush();
+        if (!output)
+        {
+            error = "Failed to flush runtime manifest: " + path.string();
+            return false;
+        }
         error.clear();
         return true;
     }

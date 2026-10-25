@@ -52,7 +52,7 @@ namespace CCEngine
         key << m_Target->ID << '/' << m_Shader->ID << '/' << int(state.Blend) << '/' << int(state.Cull)
             << '/' << state.DepthTest << '/' << stride;
         std::vector<VkVertexInputAttributeDescription> attributes;
-        for (const auto& element : m_VertexLayout)
+        for (const auto& element : ResolveVertexInputs(m_VertexLayout, m_ShaderInputs))
         {
             uint32_t columns = 1, components = 0;
             bool integer = false;
@@ -70,8 +70,6 @@ namespace CCEngine
             case ShaderDataType::Int4: components = 4; integer = true; break;
             default: throw std::invalid_argument("Bool/None are not Vulkan vertex formats");
             }
-            if (integer && element.Normalized)
-                throw std::invalid_argument("Vulkan has no normalized 32-bit integer vertex format; use float data");
             if (element.Offset > stride || components * columns * 4 > stride - element.Offset)
                 throw std::invalid_argument("Vertex attribute exceeds stride");
             const VkFormat floats[] = { VK_FORMAT_R32_SFLOAT, VK_FORMAT_R32G32_SFLOAT, VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32G32B32A32_SFLOAT };
@@ -82,11 +80,11 @@ namespace CCEngine
             for (uint32_t column = 0; column < columns; ++column)
             {
                 const uint32_t offset = element.Offset + column * components * 4;
-                if (attributes.size() >= limits.maxVertexInputAttributes || offset > limits.maxVertexInputAttributeOffset)
+                if (element.Location >= limits.maxVertexInputAttributes || offset > limits.maxVertexInputAttributeOffset)
                     throw std::out_of_range("Vertex layout exceeds device limits");
-                attributes.push_back({ static_cast<uint32_t>(attributes.size()), 0, format, offset });
+                attributes.push_back({ element.Location, 0, format, offset });
             }
-            key << '/' << int(element.Type) << ':' << element.Offset << ':' << element.Normalized;
+            key << '/' << int(element.Type) << ':' << element.Offset << ':' << element.Location;
         }
         VkPipeline pipeline = VK_NULL_HANDLE;
         const auto cached = m_Pipelines.find(key.str());

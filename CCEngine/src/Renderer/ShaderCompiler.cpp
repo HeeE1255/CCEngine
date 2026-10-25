@@ -1,7 +1,10 @@
 #include "Renderer/ShaderCompiler.h"
 #include "Core/PathContext.h"
 #include "Renderer/ShaderProperty.h"
+#include "Renderer/RendererAPI.h"
+#include "Renderer/BackendShaderPackage.h"
 #include "json.hpp"
+#include "Renderer/ShaderProperty.h"
 
 #define NOMINMAX
 #include <d3dcompiler.h>
@@ -274,6 +277,7 @@ namespace CCEngine
         };
 
         std::unordered_map<std::string, RuntimeBytecodePaths> s_RuntimeBytecode;
+        std::unordered_map<std::string, std::string> s_RuntimeMaterialProperties;
         bool s_RuntimeBytecodeOnly = false;
 
         std::string NormalizeShaderPath(const std::filesystem::path& path)
@@ -379,6 +383,7 @@ namespace CCEngine
         // 종료 시 비워 두면 실제 해제되지 않은 리소스만 메모리 검사에 남는다.
         std::unordered_map<std::string, ShaderCompileResult>().swap(s_LastCompileResults);
         std::unordered_map<std::string, RuntimeBytecodePaths>().swap(s_RuntimeBytecode);
+        s_RuntimeMaterialProperties.clear();
     }
 
     ShaderCompileResult ShaderCompiler::CompileHlslFile(const std::filesystem::path& sourcePath, bool forceRecompile)
@@ -427,6 +432,47 @@ namespace CCEngine
         const std::vector<std::string>& requestedKeywords)
     {
         const auto keywords = NormalizeKeywords(requestedKeywords);
+        if (RendererAPI::GetAPI() != RendererAPI::API::DirectX11)
+        {
+            ShaderCompileResult result;
+            result.SourcePath = sourcePath;
+#if defined(CC_ENABLE_DX12_RHI)
+            if (RendererAPI::GetAPI() == RendererAPI::API::DirectX12)
+            {
+                try
+                {
+                    std::filesystem::path vertex, pixel;
+                    GetDX12PackageBytecode(sourcePath, keywords, vertex, pixel);
+                    result.Vertex = { true, true, vertex, "VSMain", "vs_6_0", "Using DX12 package." };
+                    result.Pixel = { true, true, pixel, "PSMain", "ps_6_0", "Using DX12 package." };
+                    result.CacheDirectory = vertex.parent_path();
+                    result.Success = true;
+                    result.Summary = "Loaded verified DX12 shader package.";
+                }
+                catch (const std::exception& error) { result.Summary = error.what(); }
+                return result;
+            }
+#endif
+            result.Summary = "Shader compiler is not connected for the selected graphics API.";
+#if defined(CC_ENABLE_OPENGL_RHI) || defined(CC_ENABLE_VULKAN_RHI)
+            if (RendererAPI::GetAPI() == RendererAPI::API::OpenGL || RendererAPI::GetAPI() == RendererAPI::API::Vulkan)
+            {
+                try
+                {
+                    const bool gl = RendererAPI::GetAPI() == RendererAPI::API::OpenGL;
+                    std::filesystem::path vertex, pixel;
+                    GetPortablePackageFiles(gl ? "opengl" : "vulkan", sourcePath, keywords, vertex, pixel);
+                    result.Vertex = {true, true, vertex, "main", gl ? "glsl450" : "spirv-vulkan1.1", "Using shader package."};
+                    result.Pixel = {true, true, pixel, "main", gl ? "glsl450" : "spirv-vulkan1.1", "Using shader package."};
+                    result.CacheDirectory = vertex.parent_path();
+                    result.Success = true;
+                    result.Summary = "Loaded verified portable shader package.";
+                }
+                catch (const std::exception& error) { result.Summary = error.what(); }
+            }
+#endif
+            return result;
+        }
         const std::string variantKey = MakeVariantKey(keywords);
         std::filesystem::path runtimeVertex;
         std::filesystem::path runtimePixel;
@@ -511,6 +557,30 @@ namespace CCEngine
         return result;
     }
 
+    ShaderCompileResult ShaderCompiler::CompileDX11ForBuild(const std::filesystem::path& sourcePath,
+        const std::filesystem::path& outputDirectory, const std::vector<std::string>& requestedKeywords)
+    {
+        // 빌드 작업은 에디터 렌더 장치와 독립적이다. 전역 API나 런타임 패키지/진단 캐시를
+        // 바꾸지 않고 staging에 직접 컴파일해야 다른 API로 실행 중인 에디터도 안전하다.
+        ShaderCompileResult result;
+        result.SourcePath = sourcePath;
+        result.CacheDirectory = outputDirectory;
+        const auto keywords = NormalizeKeywords(requestedKeywords);
+        result.Vertex = CompileStage(sourcePath, outputDirectory / "VSMain_vs_5_0.cso",
+            ShaderStage::Vertex, "VSMain", "vs_5_0", true, keywords);
+        result.Pixel = CompileStage(sourcePath, outputDirectory / "PSMain_ps_5_0.cso",
+            ShaderStage::Pixel, "PSMain", "ps_5_0", true, keywords);
+        result.Success = result.Vertex.Success && result.Pixel.Success;
+        if (result.Success)
+        {
+            ValidateMaterialPropertyReflection(sourcePath, result);
+            result.Success = result.ReflectionErrors.empty();
+        }
+        result.Summary = result.Vertex.Message + "\n" + result.Pixel.Message;
+        for (const auto& message : result.ReflectionErrors) result.Summary += "\n" + message;
+        return result;
+    }
+
     bool ShaderCompiler::LoadRuntimeBytecodeManifest(const std::filesystem::path& manifestPath, std::string& error)
     {
         std::ifstream input(manifestPath);
@@ -547,6 +617,7 @@ namespace CCEngine
         }
 
         std::unordered_map<std::string, RuntimeBytecodePaths> runtimeBytecode;
+        std::unordered_map<std::string, std::string> materialProperties;
         for (const auto& shader : manifest["Shaders"])
         {
             if (!shader.is_object())
@@ -579,13 +650,29 @@ namespace CCEngine
             // Release 패키지에는 HLSL 원본이 없으므로 weakly_canonical 결과만 키로 쓰면
             // 실행 위치나 존재하지 않는 마지막 경로 구간에 따라 같은 셰이더가 달라질 수 있다.
             // Manifest의 배포 상대 경로도 함께 키로 보존해 패키지를 어디로 옮겨도 찾게 한다.
+            if (!shader.contains("MaterialPropertySource") || !shader["MaterialPropertySource"].is_string())
+            {
+                error = "Shader property declarations are missing. Rebuild the game package.";
+                return false;
+            }
+            const auto declarations = shader["MaterialPropertySource"].get<std::string>();
+            try { ShaderPropertyParser::ParseSource(declarations); }
+            catch (const std::exception& exception) { error = exception.what(); return false; }
+            materialProperties[NormalizeShaderPath(paths.Pixel)] = declarations;
             runtimeBytecode[NormalizeShaderPath(source) + variantSuffix] = paths;
             runtimeBytecode[NormalizePortableShaderKey(storedSource) + variantSuffix] = std::move(paths);
         }
 
         s_RuntimeBytecode = std::move(runtimeBytecode);
+        s_RuntimeMaterialProperties = std::move(materialProperties);
         error.clear();
         return true;
+    }
+
+    std::string ShaderCompiler::GetRuntimeMaterialPropertySource(const std::filesystem::path& pixelBytecode)
+    {
+        const auto found = s_RuntimeMaterialProperties.find(NormalizeShaderPath(pixelBytecode));
+        return found == s_RuntimeMaterialProperties.end() ? std::string{} : found->second;
     }
 
     bool ShaderCompiler::TryGetRuntimeBytecode(

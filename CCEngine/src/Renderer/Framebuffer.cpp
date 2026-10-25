@@ -2,13 +2,23 @@
 #include "Renderer/RendererAPI.h"
 
 #include "Platform/DirectX11/DX11Framebuffer.h" 
-// #include "Platform/OpenGL/OpenGLFramebuffer.h" // 나중에 만들면 주석 해제
-// #include "Platform/Vulkan/VulkanFramebuffer.h"
+#if defined(CC_ENABLE_OPENGL_RHI)
+#include "Platform/OpenGL/OpenGLFramebufferStorage.h"
+#endif
+#if defined(CC_ENABLE_VULKAN_RHI)
+#include "Platform/Vulkan/VulkanFramebuffer.h"
+#endif
+#if defined(CC_ENABLE_DX12_RHI)
+#include "Platform/DirectX12/DX12Framebuffer.h"
+#endif
+#include <stdexcept>
 
 namespace CCEngine {
 
     Framebuffer* Framebuffer::Create(const FramebufferSpecification& spec)
     {
+        if (spec.Width == 0 || spec.Height == 0)
+            throw std::invalid_argument("Framebuffer dimensions must be greater than zero.");
         RendererAPI::RequireAvailable(RendererAPI::GetAPI());
         switch (RendererAPI::GetAPI())
         {
@@ -16,15 +26,17 @@ namespace CCEngine {
                 return nullptr;
 
             case RendererAPI::API::DirectX11:
-                return new DX11Framebuffer(spec); // 현재는 DX11만 작동!
+                return new DX11Framebuffer(spec);
+#if defined(CC_ENABLE_DX12_RHI)
+            case RendererAPI::API::DirectX12: return new DX12Framebuffer(spec);
+#endif
 
-            case RendererAPI::API::OpenGL:
-                // return new OpenGLFramebuffer(spec);
-                return nullptr;
-
-            case RendererAPI::API::Vulkan:
-                // return new VulkanFramebuffer(spec);
-                return nullptr;
+#if defined(CC_ENABLE_OPENGL_RHI)
+            case RendererAPI::API::OpenGL: return new OpenGLFramebuffer(spec);
+#endif
+#if defined(CC_ENABLE_VULKAN_RHI)
+            case RendererAPI::API::Vulkan: return new VulkanFramebuffer(spec);
+#endif
         }
 
         // assert(false && "Unknown RendererAPI!");

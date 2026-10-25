@@ -1,14 +1,46 @@
 #include "Renderer/Shader.h"
 #include "Renderer/RendererAPI.h"
 #include "Renderer/ShaderCompiler.h"
+#include "Renderer/BackendShaderPackage.h"
+#include <set>
+#include <memory>
 #include "Platform/DirectX11/DX11Shader.h"
+#if defined(CC_ENABLE_DX12_RHI)
+#include "Platform/DirectX12/DX12Shader.h"
+#endif
+#include <stdexcept>
 #include <iostream>
 
 namespace CCEngine
 {
+    void Shader::SetTextureBindings(TextureBindings bindings)
+    {
+        std::set<uint32_t> slots;
+        for (const auto& [name, slot] : bindings)
+            if (name.empty() || slot >= 32 || !slots.insert(slot).second)
+                throw std::runtime_error("Invalid or overlapping shader texture binding: " + name);
+        m_TextureBindings = std::move(bindings);
+    }
     Shader* Shader::Create(const std::string& filepath)
     {
         RendererAPI::RequireAvailable(RendererAPI::GetAPI());
+#if defined(CC_ENABLE_OPENGL_RHI) || defined(CC_ENABLE_VULKAN_RHI)
+        if (RendererAPI::GetAPI() == RendererAPI::API::OpenGL || RendererAPI::GetAPI() == RendererAPI::API::Vulkan)
+        {
+            const auto result = ShaderCompiler::CompileHlslFile(filepath, false);
+            if (!result.Success) throw std::runtime_error(result.Summary);
+            return CreateFromBytecode(result.Vertex.BytecodePath, result.Pixel.BytecodePath);
+        }
+#endif
+#if defined(CC_ENABLE_DX12_RHI)
+        if (RendererAPI::GetAPI() == RendererAPI::API::DirectX12)
+        {
+            // 기본 셰이더도 머티리얼과 동일한 패키지 경로를 사용한다. DX11 CSO로 후퇴하지 않는다.
+            const auto result = ShaderCompiler::CompileHlslFile(filepath, false);
+            if (!result.Success) throw std::runtime_error(result.Summary);
+            return CreateFromBytecode(result.Vertex.BytecodePath, result.Pixel.BytecodePath);
+        }
+#endif
         std::filesystem::path vertexBytecode;
         std::filesystem::path pixelBytecode;
         if (ShaderCompiler::TryGetRuntimeBytecode(filepath, vertexBytecode, pixelBytecode))
@@ -54,15 +86,35 @@ namespace CCEngine
             return nullptr;
 
         case RendererAPI::API::DirectX11:
-            return new DX11Shader(vertexBytecode, pixelBytecode);
+        {
+            auto shader = std::make_unique<DX11Shader>(vertexBytecode, pixelBytecode);
+            shader->SetMaterialPropertySource(ShaderCompiler::GetRuntimeMaterialPropertySource(pixelBytecode));
+            return shader.release();
+        }
+#if defined(CC_ENABLE_DX12_RHI)
+        case RendererAPI::API::DirectX12:
+        {
+            auto shader = DX12Shader::FromBytecodeFiles(DX12Context::Current(), vertexBytecode, pixelBytecode);
+            shader->SetTextureBindings(GetDX12TextureBindings(pixelBytecode));
+            shader->SetVertexInputs(GetDX12VertexInputs(vertexBytecode));
+            shader->SetMaterialPropertySource(GetDX12MaterialPropertySource(pixelBytecode));
+            return shader.release();
+        }
+#endif
 
         case RendererAPI::API::OpenGL:
-            std::cout << "OpenGL bytecode shader backend is currently not implemented." << std::endl;
-            return nullptr;
+#if defined(CC_ENABLE_OPENGL_RHI)
+            return LoadRegisteredPortableShader("opengl", vertexBytecode, pixelBytecode).release();
+#else
+            throw std::runtime_error("OpenGL shader backend is not compiled.");
+#endif
 
         case RendererAPI::API::Vulkan:
-            std::cout << "Vulkan bytecode shader backend is currently not implemented." << std::endl;
-            return nullptr;
+#if defined(CC_ENABLE_VULKAN_RHI)
+            return LoadRegisteredPortableShader("vulkan", vertexBytecode, pixelBytecode).release();
+#else
+            throw std::runtime_error("Vulkan shader backend is not compiled.");
+#endif
         }
 
         std::cout << "Unknown RendererAPI!" << std::endl;

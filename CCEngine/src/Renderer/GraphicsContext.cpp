@@ -8,15 +8,23 @@
 #if defined(CC_ENABLE_DX12_RHI)
 #include "Platform/DirectX12/DX12Context.h"
 #endif
+#if defined(CC_ENABLE_OPENGL_RHI)
+#include "Platform/OpenGL/OpenGLDevice.h"
+#endif
+#if defined(CC_ENABLE_VULKAN_RHI)
+#include "Platform/Vulkan/VulkanDevice.h"
+#include "Platform/Vulkan/VulkanContext.h"
+#endif
 #include <stdexcept>
-// #include "Platform/OpenGL/OpenGLContext.h" // 나중에 OpenGL 추가 시
 
 // HWND 캐스팅을 위해 포함 (Windows 환경 전용 컴파일 부분)
 #include <windows.h> 
 
 namespace CCEngine {
 
-    thread_local GraphicsContext* GraphicsContext::s_Current = nullptr;
+    // TLS 저장소 자체를 DLL 인터페이스로 내보낼 수 없다. 접근 함수만 공개하고
+    // 스레드별 현재 Context는 엔진 모듈 내부에 둔다.
+    namespace { thread_local GraphicsContext* s_Current = nullptr; }
 
     GraphicsContext::~GraphicsContext()
     {
@@ -60,9 +68,28 @@ namespace CCEngine {
             return new DX12Context(windowHandle, false, std::move(device));
         }
 #endif
-        case RendererAPI::API::OpenGL:
-            // return new OpenGLContext(static_cast<GLFWwindow*>(windowHandle));
+        case RendererAPI::API::Vulkan:
+#if defined(CC_ENABLE_VULKAN_RHI)
+        {
+            auto device = std::dynamic_pointer_cast<VulkanDevice>(sharedDevice);
+            if (sharedDevice && !device)
+                throw std::invalid_argument("Invalid Vulkan device implementation.");
+            return new VulkanContext(windowHandle, std::move(device));
+        }
+#else
             return nullptr;
+#endif
+        case RendererAPI::API::OpenGL:
+#if defined(CC_ENABLE_OPENGL_RHI)
+        {
+            auto device = std::dynamic_pointer_cast<OpenGLDevice>(sharedDevice);
+            if (sharedDevice && !device)
+                throw std::invalid_argument("Invalid OpenGL device implementation.");
+            return new OpenGLContext(windowHandle, std::move(device));
+        }
+#else
+            return nullptr;
+#endif
         }
 
         // CC_CORE_ASSERT(false, "알 수 없는 RendererAPI 입니다!");

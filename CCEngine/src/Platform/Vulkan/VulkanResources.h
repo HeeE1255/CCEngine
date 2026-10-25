@@ -1,11 +1,12 @@
 #pragma once
 #if defined(CC_ENABLE_VULKAN_RHI)
 #include "VulkanContext.h"
+#include "VulkanDevice.h"
 namespace CCEngine
 {
     struct VulkanBufferAllocation
     {
-        VulkanContext& Context;
+        std::shared_ptr<VulkanDevice> Owner;
         VkBuffer Buffer = VK_NULL_HANDLE;
         VkDeviceMemory Memory = VK_NULL_HANDLE;
         VkDeviceSize Size = 0;
@@ -16,7 +17,7 @@ namespace CCEngine
     };
     struct VulkanImageAllocation
     {
-        VulkanContext& Context;
+        std::shared_ptr<VulkanDevice> Owner;
         VkImage Image = VK_NULL_HANDLE;
         VkImageView View = VK_NULL_HANDLE;
         VkDeviceMemory Memory = VK_NULL_HANDLE;
@@ -33,7 +34,7 @@ namespace CCEngine
     };
     struct VulkanRenderTarget
     {
-        VulkanContext& Context;
+        std::shared_ptr<VulkanDevice> Owner;
         uint64_t ID;
         VkExtent2D Extent;
         std::vector<std::shared_ptr<VulkanImageAllocation>> Colors;
@@ -41,6 +42,7 @@ namespace CCEngine
         VkRenderPass Pass = VK_NULL_HANDLE;
         VkFramebuffer Framebuffer = VK_NULL_HANDLE;
         bool Backbuffer;
+        VulkanContext* WindowOwner = nullptr;
         VulkanRenderTarget(VulkanContext& context, VkExtent2D extent,
             std::vector<std::shared_ptr<VulkanImageAllocation>> colors,
             std::shared_ptr<VulkanImageAllocation> depth, bool backbuffer = false);
@@ -50,11 +52,11 @@ namespace CCEngine
     };
     struct VulkanShaderProgram
     {
-        VulkanContext& Context;
+        std::shared_ptr<VulkanDevice> Owner;
         uint64_t ID;
         VkShaderModule Vertex = VK_NULL_HANDLE, Fragment = VK_NULL_HANDLE;
         std::string VertexEntry, FragmentEntry;
-        explicit VulkanShaderProgram(VulkanContext& context) : Context(context), ID(context.NextID()) {}
+        explicit VulkanShaderProgram(VulkanContext& context) : Owner(context.SharedDevice()), ID(context.NextID()) {}
         ~VulkanShaderProgram();
         VulkanShaderProgram(const VulkanShaderProgram&) = delete;
         VulkanShaderProgram& operator=(const VulkanShaderProgram&) = delete;

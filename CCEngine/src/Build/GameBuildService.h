@@ -38,6 +38,11 @@ namespace CCEngine
         std::string ProductVersion = "0.1.0";
         std::string UpdateChannel = "Stable";
         std::string ExecutableName = "Game";
+        std::string GraphicsAPI = "DirectX11";
+        std::string ShaderCompilerScript;
+        std::string PythonExecutable = "python.exe";
+        std::string DXCExecutable = "dxc.exe";
+        std::string SpirvCrossExecutable = "spirv-cross.exe";
         bool DevelopmentBuild = true;
         ManagedRuntimeDeployment ManagedRuntime = ManagedRuntimeDeployment::SelfContained;
         WindowMode PlayerWindowMode = WindowMode::Windowed;
@@ -67,7 +72,14 @@ namespace CCEngine
     {
     public:
         GameBuildReport Build(const GameBuildRequest& request) const;
+        GameBuildReport CheckShaderTools(const GameBuildRequest& request) const;
     };
+
+    CC_API bool PrepareEditorBackendPackages(const std::filesystem::path& projectRoot, const std::string& graphicsAPI,
+        std::vector<std::filesystem::path>& packages, std::string& error);
+    CC_API void RetainEditorShaderPackageUsage(const std::vector<std::filesystem::path>& packages);
+    CC_API int RunDX12DeviceSmokeCheck(const char* vertexBytecode = "", const char* pixelBytecode = "");
+    CC_API int RunVertexMappingSmokeCheck(const char* backend, const char* manifest);
 
     // 명령행 도구는 STL 컨테이너가 든 Report의 소유권을 DLL 밖으로 넘기지 않는다.
     // 빌드와 출력, 메모리 해제를 엔진 모듈 안에서 끝내고 프로세스에는 종료 코드만 반환한다.

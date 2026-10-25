@@ -1195,9 +1195,7 @@ namespace CCEngine {
 
         // 3. 에디터 프레임버퍼 렌더링
         editorStageStartedAt = std::chrono::steady_clock::now();
-        Renderer::SetClearColor(0.1f, 0.1f, 0.1f, 1.0f);
-        Renderer::Clear();
-
+        // OnUpdate에서는 백버퍼가 바인딩되어 있지 않다. 지울 대상을 먼저 지정한다.
         m_Framebuffer->Bind();
         Renderer::SetClearColor(m_ClearColor[0], m_ClearColor[1], m_ClearColor[2], m_ClearColor[3]);
         Renderer::Clear();

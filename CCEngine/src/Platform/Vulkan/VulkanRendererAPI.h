@@ -10,6 +10,7 @@
 
 namespace CCEngine
 {
+    class VulkanDevice;
     struct VulkanRasterState
     {
         RendererAPI::BlendMode Blend = RendererAPI::BlendMode::Opaque;
@@ -36,6 +37,7 @@ namespace CCEngine
             const std::vector<VkDescriptorImageInfo>&)> PrepareDraw;
         std::function<void(uint32_t, uint32_t)> ResizeSwapchain;
         std::function<void(uint32_t)> ValidateIndexCount;
+        std::shared_ptr<VulkanDevice> Device;
         VkDescriptorImageInfo EmptyTexture{};
         uint32_t TextureSlots = 0;
     };
@@ -86,7 +88,6 @@ namespace CCEngine
         void UnbindTextures(uint32_t startSlot, uint32_t count) override;
 
     private:
-        struct TextureBinding { VkDescriptorImageInfo Image; };
         VulkanRendererServices m_Services;
         VulkanRasterState m_State;
         VkCommandBuffer m_Commands = VK_NULL_HANDLE;
@@ -100,9 +101,6 @@ namespace CCEngine
         bool m_ViewportEmpty = false;
         std::vector<VkDescriptorImageInfo> m_Textures;
         std::vector<RendererHandle> m_TextureHandles;
-        std::unordered_map<RendererHandle, std::unique_ptr<TextureBinding>> m_RegisteredTextures;
-        // 제거한 토큰 주소를 재사용하지 않아 오래된 RendererHandle이 다른 텍스처로 바뀌는 것을 막는다.
-        std::vector<std::unique_ptr<TextureBinding>> m_RetiredTextures;
         void RequirePass() const;
         void ApplyScissor();
     };

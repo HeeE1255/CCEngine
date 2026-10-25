@@ -5,6 +5,8 @@
 #include <fstream>
 #include <regex>
 #include <sstream>
+#include <set>
+#include <stdexcept>
 
 namespace CCEngine
 {
@@ -66,9 +68,24 @@ namespace CCEngine
         return ParseSource(buffer.str());
     }
 
+    std::string ShaderPropertyParser::LoadDeclarationSource(const std::filesystem::path& shaderPath)
+    {
+        std::ifstream file(shaderPath);
+        if (!file) throw std::runtime_error("Cannot read shader properties: " + shaderPath.string());
+        std::string line, result;
+        const std::regex declaration(R"(^\s*//\s*@property\b.*$)");
+        while (std::getline(file, line))
+            if (std::regex_match(line, declaration)) result += line + "\n";
+        if (file.bad()) throw std::runtime_error("Failed reading shader properties");
+        ParseSource(result);
+        return result;
+    }
+
     std::vector<ShaderPropertyDefinition> ShaderPropertyParser::ParseSource(const std::string& source)
     {
         std::vector<ShaderPropertyDefinition> properties;
+        std::set<std::string> names;
+        unsigned colors = 0, scalars = 0, toggles = 0;
         std::regex propertyPattern(R"(^\s*//\s*@property\s+([A-Za-z0-9_]+)\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*=\s*(.*))?$)");
         std::regex rangePattern(R"(range\s*\(\s*([-+]?[0-9]*\.?[0-9]+)\s*,\s*([-+]?[0-9]*\.?[0-9]+)\s*\))");
 
@@ -111,6 +128,16 @@ namespace CCEngine
                     definition.DefaultTexturePath = defaultText;
             }
 
+            if (!names.insert(definition.Name).second)
+                throw std::invalid_argument("Duplicate shader property: " + definition.Name);
+            if ((definition.Name == "AlbedoColor" && definition.Type != ShaderPropertyType::Color) ||
+                ((definition.Name == "Roughness" || definition.Name == "Metallic") && definition.Type != ShaderPropertyType::Float))
+                throw std::invalid_argument("Reserved material property type mismatch: " + definition.Name);
+            if (definition.Type == ShaderPropertyType::Color && definition.Name != "AlbedoColor") ++colors;
+            if (definition.Type == ShaderPropertyType::Float && definition.Name != "Roughness" && definition.Name != "Metallic") ++scalars;
+            if (definition.Type == ShaderPropertyType::Toggle) ++toggles;
+            if (colors > 8 || scalars > 16 || toggles > 16)
+                throw std::invalid_argument("Shader properties exceed material buffer capacity");
             properties.push_back(definition);
         }
 

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace CCEngine
 {
@@ -17,6 +18,8 @@ namespace CCEngine
         std::string AssetRoot = "assets";
         std::string AssetManifest = "RuntimeAssetManifest.json";
         std::string ShaderManifest = "ShaderBuildManifest.json";
+        std::string GraphicsAPI = "DirectX11";
+        std::vector<std::string> BackendShaderPackages;
         std::string StartScenePath;
         std::string StartSceneGuid;
         uint32_t GameWidth = 1920;

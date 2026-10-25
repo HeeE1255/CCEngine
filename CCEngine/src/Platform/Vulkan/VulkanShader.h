@@ -15,12 +15,13 @@ namespace CCEngine
             const std::string& vertexEntry = "main", const std::string& fragmentEntry = "main");
         VulkanShader(const VulkanShader&) = delete;
         VulkanShader& operator=(const VulkanShader&) = delete;
-        void Bind() const override { m_Context.BindShader(m_Program); }
-        void Unbind() const override { m_Context.BindShader(nullptr); }
-        void BindLayout(const BufferLayout& layout) override { m_Context.SetVertexLayout(layout); }
+        void Bind() const override { Context().SetShaderInputs(GetVertexInputs()); Context().BindShader(m_Program); }
+        void Unbind() const override { Context().BindShader(nullptr); }
+        void BindLayout(const BufferLayout& layout) override { Context().SetVertexLayout(layout); }
         bool IsValid() const override { return m_Program && m_Program->Vertex && m_Program->Fragment; }
     private:
-        VulkanContext& m_Context;
+        std::shared_ptr<VulkanDevice> m_Device;
+        VulkanContext& Context() const { return VulkanContext::CurrentFor(m_Device); }
         std::shared_ptr<VulkanShaderProgram> m_Program;
     };
 }

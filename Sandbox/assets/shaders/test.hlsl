@@ -1,5 +1,5 @@
-// 트렌스폼 버퍼 (Transform Buffer)
-cbuffer TransformBuffer : register(b0)
+// 카메라의 뷰 프로젝션 행렬만 사용하는 b0 버퍼.
+cbuffer CameraBuffer : register(b0)
 {
     matrix u_ViewProjection; // 뷰 프로젝션 행렬
     //matrix u_Transform;

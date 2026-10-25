@@ -20,17 +20,48 @@ namespace CCEngine
         }
     }
 
+    RendererAPI::API RendererAPI::ParseAPIName(const std::string& name)
+    {
+        for (API api : { API::DirectX11, API::DirectX12, API::OpenGL, API::Vulkan })
+            if (name == GetAPIName(api)) return api;
+        throw std::invalid_argument("Unknown graphics API: " + name);
+    }
+
+    const char* RendererAPI::GetAPIArgument(API api)
+    {
+        switch (api)
+        {
+        case API::DirectX11: return "-dx11";
+        case API::DirectX12: return "-dx12";
+        case API::OpenGL: return "-opengl";
+        case API::Vulkan: return "-vulkan";
+        default: throw std::invalid_argument("Invalid graphics API.");
+        }
+    }
+
     const char* RendererAPI::GetUnavailableReason(API api)
     {
-        // 소스 파일 존재나 SDK 설치만으로 실행 지원을 켜면 안 된다.
-        // 창 공유, 리소스 팩토리, 셰이더 패키지까지 연결된 백엔드만 허용한다.
         switch (api)
         {
         case API::DirectX11: return nullptr;
         case API::DirectX12:
+#if defined(CC_ENABLE_DX12_RHI)
+            return nullptr;
+#else
+            return "DirectX 12 backend was not compiled into this build.";
+#endif
         case API::OpenGL:
+#if defined(CC_ENABLE_OPENGL_RHI)
+            return nullptr;
+#else
+            return "OpenGL backend was not compiled into this build.";
+#endif
         case API::Vulkan:
-            return "Backend integration is incomplete (window sharing, resource factories and shader packages).";
+#if defined(CC_ENABLE_VULKAN_RHI)
+            return nullptr;
+#else
+            return "Vulkan backend was not compiled into this build.";
+#endif
         case API::None: return "A graphics backend must be selected.";
         default: return "Unknown graphics backend identifier.";
         }

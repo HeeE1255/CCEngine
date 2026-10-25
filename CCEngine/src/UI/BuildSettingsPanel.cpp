@@ -8,6 +8,7 @@
 #include "Renderer/UIRenderer.h"
 #include "UI/Button.h"
 #include "UI/TextInput.h"
+#include "Utils/PlatformUtils.h"
 
 #define NOMINMAX
 #include <Windows.h>
@@ -145,6 +146,60 @@ namespace CCEngine::UI
         m_BuildAndRun->SetOnClick([this]() { StartBuild(true); });
         m_Cancel->SetOnClick([this]() { CancelBuild(); });
         m_OpenOutput->SetOnClick([this]() { OpenOutputFolder(); });
+        m_ShaderTools = new Button("ShaderToolsPage", "Shader Tools...");
+        PlaceFixed(m_ShaderTools, 24, 552, 140, 26);
+        m_ShaderTools->SetOnClick([this]() { if (!m_Building) ShowShaderTools(!m_ShowShaderTools); });
+        AddChild(m_ShaderTools);
+        const char* names[] = { "Compiler Script", "Python", "DXC", "SPIRV-Cross" };
+        std::string GameBuildProfileData::* fields[] = { &GameBuildProfileData::ShaderCompilerScript,
+            &GameBuildProfileData::PythonExecutable, &GameBuildProfileData::DXCExecutable,
+            &GameBuildProfileData::SpirvCrossExecutable };
+        for (int i = 0; i < 4; ++i)
+        {
+            auto* input = new TextInput("ShaderTool" + std::to_string(i), names[i]);
+            Place(input, 180, 66.0f + i * 36, -128, 92.0f + i * 36);
+            const auto field = fields[i];
+            input->SetOnTextChanged([this, field, input](const std::string& value) {
+                if (m_Building) { input->SetText(m_Profile.Data().*field, false); return; }
+                m_Profile.Data().*field = value;
+                m_Stage = "Tools not checked";
+                m_ToolVersions.clear();
+            });
+            AddChild(input); m_ToolInputs[i] = input; m_ToolControls.push_back(input);
+            auto* browse = new Button("BrowseShaderTool" + std::to_string(i), "Browse...");
+            browse->SetAnchorMin(1, 0); browse->SetAnchorMax(1, 0);
+            browse->SetOffsetMin(-120, 66.0f + i * 36); browse->SetOffsetMax(-24, 92.0f + i * 36);
+            browse->SetOnClick([this, input, field, i]()
+            {
+                if (m_Building) return;
+                const auto path = PlatformUtils::OpenFile(i == 0 ? "Python script\0*.py\0" : "Executable\0*.exe\0");
+                if (!path.empty()) { m_Profile.Data().*field = path; input->SetText(path, false); m_Stage = "Tools not checked"; m_ToolVersions.clear(); }
+            });
+            AddChild(browse); m_ToolControls.push_back(browse);
+        }
+        m_CheckTools = new Button("CheckShaderTools", "Check Tools");
+        PlaceFixed(m_CheckTools, 180, 230, 140, 26);
+        m_CheckTools->SetOnClick([this]() { StartBuild(false, true); });
+        AddChild(m_CheckTools); m_ToolControls.push_back(m_CheckTools);
+        auto* openLog = new Button("OpenShaderDiagnostic", "Open Log");
+        PlaceFixed(openLog, 330, 230, 110, 26);
+        openLog->SetOnClick([this]() {
+            if (!m_ToolLog.empty() && std::filesystem::is_regular_file(m_ToolLog))
+                ShellExecuteW(nullptr, L"open", m_ToolLog.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        });
+        AddChild(openLog); m_ToolControls.push_back(openLog);
+        ShowShaderTools(false);
+    }
+
+    void BuildSettingsPanel::ShowShaderTools(bool show)
+    {
+        m_ShowShaderTools = show;
+        for (auto* child : GetChildren())
+        {
+            const bool tool = std::find(m_ToolControls.begin(), m_ToolControls.end(), child) != m_ToolControls.end();
+            child->SetVisible(child == m_Save || child == m_ShaderTools || child == m_Cancel || (tool == show));
+        }
+        m_ShaderTools->SetText(show ? "Build Settings" : "Shader Tools...");
     }
 
     void BuildSettingsPanel::OnOpened()
@@ -158,12 +213,17 @@ namespace CCEngine::UI
 
     void BuildSettingsPanel::SyncControls()
     {
+        m_ToolVersions.clear();
         const auto& data = m_Profile.Data();
         m_ProductName->SetText(data.ProductName, false);
         m_ProductVersion->SetText(data.ProductVersion, false);
         m_UpdateChannel->SetText(data.UpdateChannel, false);
         m_ExecutableName->SetText(data.ExecutableName, false);
         m_OutputDirectory->SetText(data.OutputDirectory.generic_string(), false);
+        m_ToolInputs[0]->SetText(data.ShaderCompilerScript, false);
+        m_ToolInputs[1]->SetText(data.PythonExecutable, false);
+        m_ToolInputs[2]->SetText(data.DXCExecutable, false);
+        m_ToolInputs[3]->SetText(data.SpirvCrossExecutable, false);
         if (m_SelectedAlwaysInclude >= static_cast<int>(data.AlwaysIncludeAssets.size()))
             m_SelectedAlwaysInclude = -1;
         m_AlwaysIncludeScroll.ContentHeight = static_cast<float>(data.AlwaysIncludeAssets.size()) * 22.0f;
@@ -187,6 +247,7 @@ namespace CCEngine::UI
         m_ShaderFallback->SetText(m_Profile.Data().AllowDevelopmentShaderFallback ? "Enabled in Development" : "Disabled");
         m_ShaderFallback->SetActive(!release && !m_Building);
         m_Cancel->SetActive(m_Building);
+        if (m_CheckTools) m_CheckTools->SetText(m_CheckingTools ? "Checking..." : "Check Tools");
     }
 
     void BuildSettingsPanel::SaveProfile()
@@ -306,7 +367,7 @@ namespace CCEngine::UI
         return (PathContext::ProjectRoot() / m_Profile.Data().OutputDirectory).lexically_normal();
     }
 
-    void BuildSettingsPanel::StartBuild(bool runAfterBuild)
+    void BuildSettingsPanel::StartBuild(bool runAfterBuild, bool checkTools)
     {
         if (m_Building)
             return;
@@ -323,6 +384,11 @@ namespace CCEngine::UI
         request.DevelopmentBuild = data.Configuration == GameBuildConfiguration::Development;
         request.ManagedRuntime = data.ManagedRuntime;
         request.PlayerWindowMode = data.PlayerWindowMode;
+        request.GraphicsAPI = data.GraphicsAPI;
+        request.ShaderCompilerScript = data.ShaderCompilerScript;
+        request.PythonExecutable = data.PythonExecutable;
+        request.DXCExecutable = data.DXCExecutable;
+        request.SpirvCrossExecutable = data.SpirvCrossExecutable;
         request.IncludeDebugSymbols = data.IncludeDebugSymbols;
         request.ExcludeLicensedSampleAssets = data.ExcludeLicensedSampleAssets;
         request.VerifyPlayerFrame = data.VerifyPlayerFrame;
@@ -338,13 +404,17 @@ namespace CCEngine::UI
             m_CurrentFile = file;
         };
         m_Building = true;
+        m_CheckingTools = checkTools;
+        if (checkTools) { m_Stage = "Checking shader tools..."; m_ToolLog.clear(); m_ToolVersions.clear(); }
         m_RunAfterBuild = runAfterBuild;
         m_LastMessages.clear();
         m_MessageScroll.ScrollY = 0.0f;
         m_SelectedMessage = -1;
         m_LastClickedMessage = -1;
         RefreshModeButtons();
-        m_BuildTask = std::async(std::launch::async, [request]() { return GameBuildService().Build(request); });
+        m_BuildTask = std::async(std::launch::async, [request, checkTools]() {
+            return checkTools ? GameBuildService().CheckShaderTools(request) : GameBuildService().Build(request);
+        });
     }
 
     void BuildSettingsPanel::CancelBuild()
@@ -379,6 +449,16 @@ namespace CCEngine::UI
             return message.Stage == "Cancel";
         });
         m_Stage = report.Success ? "Build completed" : (cancelled ? "Build cancelled" : "Build failed");
+        if (m_CheckingTools)
+        {
+            if (report.Success)
+                for (const auto& message : report.Messages)
+                    if (message.Stage == "Tool Version") m_ToolVersions.push_back(message.Message);
+            m_ToolLog = report.OutputDirectory.empty() ? std::filesystem::path{} : report.OutputDirectory / "ShaderBuild.log";
+            m_Stage = report.Success ? "Tool checks passed (offline)" :
+                (m_CancelRequested && m_CancelRequested->load() ? "Tool checks cancelled" : "Tool checks failed");
+            m_CheckingTools = false;
+        }
         m_Progress = report.Success ? 1.0f : m_Progress;
         RefreshModeButtons();
         for (const GameBuildMessage& message : report.Messages)
@@ -409,6 +489,17 @@ namespace CCEngine::UI
         const float x = m_CalculatedPos.x + 24.0f;
         const float y = m_CalculatedPos.y;
         const DirectX::XMFLOAT4 label = { 0.72f, 0.72f, 0.74f, 1.0f };
+        if (m_ShowShaderTools)
+        {
+            const char* labels[] = { "Compiler Script", "Python", "DXC", "SPIRV-Cross" };
+            for (int i = 0; i < 4; ++i) UIRenderer::DrawString(labels[i], x, y + 84 + i * 36, label);
+            UIRenderer::DrawString(m_Stage, x, y + 290, label);
+            UIRenderer::SetClipRect(x, y + 320, (std::max)(0.0f, m_CalculatedSize.x - 48.0f), 96.0f);
+            for (size_t i = 0; i < m_ToolVersions.size(); ++i)
+                UIRenderer::DrawString(m_ToolVersions[i], x, y + 324 + float(i) * 28, label);
+            UIRenderer::ClearClipRect();
+            return;
+        }
         UIRenderer::DrawString("Product Name", x, y + 84, label);
         UIRenderer::DrawString("Product Version", x, y + 120, label);
         UIRenderer::DrawString("Update Channel", x, y + 156, label);
@@ -422,7 +513,7 @@ namespace CCEngine::UI
         UIRenderer::DrawString("Verify First Frame", x, y + 506, label);
         UIRenderer::DrawString("Shader Fallback", x, y + 540, label);
         UIRenderer::DrawString("Platform", x, y + 586, label);
-        UIRenderer::DrawString("Windows x64 (Direct3D 11)", x + 156, y + 586, { 0.82f, 0.82f, 0.84f, 1.0f });
+        UIRenderer::DrawString("Windows x64 (" + m_Profile.Data().GraphicsAPI + ")", x + 156, y + 586, { 0.82f, 0.82f, 0.84f, 1.0f });
         if (m_ProjectSettings)
         {
             const auto& project = m_ProjectSettings->Data();
@@ -518,6 +609,8 @@ namespace CCEngine::UI
 
         if (WindowPanel::OnEvent(e))
             return true;
+
+        if (m_ShowShaderTools) return false;
 
         if (e.GetEventType() == EventType::MouseScrolled)
         {

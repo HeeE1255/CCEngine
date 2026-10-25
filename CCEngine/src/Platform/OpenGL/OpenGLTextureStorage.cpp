@@ -1,11 +1,12 @@
 #include "OpenGLTextureStorage.h"
 #if defined(CC_ENABLE_OPENGL_RHI)
+#include "OpenGLDevice.h"
 #include "stb_image.h"
 #include <stdexcept>
 #include <limits>
 namespace CCEngine
 {
-    OpenGLTexture2D::OpenGLTexture2D(const std::string& path) : m_Context(OpenGLContext::Current())
+    OpenGLTexture2D::OpenGLTexture2D(const std::string& path) : m_Device(OpenGLContext::Current().SharedDevice())
     {
         int width = 0, height = 0, channels = 0;
         stbi_uc* pixels = stbi_load(path.c_str(), &width, &height, &channels, 4);
@@ -17,10 +18,10 @@ namespace CCEngine
     OpenGLTexture2D::OpenGLTexture2D(uint32_t width, uint32_t height)
         : OpenGLTexture2D(OpenGLContext::Current(), width, height) {}
     OpenGLTexture2D::OpenGLTexture2D(OpenGLContext& context, uint32_t width, uint32_t height, const void* pixels)
-        : m_Context(context), m_Width(width), m_Height(height) { Allocate(pixels); }
+        : m_Device(context.SharedDevice()), m_Width(width), m_Height(height) { Allocate(pixels); }
     void OpenGLTexture2D::Allocate(const void* pixels)
     {
-        auto& gl = m_Context.GL(); GLint limit = 0; glGetIntegerv(GL_MAX_TEXTURE_SIZE, &limit);
+        auto& gl = Context().GL(); GLint limit = 0; glGetIntegerv(GL_MAX_TEXTURE_SIZE, &limit);
         if (!m_Width || !m_Height || m_Width > static_cast<uint32_t>(limit) || m_Height > static_cast<uint32_t>(limit) ||
             uint64_t(m_Width) * m_Height * 4 > UINT32_MAX) throw std::invalid_argument("Invalid OpenGL texture size");
         gl.CreateTextures(GL_TEXTURE_2D, 1, &m_Texture);
@@ -41,13 +42,13 @@ namespace CCEngine
             throw std::runtime_error("OpenGL texture allocation failed");
         }
     }
-    OpenGLTexture2D::~OpenGLTexture2D() { m_Context.MakeCurrent(); if (m_Texture) glDeleteTextures(1, &m_Texture); }
-    void OpenGLTexture2D::Bind(uint32_t slot) const { m_Context.MakeCurrent(); m_Context.Commands().BindTexture(slot, GetRendererID()); }
-    void OpenGLTexture2D::Unbind(uint32_t slot) const { m_Context.MakeCurrent(); m_Context.Commands().BindTexture(slot, nullptr); }
+    OpenGLTexture2D::~OpenGLTexture2D() { m_Device->DeleteTexture(m_Texture); }
+    void OpenGLTexture2D::Bind(uint32_t slot) const { Context().Commands().BindTexture(slot, GetRendererID()); }
+    void OpenGLTexture2D::Unbind(uint32_t slot) const { Context().Commands().BindTexture(slot, nullptr); }
     void OpenGLTexture2D::SetData(void* data, uint32_t size)
     {
         if (!data || uint64_t(m_Width) * m_Height * 4 != size) throw std::invalid_argument("RGBA8 texture upload size mismatch");
-        auto& gl = m_Context.GL();
+        auto& gl = Context().GL();
         GLint buffer = 0, alignment = 0, rowLength = 0, skipRows = 0, skipPixels = 0;
         glGetIntegerv(0x88EF, &buffer); glGetIntegerv(GL_UNPACK_ALIGNMENT, &alignment);
         glGetIntegerv(GL_UNPACK_ROW_LENGTH, &rowLength); glGetIntegerv(GL_UNPACK_SKIP_ROWS, &skipRows); glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &skipPixels);

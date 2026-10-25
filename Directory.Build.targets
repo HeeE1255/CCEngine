@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <!-- 백엔드를 컴파일에 포함하는 옵션이다. 검증 전 API 실행 차단을 해제하지 않는다. -->
+  <ItemDefinitionGroup Condition="'$(MSBuildProjectName)' == 'CCEngine' and '$(CCEnableDX12)' == 'true'">
+    <ClCompile>
+      <PreprocessorDefinitions>CC_ENABLE_DX12_RHI;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>d3d12.lib;bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <PropertyGroup><CCVulkanSDK Condition="'$(CCVulkanSDK)' == ''">$(VULKAN_SDK)</CCVulkanSDK></PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(MSBuildProjectName)' == 'CCEngine' and '$(CCEnableOpenGL)' == 'true'">
+    <ClCompile><PreprocessorDefinitions>CC_ENABLE_OPENGL_RHI;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>
+    <Link><AdditionalDependencies>opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(MSBuildProjectName)' == 'CCEngine' and '$(CCEnableVulkan)' == 'true'">
+    <ClCompile>
+      <PreprocessorDefinitions>CC_ENABLE_VULKAN_RHI;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(CCVulkanSDK)\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <AdditionalLibraryDirectories>$(CCVulkanSDK)\Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <Target Name="CheckCCVulkanSDK" BeforeTargets="ClCompile" Condition="'$(MSBuildProjectName)' == 'CCEngine' and '$(CCEnableVulkan)' == 'true'">
+    <Error Condition="!Exists('$(CCVulkanSDK)\Include\vulkan\vulkan.h') or !Exists('$(CCVulkanSDK)\Lib\vulkan-1.lib')" Text="CCEnableVulkan requires a complete Vulkan SDK; set CCVulkanSDK or VULKAN_SDK." />
+  </Target>
+</Project>

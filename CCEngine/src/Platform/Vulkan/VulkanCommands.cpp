@@ -9,6 +9,7 @@ namespace CCEngine
 {
     void VulkanContext::BeginRecording()
     {
+        m_SharedDevice->AcquireRecording(this);
         if (m_Recording) return;
         CheckVulkan(vkResetCommandBuffer(m_Command, 0), "Reset command buffer");
         VkCommandBufferBeginInfo info{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
@@ -18,6 +19,8 @@ namespace CCEngine
     }
     void VulkanContext::Transition(VkCommandBuffer command, VulkanImageAllocation& image, VkImageLayout next)
     {
+        if (image.Owner != m_SharedDevice || command != m_Command || !m_Recording)
+            throw std::invalid_argument("Foreign Vulkan image or command buffer");
         if (image.Layout == next) return;
         VkImageMemoryBarrier barrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
         barrier.oldLayout = image.Layout; barrier.newLayout = next;
@@ -66,7 +69,9 @@ namespace CCEngine
     }
     void VulkanContext::BindTarget(VulkanRenderTarget& target)
     {
-        if (&target.Context != this) throw std::invalid_argument("Render target belongs to another context");
+        if (target.Owner != m_SharedDevice || (target.Backbuffer && target.WindowOwner != this))
+            throw std::invalid_argument("Render target belongs to another device or window");
+        m_SharedDevice->AcquireRecording(this);
         EndPass(); m_Target = &target;
         m_API->UnbindTextures(0, m_TextureSlots);
         BeginPass();
@@ -100,7 +105,7 @@ namespace CCEngine
     void VulkanContext::Submit(bool present)
     {
         EndPass();
-        if (!m_Recording) return;
+        if (!m_Recording) { m_SharedDevice->EndRecording(this); return; }
         CheckVulkan(vkEndCommandBuffer(m_Command), "End command buffer");
         CheckVulkan(vkResetFences(m_Device, 1, &m_Fence), "Reset submit fence");
         VkSubmitInfo info{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
@@ -108,9 +113,14 @@ namespace CCEngine
         if (m_WaitAcquire) { info.waitSemaphoreCount = 1; info.pWaitSemaphores = &m_Acquire; info.pWaitDstStageMask = &stage; }
         info.commandBufferCount = 1; info.pCommandBuffers = &m_Command;
         if (present) { info.signalSemaphoreCount = 1; info.pSignalSemaphores = &m_PresentSemaphores.at(m_ImageIndex); }
-        CheckVulkan(vkQueueSubmit(m_Queue, 1, &info, m_Fence), "Submit graphics commands");
-        CheckVulkan(vkWaitForFences(m_Device, 1, &m_Fence, VK_TRUE, UINT64_MAX), "Wait graphics fence");
+        try
+        {
+            CheckVulkan(vkQueueSubmit(m_Queue, 1, &info, m_Fence), "Submit graphics commands");
+            CheckVulkan(vkWaitForFences(m_Device, 1, &m_Fence, VK_TRUE, 10000000000ull), "Wait graphics fence");
+        }
+        catch (...) { m_SharedDevice->MarkFailed(); throw; }
         m_Recording = false; m_WaitAcquire = false;
+        m_SharedDevice->EndRecording(this);
         if (present)
         {
             VkPresentInfoKHR presentation{ VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
@@ -126,7 +136,11 @@ namespace CCEngine
         for (auto& destroy : garbage) destroy();
         for (auto pool : m_DescriptorPools) CheckVulkan(vkResetDescriptorPool(m_Device, pool, 0), "Reset descriptor pool");
     }
-    void VulkanContext::Flush() { Submit(false); }
+    void VulkanContext::Flush()
+    {
+        try { m_SharedDevice->RequireReady(); Submit(false); }
+        catch (...) { m_SharedDevice->MarkFailed(); throw; }
+    }
     void VulkanContext::Upload(VulkanImageAllocation& image, const void* data, uint32_t bytes)
     {
         if (!data || image.Format != VK_FORMAT_R8G8B8A8_UNORM ||
@@ -147,7 +161,9 @@ namespace CCEngine
     {
         if (!destination || !width || !height || x > image.Extent.width || y > image.Extent.height ||
             width > image.Extent.width - x || height > image.Extent.height - y ||
-            (image.Format != VK_FORMAT_R8G8B8A8_UNORM && image.Format != VK_FORMAT_R32_SINT) ||
+            (image.Format != VK_FORMAT_R8G8B8A8_UNORM && image.Format != VK_FORMAT_R32_SINT &&
+                image.Format != VK_FORMAT_B8G8R8A8_UNORM && image.Format != VK_FORMAT_B8G8R8A8_SRGB &&
+                image.Format != VK_FORMAT_R8G8B8A8_SRGB) ||
             image.Layout == VK_IMAGE_LAYOUT_UNDEFINED)
             throw std::invalid_argument("Invalid Vulkan readback region or format");
         const VkDeviceSize bytes = VkDeviceSize(width) * height * 4;
@@ -180,24 +196,24 @@ namespace CCEngine
     }
     void VulkanContext::BindVertex(std::shared_ptr<VulkanBufferAllocation> buffer, const BufferLayout& layout)
     {
-        if (buffer && &buffer->Context != this) throw std::invalid_argument("Foreign vertex buffer");
+        if (buffer && buffer->Owner != m_SharedDevice) throw std::invalid_argument("Foreign vertex buffer");
         m_Vertex = std::move(buffer); m_VertexLayout = layout;
     }
     void VulkanContext::BindIndex(std::shared_ptr<VulkanBufferAllocation> buffer, uint32_t count)
     {
-        if (buffer && (&buffer->Context != this || uint64_t(count) * 4 > buffer->Size))
+        if (buffer && (buffer->Owner != m_SharedDevice || uint64_t(count) * 4 > buffer->Size))
             throw std::invalid_argument("Invalid index buffer");
         m_Index = std::move(buffer); m_IndexCount = count;
     }
     void VulkanContext::BindUniform(uint32_t slot, std::shared_ptr<VulkanBufferAllocation> buffer)
     {
-        if (slot >= m_Uniforms.size() || (buffer && (&buffer->Context != this || buffer->Size > m_Properties.limits.maxUniformBufferRange)))
+        if (slot >= m_Uniforms.size() || (buffer && (buffer->Owner != m_SharedDevice || buffer->Size > m_Properties.limits.maxUniformBufferRange)))
             throw std::out_of_range("Invalid uniform binding");
         m_Uniforms[slot] = std::move(buffer);
     }
     void VulkanContext::BindShader(std::shared_ptr<VulkanShaderProgram> program)
     {
-        if (program && &program->Context != this) throw std::invalid_argument("Foreign shader");
+        if (program && program->Owner != m_SharedDevice) throw std::invalid_argument("Foreign shader");
         m_Shader = std::move(program);
     }
     void VulkanContext::ReplaceBuffer(const std::shared_ptr<VulkanBufferAllocation>& oldBuffer,

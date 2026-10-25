@@ -1,5 +1,6 @@
 #include "VulkanRendererAPI.h"
 #if defined(CC_ENABLE_VULKAN_RHI)
+#include "VulkanDevice.h"
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
@@ -20,7 +21,7 @@ namespace CCEngine
     VulkanRendererAPI::VulkanRendererAPI(VulkanRendererServices services)
         : m_Services(std::move(services))
     {
-        if (!m_Services.PrepareDraw || !m_Services.ResizeSwapchain ||
+        if (!m_Services.Device || !m_Services.PrepareDraw || !m_Services.ResizeSwapchain ||
             !m_Services.TextureSlots || !IsSampledImage(m_Services.EmptyTexture))
             throw std::invalid_argument("Vulkan RHI requires draw/resize services, texture limits and a valid empty texture");
         // nullDescriptor 확장은 필수가 아니다. 빈 슬롯은 실제 빈 텍스처로 채운다.
@@ -58,27 +59,11 @@ namespace CCEngine
     }
     RendererHandle VulkanRendererAPI::RegisterTexture(const VkDescriptorImageInfo& image)
     {
-        if (!IsSampledImage(image)) throw std::invalid_argument("Invalid Vulkan sampled image");
-        auto binding = std::make_unique<TextureBinding>();
-        binding->Image = image;
-        RendererHandle handle = binding.get();
-        m_RegisteredTextures.emplace(handle, std::move(binding));
-        return handle;
+        return m_Services.Device->RegisterTexture(image);
     }
     void VulkanRendererAPI::UnregisterTexture(RendererHandle handle)
     {
-        if (!handle) return;
-        auto found = m_RegisteredTextures.find(handle);
-        if (found == m_RegisteredTextures.end()) throw std::invalid_argument("Unknown Vulkan texture handle");
-        // 여기서는 CPU 슬롯만 해제한다. VkImage/View/Sampler 파괴는 소유자가 GPU fence 뒤에 수행한다.
-        m_RetiredTextures.push_back(std::move(found->second));
-        m_RegisteredTextures.erase(found);
-        for (size_t i = 0; i < m_TextureHandles.size(); ++i)
-            if (m_TextureHandles[i] == handle)
-            {
-                m_TextureHandles[i] = nullptr;
-                m_Textures[i] = m_Services.EmptyTexture;
-            }
+        m_Services.Device->UnregisterTexture(handle);
     }
     void VulkanRendererAPI::SetClearColor(float r, float g, float b, float a)
     {
@@ -87,12 +72,7 @@ namespace CCEngine
     }
     void VulkanRendererAPI::UpdateTexture(RendererHandle handle, const VkDescriptorImageInfo& image)
     {
-        auto found = m_RegisteredTextures.find(handle);
-        if (found == m_RegisteredTextures.end() || !IsSampledImage(image))
-            throw std::invalid_argument("Invalid Vulkan texture update");
-        found->second->Image = image;
-        for (size_t i = 0; i < m_TextureHandles.size(); ++i)
-            if (m_TextureHandles[i] == handle) m_Textures[i] = image;
+        m_Services.Device->UpdateTexture(handle, image);
     }
     void VulkanRendererAPI::RestoreView(const ViewState& state)
     {
@@ -134,6 +114,9 @@ namespace CCEngine
         if (!count || m_ViewportEmpty ||
             (m_ScissorEnabled && (!m_Scissor.extent.width || !m_Scissor.extent.height))) return;
         if (m_Services.ValidateIndexCount) m_Services.ValidateIndexCount(count);
+        // 다른 창에서 교체하거나 삭제한 핸들도 이번 draw의 descriptor에 즉시 반영한다.
+        for (size_t i = 0; i < m_TextureHandles.size(); ++i)
+            m_Textures[i] = m_Services.Device->ResolveTexture(m_TextureHandles[i], m_Services.EmptyTexture);
         const VulkanDrawBinding binding = m_Services.PrepareDraw(m_Commands, m_State, m_Textures);
         if (!binding.Pipeline || !binding.Layout)
             throw std::runtime_error("Vulkan draw service returned an incomplete pipeline binding");
@@ -202,10 +185,7 @@ namespace CCEngine
     void VulkanRendererAPI::BindTexture(uint32_t slot, RendererHandle handle)
     {
         if (slot >= m_Textures.size()) throw std::out_of_range("Vulkan texture slot exceeds configured limit");
-        auto found = m_RegisteredTextures.find(handle);
-        if (handle && found == m_RegisteredTextures.end())
-            throw std::invalid_argument("Texture belongs to a different backend or has been unregistered");
-        m_Textures[slot] = handle ? found->second->Image : m_Services.EmptyTexture;
+        m_Textures[slot] = m_Services.Device->ResolveTexture(handle, m_Services.EmptyTexture);
         m_TextureHandles[slot] = handle;
     }
     void VulkanRendererAPI::UnbindTextures(uint32_t startSlot, uint32_t count)

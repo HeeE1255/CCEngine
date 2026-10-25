@@ -1,7 +1,9 @@
 #include "Application.h"
+#include "Build/GameBuildService.h"
 #include "Core/Memory.h"
 #include "Events/ApplicationEvent.h"
 #include "Renderer/RendererAPI.h"
+#include "Renderer/BackendShaderPackage.h"
 #include "Renderer/Renderer.h"
 #include "Renderer/UIRenderer.h"
 #include "UI/Widget.h"
@@ -13,6 +15,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <vector>
+#include <filesystem>
 
 #ifdef CC_PLATFORM_WINDOWS
 #define NOMINMAX
@@ -130,6 +133,7 @@ namespace CCEngine
                 type == EventType::TextInput ||
                 type == EventType::FileDrop;
         }
+
     }
 
     Application::Application(const std::vector<std::string>& commandLineArgs)
@@ -153,6 +157,54 @@ namespace CCEngine
             RendererAPI::SetAPI(RendererAPI::API::Vulkan);
         else
             RendererAPI::SetAPI(RendererAPI::API::DirectX11);
+
+        std::vector<std::filesystem::path> shaderPackages;
+        std::filesystem::path shaderSourceRoot;
+        for (const auto& argument : commandLineArgs)
+        {
+            const std::string packagePrefix = "--shader-package=";
+            const std::string rootPrefix = "--shader-source-root=";
+            if (argument.rfind(packagePrefix, 0) == 0)
+            {
+                if (argument.size() == packagePrefix.size()) throw std::invalid_argument("Empty shader package path.");
+                shaderPackages.emplace_back(argument.substr(packagePrefix.size()));
+            }
+            else if (argument.rfind(rootPrefix, 0) == 0)
+            {
+                if (!shaderSourceRoot.empty() || argument.size() == rootPrefix.size())
+                    throw std::invalid_argument("Specify one nonempty shader source root.");
+                shaderSourceRoot = argument.substr(rootPrefix.size());
+            }
+        }
+#if defined(CC_ENABLE_DX12_RHI)
+        ClearDX12ShaderPackages();
+#endif
+#if defined(CC_ENABLE_OPENGL_RHI) || defined(CC_ENABLE_VULKAN_RHI)
+        ClearPortableShaderPackages();
+#endif
+        if (RendererAPI::GetAPI() != RendererAPI::API::DirectX11 || !shaderPackages.empty() || !shaderSourceRoot.empty())
+        {
+            if (RendererAPI::GetAPI() != RendererAPI::API::DirectX11)
+                RetainEditorShaderPackageUsage(shaderPackages);
+            if (RendererAPI::GetAPI() == RendererAPI::API::DirectX12)
+            {
+#if defined(CC_ENABLE_DX12_RHI)
+                ConfigureDX12ShaderPackages(shaderPackages, shaderSourceRoot);
+#else
+                throw std::runtime_error("DX12 shader package support was not compiled.");
+#endif
+            }
+            else if (RendererAPI::GetAPI() == RendererAPI::API::OpenGL || RendererAPI::GetAPI() == RendererAPI::API::Vulkan)
+            {
+#if defined(CC_ENABLE_OPENGL_RHI) || defined(CC_ENABLE_VULKAN_RHI)
+                ConfigurePortableShaderPackages(RendererAPI::GetAPI() == RendererAPI::API::OpenGL ? "opengl" : "vulkan",
+                    shaderPackages, shaderSourceRoot);
+#else
+                throw std::runtime_error("Portable shader package support was not compiled.");
+#endif
+            }
+            else throw std::invalid_argument("Backend shader package options cannot be used with DirectX11.");
+        }
 
         // 메모리 매니저 초기화
         MemoryManager::Init();
@@ -410,6 +462,9 @@ namespace CCEngine
                 const bool isMainWindow = (win == m_Window.get());
 
                 if (!context) continue; // 컨텍스트가 없는 창은 렌더링하지 않습니다.
+                // 최소화된 보조 창은 swapchain을 잃거나 크기가 0이 된다.
+                // 다른 창의 업데이트는 유지하되 이 창의 투영/렌더/Present만 건너뛴다.
+                if (win->ShouldClose() || win->IsWindowMinimized() || !win->GetWidth() || !win->GetHeight()) continue;
 
                 // 현재 렌더링 대상을 이 창의 백버퍼로 전환합니다.
                 stageStartedAt = std::chrono::steady_clock::now();

@@ -31,7 +31,7 @@ namespace CCEngine
     }
     VulkanShader::VulkanShader(VulkanContext& context, const std::vector<uint32_t>& vertex,
         const std::vector<uint32_t>& fragment, const std::string& vertexEntry, const std::string& fragmentEntry)
-        : m_Context(context), m_Program(std::make_shared<VulkanShaderProgram>(context))
+        : m_Device(context.SharedDevice()), m_Program(std::make_shared<VulkanShaderProgram>(context))
     {
         if (vertexEntry.empty() || fragmentEntry.empty()) throw std::invalid_argument("Empty shader entry point");
         m_Program->VertexEntry = vertexEntry; m_Program->FragmentEntry = fragmentEntry;

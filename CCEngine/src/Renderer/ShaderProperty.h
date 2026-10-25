@@ -47,6 +47,7 @@ namespace CCEngine
     public:
         static std::vector<ShaderPropertyDefinition> LoadFromShaderFile(const std::filesystem::path& shaderPath);
         static std::vector<ShaderPropertyDefinition> ParseSource(const std::string& source);
+        static std::string LoadDeclarationSource(const std::filesystem::path& shaderPath);
         static ShaderPropertyType TypeFromString(const std::string& text);
         static std::string TypeToString(ShaderPropertyType type);
     };

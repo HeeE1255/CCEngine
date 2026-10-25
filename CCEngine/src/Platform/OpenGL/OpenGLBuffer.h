@@ -11,7 +11,8 @@ namespace CCEngine
         OpenGLBufferStorage(const OpenGLBufferStorage&) = delete;
         OpenGLBufferStorage& operator=(const OpenGLBufferStorage&) = delete;
         void Update(const void* data, uint32_t size);
-        OpenGLContext& Context;
+        OpenGLContext& Context() const { return OpenGLContext::CurrentFor(Device); }
+        std::shared_ptr<OpenGLDevice> Device;
         GLuint Name = 0;
         uint32_t Size;
     };
@@ -22,7 +23,7 @@ namespace CCEngine
         void Bind() const override;
         void Unbind() const override;
         const BufferLayout& GetLayout() const override { return m_Layout; }
-        void SetLayout(const BufferLayout& layout) override { m_Layout = layout; }
+        void SetLayout(const BufferLayout& layout) override { layout.Validate(); m_Layout = layout; }
         void SetData(const void* data, uint32_t size) override { m_Buffer.Update(data, size); }
     private:
         OpenGLBufferStorage m_Buffer;
@@ -42,11 +43,27 @@ namespace CCEngine
     class OpenGLConstantBuffer final : public ConstantBuffer
     {
     public:
-        OpenGLConstantBuffer(OpenGLContext& context, uint32_t size) : m_Buffer(context, size, nullptr) {}
+        OpenGLConstantBuffer(OpenGLContext& context, uint32_t size);
         void Bind(uint32_t slot = 0) const override;
-        void SetData(const void* data, uint32_t size) override { m_Buffer.Update(data, size); }
+        void SetData(const void* data, uint32_t size) override;
     private:
-        OpenGLBufferStorage m_Buffer;
+        std::shared_ptr<OpenGLUniformData> m_Data;
+    };
+
+    struct OpenGLUniformData
+    {
+        OpenGLBufferStorage Original;
+        std::vector<uint8_t> Bytes;
+        uint64_t Revision = 0;
+        OpenGLUniformData(OpenGLContext& context, uint32_t size) : Original(context, size, nullptr), Bytes(size, 0) {}
+    };
+
+    struct OpenGLUniformBinding
+    {
+        std::weak_ptr<OpenGLUniformData> Source;
+        uint64_t Revision = 0;
+        std::shared_ptr<const std::vector<UniformRepackLayout>> Layouts;
+        std::unique_ptr<OpenGLBufferStorage> Converted;
     };
 }
 #endif

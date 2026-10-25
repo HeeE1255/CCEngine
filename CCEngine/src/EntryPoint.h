@@ -19,6 +19,7 @@
 #include <memory>
 #include <stdexcept>
 #include <iostream>
+#include <exception>
 #include <Windows.h>
 #include "Core/AssetDatabase.h"
 #include "Core/ConsoleLog.h"
@@ -113,6 +114,17 @@ namespace
 
 int main(int argc, char** argv) 
 {
+    std::set_terminate([] {
+        // OS 콜백이나 noexcept 경계를 벗어난 예외도 종료 전에 원인을 남긴다.
+        try {
+            if (auto error = std::current_exception()) std::rethrow_exception(error);
+        } catch (const std::exception& error) {
+            std::cerr << "CCEngine fatal exception: " << error.what() << std::endl;
+        } catch (...) {
+            std::cerr << "CCEngine fatal exception: unknown type" << std::endl;
+        }
+        std::abort();
+    });
     // DPI 인식 설정 
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 

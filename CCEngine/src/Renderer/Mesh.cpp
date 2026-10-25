@@ -1,8 +1,14 @@
 #pragma once
 #include "Mesh.h"
+#include <cstddef>
 
 namespace CCEngine
 {
+    static_assert(sizeof(Vertex3D) == 64);
+    static_assert(offsetof(Vertex3D, Normal) == 12);
+    static_assert(offsetof(Vertex3D, TexCoord) == 24);
+    static_assert(offsetof(Vertex3D, BoneIDs) == 32);
+    static_assert(offsetof(Vertex3D, Weights) == 48);
     Mesh::Mesh(const std::vector<Vertex3D>& vertices, const std::vector<uint32_t>& indices)
         : m_Vertices(vertices), m_Indices(indices)
     {
@@ -36,6 +42,7 @@ namespace CCEngine
             { ShaderDataType::Int4, "BONEIDS" },
             { ShaderDataType::Float4, "WEIGHTS" }
         };
+        layout.Validate(sizeof(Vertex3D));
         m_VertexBuffer->SetLayout(layout);
 
         // 3. Index Buffer 생성 및 데이터 전송

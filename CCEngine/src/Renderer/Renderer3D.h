@@ -45,7 +45,7 @@ namespace CCEngine
         static void DrawSkinnedMesh(const DirectX::XMMATRIX& transform, const std::shared_ptr<Mesh>& mesh, const std::shared_ptr<Texture2D>& texture, const DirectX::XMFLOAT4& color, const MaterialAsset* material, int entityID, const std::vector<DirectX::XMMATRIX>& boneMatrices, bool forceErrorShader = false);
     private:
         static std::shared_ptr<Texture2D> GetCachedMaterialTexture(const std::string& path);
-        static void BindMaterialProperties(const MaterialAsset* material, const std::shared_ptr<Texture2D>& fallbackAlbedo, bool useBasePbrLayout);
+        static void BindMaterialProperties(const MaterialAsset* material, const std::shared_ptr<Texture2D>& fallbackAlbedo, const Shader& shader);
 
         struct RenderData
         {

@@ -14,7 +14,12 @@ namespace CCEngine
             const std::filesystem::path& vertex, const std::filesystem::path& pixel);
         DX12Shader(const DX12Shader&) = delete;
         DX12Shader& operator=(const DX12Shader&) = delete;
-        void Bind() const override { DX12Context::CurrentFor(m_Device).BindProgram(m_Program); }
+        void Bind() const override
+        {
+            m_Program->HasInputs = HasVertexInputs();
+            if (m_Program->HasInputs) m_Program->Inputs = GetVertexInputs();
+            DX12Context::CurrentFor(m_Device).BindProgram(m_Program);
+        }
         void Unbind() const override { DX12Context::CurrentFor(m_Device).BindProgram(nullptr); }
         void BindLayout(const BufferLayout& layout) override { DX12Context::CurrentFor(m_Device).SetLayout(layout); }
         bool IsValid() const override { return m_Program && !m_Program->Vertex.empty() && !m_Program->Pixel.empty(); }

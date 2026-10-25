@@ -91,6 +91,11 @@ namespace CCEngine
         if (compileResult.Success)
         {
             entry.Program = CreateShaderFromCompileResult(compileResult);
+            if (entry.Program && std::filesystem::is_regular_file(shaderPath))
+            {
+                try { entry.Program->SetMaterialPropertySource(ShaderPropertyParser::LoadDeclarationSource(shaderPath)); }
+                catch (const std::exception& error) { entry.Program.reset(); compileResult.Summary = error.what(); }
+            }
         }
 
         if (!compileResult.Success || !entry.Program)

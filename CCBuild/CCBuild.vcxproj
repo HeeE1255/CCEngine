@@ -150,6 +150,10 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\CCBuildApp.cpp" />
+    <ClCompile Include="src\ShaderReflectionCommand.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\ShaderReflectionCommand.h" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\CCEngine\CCEngine.vcxproj">

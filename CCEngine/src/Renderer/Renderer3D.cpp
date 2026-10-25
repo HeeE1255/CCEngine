@@ -1,11 +1,14 @@
 #include "Renderer3D.h"
 #include "Renderer/MaterialAsset.h"
+#include "Renderer/MaterialTextureBinding.h"
+#include "Renderer/MaterialPropertyBinding.h"
 #include "Renderer/MeshFactory.h"
 #include "Renderer/RenderCommand.h" // DX11 RHI의 RenderCommand 호출용!
 #include "Renderer/RuntimeShaderLibrary.h"
 #include "Utils/MathUtils.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <filesystem>
 #include <stdexcept>
 
@@ -28,7 +31,6 @@ namespace CCEngine
 
     constexpr uint32_t MaxMaterialColorProperties = 8;
     constexpr uint32_t MaxMaterialScalarSlots = 16;
-    constexpr uint32_t MaxMaterialTextureSlots = 8;
 
     // HLSL의 b1 레지스터와 매칭 (오브젝트)
     struct TransformData // 총 96바이트 
@@ -41,7 +43,7 @@ namespace CCEngine
     };
 
     // HLSL의 b2 레지스터와 매칭 (뼈대 애니메이션)
-    struct BoneData // 12800 바이트 (64 bytes * 512 matrices)
+    struct BoneData // 32768 바이트 (64 bytes * 512 matrices)
     {
         DirectX::XMMATRIX BoneMatrices[512];
     };
@@ -57,6 +59,31 @@ namespace CCEngine
         DirectX::XMFLOAT4 ToggleProperties[4] = {};
         DirectX::XMFLOAT4 SurfaceValues = { 0.5f, 0.0f, 0.0f, 0.0f }; // x: Roughness, y: Metallic, w: NormalTexture 사용 여부
     };
+
+    // 오프라인 reflection 검사의 b4 계약과 CPU 업로드 배치를 함께 고정한다.
+    // 필드 추가/순서 변경 시 셰이더 생성기와 검증 규칙도 같이 변경해야 한다.
+    static_assert(sizeof(CameraData) == 80);
+    static_assert(offsetof(CameraData, CameraPosition) == 64);
+    static_assert(offsetof(CameraData, Padding) == 76);
+    static_assert(sizeof(TransformData) == 96);
+    static_assert(offsetof(TransformData, BaseColor) == 64);
+    static_assert(offsetof(TransformData, EntityID) == 80);
+    static_assert(offsetof(TransformData, HasAnimation) == 84);
+    static_assert(offsetof(TransformData, padding) == 88);
+    static_assert(sizeof(BoneData) == 32768);
+    static_assert(sizeof(LightInfo) == 32);
+    static_assert(offsetof(LightInfo, Intensity) == 12);
+    static_assert(offsetof(LightInfo, Color) == 16);
+    static_assert(offsetof(LightInfo, Padding) == 28);
+    static_assert(sizeof(SceneBufferData) == 144);
+    static_assert(offsetof(SceneBufferData, LightCount) == 128);
+    static_assert(offsetof(SceneBufferData, Padding) == 132);
+    static_assert(sizeof(MaterialPropertyBufferData) == 288);
+    static_assert(offsetof(MaterialPropertyBufferData, AlbedoColor) == 0);
+    static_assert(offsetof(MaterialPropertyBufferData, ColorProperties) == 16);
+    static_assert(offsetof(MaterialPropertyBufferData, ScalarProperties) == 144);
+    static_assert(offsetof(MaterialPropertyBufferData, ToggleProperties) == 208);
+    static_assert(offsetof(MaterialPropertyBufferData, SurfaceValues) == 272);
 
     Renderer3D::RenderData* Renderer3D::s_Data = new Renderer3D::RenderData();
 
@@ -84,6 +111,10 @@ namespace CCEngine
         s_Data->TransformConstantBuffer.reset(ConstantBuffer::Create(sizeof(TransformData)));
 
         s_Data->BoneConstantBuffer.reset(ConstantBuffer::Create(sizeof(BoneData)));
+        BoneData initialBones;
+        for (auto& matrix : initialBones.BoneMatrices)
+            matrix = CCEngine::Math::MathUtils::GetMatrixForShader(DirectX::XMMatrixIdentity());
+        s_Data->BoneConstantBuffer->SetData(&initialBones, sizeof(initialBones));
         s_Data->SceneConstantBuffer.reset(ConstantBuffer::Create(sizeof(SceneBufferData)));
         s_Data->MaterialPropertyConstantBuffer.reset(ConstantBuffer::Create(sizeof(MaterialPropertyBufferData)));
     }
@@ -181,7 +212,7 @@ namespace CCEngine
         return texture;
     }
 
-    void Renderer3D::BindMaterialProperties(const MaterialAsset* material, const std::shared_ptr<Texture2D>& fallbackAlbedo, bool useBasePbrLayout)
+    void Renderer3D::BindMaterialProperties(const MaterialAsset* material, const std::shared_ptr<Texture2D>& fallbackAlbedo, const Shader& shader)
     {
         MaterialPropertyBufferData buffer;
         const MaterialAsset* source = material;
@@ -192,45 +223,36 @@ namespace CCEngine
             buffer.SurfaceValues.y = source->Metallic;
         }
 
-        bool materialUsesNormalTexture = source && !source->NormalTexturePath.empty();
-        if (source && !materialUsesNormalTexture)
-        {
-            for (const auto& [name, value] : source->ShaderProperties)
-            {
-                if (name == "NormalTexture" && value.Type == ShaderPropertyType::Texture2D && !value.TexturePath.empty())
-                {
-                    materialUsesNormalTexture = true;
-                    break;
-                }
-            }
-        }
-
         uint32_t colorIndex = 0;
         uint32_t scalarIndex = 0;
         uint32_t toggleIndex = 0;
-        // t0는 Albedo, t1은 NormalTexture가 필요할 때 예약한다.
-        // 예약 여부를 먼저 정해야 다른 커스텀 텍스처가 같은 슬롯을 덮어쓰지 않는다.
-        uint32_t textureIndex = (useBasePbrLayout || materialUsesNormalTexture) ? 2 : 1;
-        bool albedoSlotBound = false;
-        bool normalSlotBound = false;
 
         if (source)
         {
-            for (const auto& [name, value] : source->ShaderProperties)
+            // 기본 표면 값은 기존 머티리얼 필드를 유지한다. 사용자 속성만 선언 순서로 배치한다.
+            const auto reserved = [&](const char* name, ShaderPropertyType type) -> const ShaderPropertyValue* {
+                auto it = source->ShaderProperties.find(name);
+                return it != source->ShaderProperties.end() && it->second.Type == type ? &it->second : nullptr;
+            };
+            if (const auto* v = reserved("AlbedoColor", ShaderPropertyType::Color)) buffer.AlbedoColor = v->Color;
+            if (const auto* v = reserved("Roughness", ShaderPropertyType::Float)) buffer.SurfaceValues.x = v->FloatValue;
+            if (const auto* v = reserved("Metallic", ShaderPropertyType::Float)) buffer.SurfaceValues.y = v->FloatValue;
+            VisitMaterialProperties(shader.GetMaterialProperties(), source->ShaderProperties,
+                [&](const std::string& name, const ShaderPropertyValue& value)
             {
                 if (value.Type == ShaderPropertyType::Color)
                 {
                     if (name == "AlbedoColor")
-                        buffer.AlbedoColor = value.Color;
+                        return;
                     else if (colorIndex < MaxMaterialColorProperties)
                         buffer.ColorProperties[colorIndex++] = value.Color;
                 }
                 else if (value.Type == ShaderPropertyType::Float)
                 {
                     if (name == "Roughness")
-                        buffer.SurfaceValues.x = value.FloatValue;
+                        return;
                     else if (name == "Metallic")
-                        buffer.SurfaceValues.y = value.FloatValue;
+                        return;
                     else
                         WriteScalar(buffer, scalarIndex++, value.FloatValue);
                 }
@@ -238,54 +260,32 @@ namespace CCEngine
                 {
                     WriteToggle(buffer, toggleIndex++, value.BoolValue);
                 }
-                else if (value.Type == ShaderPropertyType::Texture2D)
-                {
-                    std::shared_ptr<Texture2D> texture = GetCachedMaterialTexture(value.TexturePath);
-                    if (name == "AlbedoTexture")
-                    {
-                        if (texture)
-                        {
-                            texture->Bind(0);
-                            albedoSlotBound = true;
-                        }
-                    }
-                    else if (name == "NormalTexture")
-                    {
-                        if (texture)
-                        {
-                            texture->Bind(1);
-                            buffer.SurfaceValues.w = 1.0f;
-                            normalSlotBound = true;
-                        }
-                    }
-                    else if (texture && textureIndex < MaxMaterialTextureSlots)
-                    {
-                        texture->Bind(textureIndex++);
-                    }
-                }
-            }
+            });
         }
 
-        if (!normalSlotBound && source && !source->NormalTexturePath.empty())
+        // 컴파일된 셰이더의 슬롯을 기준으로 채운다. 머티리얼의 저장 순서나 빈 값은 슬롯에 영향을 주지 않는다.
+        BindMaterialTextures(shader, s_Data->DefaultWhiteTexture, [&](const std::string& resource)
         {
-            std::shared_ptr<Texture2D> normalTexture = GetCachedMaterialTexture(source->NormalTexturePath);
-            if (normalTexture)
+            const bool albedo = resource == "AlbedoTexture" || resource == "g_AlbedoMap";
+            const bool normal = resource == "NormalTexture" || resource == "g_NormalMap";
+            const std::string property = albedo ? "AlbedoTexture" : normal ? "NormalTexture" : resource;
+            std::shared_ptr<Texture2D> texture;
+            if (source)
             {
-                normalTexture->Bind(1);
-                buffer.SurfaceValues.w = 1.0f;
-                normalSlotBound = true;
+                auto it = source->ShaderProperties.find(property);
+                if (it != source->ShaderProperties.end() && it->second.Type == ShaderPropertyType::Texture2D)
+                    texture = GetCachedMaterialTexture(it->second.TexturePath);
+                if (!texture && albedo) texture = source->AlbedoTexture;
+                if (!texture && normal) texture = GetCachedMaterialTexture(source->NormalTexturePath);
             }
-        }
+            if (!texture && albedo) texture = fallbackAlbedo;
+            if (normal && texture) buffer.SurfaceValues.w = 1.0f;
+            return texture;
+        });
 
         s_Data->MaterialPropertyConstantBuffer->SetData(&buffer, sizeof(MaterialPropertyBufferData));
         s_Data->MaterialPropertyConstantBuffer->Bind(4);
 
-        if (!albedoSlotBound && source && source->AlbedoTexture)
-            source->AlbedoTexture->Bind(0);
-        else if (!albedoSlotBound && fallbackAlbedo)
-            fallbackAlbedo->Bind(0);
-        else if (!albedoSlotBound)
-            s_Data->DefaultWhiteTexture->Bind(0);
     }
 
     // 일반 정적 메쉬 드로우 콜
@@ -308,6 +308,10 @@ namespace CCEngine
         transformData.EntityID = entityID;
         transformData.HasAnimation = 0;
 
+        // 정적 메시도 스키닝과 같은 셰이더를 쓴다. 분기가 꺼져 있어도 활성 uniform
+        // 블록에는 유효한 버퍼가 필요하므로 이전 draw의 바인딩에 의존하지 않는다.
+        s_Data->BoneConstantBuffer->Bind(2);
+
         // b1 (슬롯 1번)에 상수 버퍼 데이터 덮어쓰고 바인딩
         s_Data->TransformConstantBuffer->SetData(&transformData, sizeof(TransformData));
         s_Data->TransformConstantBuffer->Bind(1);
@@ -320,7 +324,7 @@ namespace CCEngine
         Shader* activeShader = runtimeShader && runtimeShader->IsValid()
             ? runtimeShader.get()
             : s_Data->Base3DShader.get();
-        BindMaterialProperties(material, texture, activeShader == s_Data->Base3DShader.get());
+        BindMaterialProperties(material, texture, *activeShader);
 
         // 2. 셰이더 활성화 및 레이아웃 설정
         activeShader->Bind();
@@ -408,7 +412,7 @@ namespace CCEngine
         Shader* activeShader = runtimeShader && runtimeShader->IsValid()
             ? runtimeShader.get()
             : s_Data->Base3DShader.get();
-        BindMaterialProperties(material, texture, activeShader == s_Data->Base3DShader.get());
+        BindMaterialProperties(material, texture, *activeShader);
 
         activeShader->Bind();
         activeShader->BindLayout(mesh->GetVertexBuffer()->GetLayout());

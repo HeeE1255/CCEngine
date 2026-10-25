@@ -18,13 +18,14 @@ namespace CCEngine
     struct VulkanImageAllocation;
     struct VulkanShaderProgram;
     struct VulkanRenderTarget;
+    class VulkanDevice;
     void CheckVulkan(VkResult result, const char* operation);
 
-    // 모든 리소스는 이 Context보다 먼저 파괴한다. 단일 렌더 스레드/단일 in-flight frame 계약이다.
+    // 장치는 리소스와 공유하고 창별 출력/명령만 소유한다. 단일 렌더 스레드 계약이다.
     class VulkanContext final : public GraphicsContext
     {
     public:
-        explicit VulkanContext(void* hwnd);
+        explicit VulkanContext(void* hwnd, std::shared_ptr<VulkanDevice> device = {});
         ~VulkanContext() override;
         VulkanContext(const VulkanContext&) = delete;
         VulkanContext& operator=(const VulkanContext&) = delete;
@@ -34,7 +35,11 @@ namespace CCEngine
         void ResizeBuffers(uint32_t width, uint32_t height) override;
         void MakeCurrent() override;
         void BindBackBuffer() override;
+        bool ReadBackBuffer(std::vector<uint8_t>& pixels, uint32_t& width, uint32_t& height) override;
         static VulkanContext& Current();
+        static VulkanContext& CurrentFor(const std::shared_ptr<VulkanDevice>& device);
+        std::shared_ptr<GraphicsDevice> GetGraphicsDevice() const override;
+        const std::shared_ptr<VulkanDevice>& SharedDevice() const { return m_SharedDevice; }
         VulkanRendererAPI& Commands() { return *m_API; }
         RendererAPI* GetCommands() override { return m_API.get(); }
         VkDevice Device() const { return m_Device; }
@@ -42,7 +47,7 @@ namespace CCEngine
         const VkPhysicalDeviceProperties& Properties() const { return m_Properties; }
         VkSampler Sampler() const { return m_Sampler; }
         uint32_t MemoryType(uint32_t bits, VkMemoryPropertyFlags flags) const;
-        uint64_t NextID() { return ++m_NextID; }
+        uint64_t NextID();
         void Execute(const std::function<void(VkCommandBuffer)>& record);
         // 제출을 완료하고 pass를 닫는다. 직접 호출한 뒤 렌더링하려면 target을 다시 바인딩한다.
         void Flush();
@@ -56,12 +61,14 @@ namespace CCEngine
         void BindIndex(std::shared_ptr<VulkanBufferAllocation> buffer, uint32_t count);
         void BindUniform(uint32_t slot, std::shared_ptr<VulkanBufferAllocation> buffer);
         void BindShader(std::shared_ptr<VulkanShaderProgram> program);
-        void SetVertexLayout(const BufferLayout& layout) { m_VertexLayout = layout; }
+        void SetVertexLayout(const BufferLayout& layout) { layout.Validate(); m_VertexLayout = layout; }
+        void SetShaderInputs(const std::vector<VertexInput>& inputs) { ValidateVertexInputs(inputs); m_ShaderInputs = inputs; }
         bool IsTargetBound(const VulkanRenderTarget& target) const { return m_Target == &target; }
         void ReplaceBuffer(const std::shared_ptr<VulkanBufferAllocation>& oldBuffer,
             const std::shared_ptr<VulkanBufferAllocation>& newBuffer);
     private:
         HWND m_Window;
+        std::shared_ptr<VulkanDevice> m_SharedDevice;
         VkInstance m_Instance = VK_NULL_HANDLE;
         VkSurfaceKHR m_Surface = VK_NULL_HANDLE;
         VkPhysicalDevice m_Physical = VK_NULL_HANDLE;
@@ -87,15 +94,15 @@ namespace CCEngine
         std::shared_ptr<VulkanBufferAllocation> m_EmptyUniform, m_Vertex, m_Index;
         std::array<std::shared_ptr<VulkanBufferAllocation>, 8> m_Uniforms;
         std::shared_ptr<VulkanShaderProgram> m_Shader;
+        std::vector<VertexInput> m_ShaderInputs;
         BufferLayout m_VertexLayout;
         std::unique_ptr<VulkanRendererAPI> m_API;
         VulkanRenderTarget* m_Target = nullptr;
         std::vector<std::function<void()>> m_Garbage;
         uint32_t m_ImageIndex = 0, m_TextureSlots = 0, m_IndexCount = 0;
-        uint64_t m_NextID = 0;
         bool m_Recording = false, m_InPass = false, m_Acquired = false, m_WaitAcquire = false;
         bool m_VSync = true, m_Recreate = false, m_Releasing = false;
-        static thread_local VulkanContext* s_Current;
+        bool m_BackbufferReadable = false;
         void BeginRecording();
         void BeginPass();
         void EndPass();

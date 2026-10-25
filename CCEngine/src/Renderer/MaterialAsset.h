@@ -34,7 +34,7 @@ namespace CCEngine
         std::shared_ptr<Texture2D> AlbedoTexture;
         std::unordered_map<std::string, ShaderPropertyValue> ShaderProperties;
 
-        bool LoadFromFile(const std::filesystem::path& path)
+        bool LoadFromFile(const std::filesystem::path& path, bool loadTextures = true)
         {
             std::ifstream file(path);
             if (!file.is_open())
@@ -93,7 +93,7 @@ namespace CCEngine
             }
 
             AlbedoTexture.reset();
-            if (!AlbedoTexturePath.empty() && std::filesystem::exists(AlbedoTexturePath))
+            if (loadTextures && !AlbedoTexturePath.empty() && std::filesystem::exists(AlbedoTexturePath))
             {
                 // 재질 파일에는 텍스처 포인터를 저장할 수 없다.
                 // GUID로 경로를 다시 찾고, 실제 GPU 텍스처는 로드 시점에 다시 만든다.

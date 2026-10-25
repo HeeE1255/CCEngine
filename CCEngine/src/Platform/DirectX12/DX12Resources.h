@@ -48,6 +48,8 @@ namespace CCEngine
         std::weak_ptr<DX12Device> Owner;
         uint64_t ID = 0;
         std::vector<uint8_t> Vertex, Pixel;
+        std::vector<VertexInput> Inputs;
+        bool HasInputs = false;
     };
 }
 #endif

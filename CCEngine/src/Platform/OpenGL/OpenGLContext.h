@@ -7,12 +7,17 @@
 #include <GL/gl.h>
 #include "Renderer/GraphicsContext.h"
 #include "Renderer/Buffer.h"
+#include "Renderer/UniformRepack.h"
 #include "OpenGLRendererAPI.h"
 #include <memory>
 #include <cstddef>
+#include <array>
 
 namespace CCEngine
 {
+    class OpenGLDevice;
+    struct OpenGLUniformData;
+    struct OpenGLUniformBinding;
     // Windows 기본 GL 헤더에 없는 core 함수를 컨텍스트별로 로드한다.
 #define CC_GL_RESOURCE_FUNCTIONS(X) \
     X(void, CreateBuffers, GLsizei, GLuint*) \
@@ -40,6 +45,7 @@ namespace CCEngine
     X(void, AttachShader, GLuint, GLuint) \
     X(void, LinkProgram, GLuint) \
     X(void, GetProgramiv, GLuint, GLenum, GLint*) \
+    X(void, GetActiveUniformBlockiv, GLuint, GLuint, GLenum, GLint*) \
     X(void, GetProgramInfoLog, GLuint, GLsizei, GLsizei*, char*) \
     X(void, DeleteProgram, GLuint) \
     X(void, UseProgram, GLuint) \
@@ -67,7 +73,7 @@ namespace CCEngine
     class OpenGLContext final : public GraphicsContext
     {
     public:
-        explicit OpenGLContext(void* hwnd, OpenGLContext* share = nullptr);
+        explicit OpenGLContext(void* hwnd, std::shared_ptr<OpenGLDevice> device = {});
         ~OpenGLContext() override;
         OpenGLContext(const OpenGLContext&) = delete;
         OpenGLContext& operator=(const OpenGLContext&) = delete;
@@ -77,23 +83,43 @@ namespace CCEngine
         void ResizeBuffers(uint32_t width, uint32_t height) override;
         void MakeCurrent() override;
         void BindBackBuffer() override;
+        bool ReadBackBuffer(std::vector<uint8_t>& pixels, uint32_t& width, uint32_t& height) override;
         void SetLayout(const BufferLayout& layout);
+        void SetShaderInputs(const std::vector<VertexInput>& inputs) { ValidateVertexInputs(inputs); m_ShaderInputs = inputs; m_HasShaderInputs = true; }
+        void ClearShaderInputs() { m_HasShaderInputs = false; }
+        void ApplyVertexLayout();
+        void SetUniformLayouts(std::shared_ptr<const std::vector<UniformRepackLayout>> layouts) { m_UniformLayouts = std::move(layouts); }
+        void BindUniformData(uint32_t slot, const std::shared_ptr<OpenGLUniformData>& data);
+        void ApplyUniformLayouts();
         OpenGLFunctions& GL() { MakeCurrent(); return m_GL; }
         OpenGLRendererAPI& Commands() { return *m_API; }
         RendererAPI* GetCommands() override { return m_API.get(); }
+        std::shared_ptr<GraphicsDevice> GetGraphicsDevice() const override;
+        const std::shared_ptr<OpenGLDevice>& SharedDevice() const { return m_Device; }
+        static OpenGLContext& CurrentFor(const std::shared_ptr<OpenGLDevice>& device);
+        void BindAttachments(const GLuint* textures, const std::shared_ptr<void>& lifetime);
+        bool HasAttachments(const std::shared_ptr<void>& lifetime) const;
         static OpenGLContext& Current();
         static void* Resolve(const char* name);
     private:
         HWND m_Window = nullptr;
         HDC m_DC = nullptr;
         HGLRC m_RC = nullptr;
-        OpenGLContext* m_Share = nullptr;
+        std::shared_ptr<OpenGLDevice> m_Device;
         OpenGLFunctions m_GL;
         std::unique_ptr<OpenGLRendererAPI> m_API;
         GLuint m_VAO = 0;
-        uint32_t m_Width = 0, m_Height = 0, m_Attributes = 0;
+        GLuint m_FBO = 0;
+        std::weak_ptr<void> m_AttachmentLifetime;
+        uint32_t m_Width = 0, m_Height = 0;
+        std::vector<uint32_t> m_Attributes;
+        std::vector<VertexInput> m_ShaderInputs;
+        BufferLayout m_VertexLayout;
+        std::shared_ptr<const std::vector<UniformRepackLayout>> m_UniformLayouts;
+        std::array<std::weak_ptr<OpenGLUniformData>, 8> m_UniformData;
+        std::array<std::unique_ptr<OpenGLUniformBinding>, 8> m_UniformBindings;
+        bool m_HasShaderInputs = false;
         int (WINAPI* m_SwapInterval)(int) = nullptr;
-        static thread_local OpenGLContext* s_Current;
         void Release() noexcept;
     };
 }
