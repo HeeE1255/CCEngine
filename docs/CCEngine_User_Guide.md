@@ -26,6 +26,49 @@ Set-Location .\Sandbox
 
 작업 폴더는 `Sandbox`여야 합니다. 엔진이 이 폴더를 기준으로 `assets`와 프로젝트 설정을 찾습니다.
 
+## 그래픽 API 선택과 복구
+
+DirectX 11이 기본값입니다. DirectX 12, OpenGL 4.5, Vulkan은 해당 백엔드를 포함해 빌드한 실행 파일과 이를 지원하는 GPU/드라이버가 필요합니다.
+
+### 백엔드 포함 빌드
+
+Vulkan SDK 설치 후 저장소 루트에서 실행합니다. `VULKAN_SDK` 환경 변수가 없다면 `-VulkanSDK`로 SDK 폴더를 지정하세요.
+
+```powershell
+.\tools\BuildEngine.ps1 -Configuration Release -EnableDX12 -EnableOpenGL -EnableVulkan
+```
+
+필요한 옵션만 지정해도 됩니다. 옵션을 생략한 백엔드는 포함되지 않으며 DX11은 기본으로 유지됩니다. Vulkan을 선택하면 컴파일 전에 SDK 헤더와 x64 라이브러리 존재 여부를 검사합니다.
+
+### 에디터와 Player 설정
+
+1. Project Settings에서 에디터의 Graphics API를 선택하고 설정을 저장합니다. `N/A`는 현재 실행 파일에서 사용할 수 없는 백엔드입니다.
+2. 편집 중인 씬을 따로 저장한 뒤 에디터를 종료하고 다시 실행합니다. 프로젝트 설정 저장이 씬 저장을 대신하지는 않습니다.
+3. 선택한 API는 Scene View뿐 아니라 에디터 UI와 보조 창에도 적용됩니다. 실행 도중 장치를 교체하지 않습니다.
+4. Player는 Build Settings에서 API를 별도로 지정합니다. 에디터 API를 바꿨다고 기존 Player 패키지가 바뀌지는 않습니다.
+
+비 DX11 백엔드는 Python, DXC, SPIRV-Cross로 셰이더 패키지를 준비합니다. 에디터의 Shader Tools 설정에서 도구 경로를 지정하고 진단을 확인하세요. 배포 시에는 생성된 셰이더 패키지를 포함한 빌드 폴더 전체가 필요합니다.
+
+### API 변경 후 시작하지 못할 때
+
+에디터를 종료하고 작업 폴더를 프로젝트 폴더로 지정한 뒤 `-dx11`로 실행합니다. 이 옵션은 저장된 API보다 우선하지만 설정 파일 자체를 바꾸지는 않습니다.
+
+```powershell
+Set-Location .\Sandbox
+& ..\bin\Release-windows-x86_64\Sandbox.exe -dx11
+```
+
+열린 Project Settings에서 DirectX 11을 선택하고 저장하면 이후 일반 실행에도 적용됩니다. API 옵션은 한 번에 하나만 사용하세요. 다른 API 실행 옵션은 `-dx12`, `-opengl`, `-vulkan`입니다.
+
+| 증상 | 확인할 내용 |
+| --- | --- |
+| API가 N/A이거나 실행 불가 | 백엔드 빌드 옵션과 GPU/드라이버 지원 여부 |
+| 셰이더 준비 실패 | Shader Tools의 Python/DXC/SPIRV-Cross 경로와 첫 오류 메시지 |
+| Player에서 패키지 로드 실패 | 선택 API와 패키지 일치 여부, 빌드 폴더 전체 배포 여부 |
+| 새 빌드 검증 실패 | 실패 로그를 확인하고 원인을 수정한 뒤 다시 빌드. 이전 성공 결과를 새 결과로 혼동하지 않기 |
+
+현재 API 전환은 수동 저장·종료·재실행 방식입니다. 자동 재시작과 미저장 씬 확인 대화상자는 별도 후속 기능입니다.
+
 ## 화면 구성
 
 | 창 | 용도 |
@@ -48,7 +91,7 @@ Set-Location .\Sandbox
 
 씬은 오브젝트 배치와 컴포넌트 값을 저장합니다. 프리팹은 오브젝트 구성을 재사용하는 에셋입니다. 선택한 오브젝트를 `File > Save Prefab`으로 저장하고 `File > Load Prefab`으로 불러올 수 있습니다.
 
-`Animator_Test.ccscene`, `Physics3D_QA.ccscene`도 저장소에 포함됩니다. 라이선스가 있는 모델과 텍스처는 별도이므로, 로컬 에셋이 없는 PC에서는 특히 Animator 예제가 동일하게 보이지 않을 수 있습니다.
+`Animator_Test.ccscene`, `Physics3D_QA.ccscene`도 저장소에 포함됩니다.
 
 ## 실행과 편집
 

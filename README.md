@@ -93,6 +93,8 @@ MSBuild.exe CCEngine.sln /m:1 /p:Configuration=Release /p:Platform=x64 /p:CCEnab
 
 Non-DX11 shader preparation uses Python, DXC, and SPIRV-Cross. Configure their paths in the editor's shader tool settings. `tools/CompileShaderBackends.py --help` lists standalone tool options. The default build does not enable the optional backend flags above.
 
+The build helper also accepts `-EnableDX12 -EnableOpenGL -EnableVulkan` and an optional `-VulkanSDK` path (otherwise `VULKAN_SDK` is used). See the [graphics API guide](docs/CCEngine_User_Guide.md#그래픽-api-선택과-복구) for selection and startup recovery.
+
 For a standalone game, configure the start scene in Project Settings, then use `File > Build Settings...`. See the [game build and distribution guide](docs/CCEngine_User_Guide.md#게임-빌드와-배포) for output contents, validation, packaging and patching. Ship the complete output folder, not just the executable.
 
 ## Run
