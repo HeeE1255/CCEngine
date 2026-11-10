@@ -71,6 +71,10 @@ namespace CCEngine
         VkDeviceQueueCreateInfo queue{ VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO };
         queue.queueFamilyIndex = m_QueueFamily; queue.queueCount = 1; queue.pQueuePriorities = &priority;
         VkPhysicalDeviceFeatures features{}; features.independentBlend = VK_TRUE;
+        VkPhysicalDeviceFeatures supported{}; vkGetPhysicalDeviceFeatures(m_Physical, &supported);
+        features.samplerAnisotropy = supported.samplerAnisotropy;
+        m_MaxSamplerAnisotropy = supported.samplerAnisotropy
+            ? (std::min)(16u, static_cast<uint32_t>(m_Properties.limits.maxSamplerAnisotropy)) : 1u;
         const char* deviceExtensions[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
         VkDeviceCreateInfo device{ VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
         device.queueCreateInfoCount = 1; device.pQueueCreateInfos = &queue; device.pEnabledFeatures = &features;

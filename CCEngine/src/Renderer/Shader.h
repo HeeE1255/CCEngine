@@ -37,7 +37,13 @@ namespace CCEngine
         }
         bool HasVertexInputs() const { return m_HasVertexInputs; }
         void SetMaterialPropertySource(const std::string& source)
-        { m_MaterialProperties = ShaderPropertyParser::ParseSource(source); }
+        {
+            m_MaterialProperties = ShaderPropertyParser::ParseSource(source);
+            m_UsesMaterialUV = source.find("// @material-uv-buffer b6 v1") != std::string::npos;
+            m_UsesMaterialSamplers = source.find("// @material-samplers s2-s5 v1") != std::string::npos;
+        }
+        bool UsesMaterialUVBuffer() const { return m_UsesMaterialUV; }
+        bool UsesMaterialSamplers() const { return m_UsesMaterialSamplers; }
         const std::vector<ShaderPropertyDefinition>& GetMaterialProperties() const { return m_MaterialProperties; }
 
         // 파일 경로를 받아서 셰이더를 생성하는 팩토리 함수
@@ -45,6 +51,8 @@ namespace CCEngine
         static Shader* CreateFromBytecode(const std::filesystem::path& vertexBytecode, const std::filesystem::path& pixelBytecode);
     private:
         TextureBindings m_TextureBindings;
+        bool m_UsesMaterialUV = false;
+        bool m_UsesMaterialSamplers = false;
         std::vector<VertexInput> m_VertexInputs;
         bool m_HasVertexInputs = false;
         std::vector<ShaderPropertyDefinition> m_MaterialProperties;

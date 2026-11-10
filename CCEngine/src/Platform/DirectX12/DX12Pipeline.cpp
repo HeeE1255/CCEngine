@@ -6,10 +6,10 @@
 #include <climits>
 namespace CCEngine
 {
-    ID3D12PipelineState* DX12Context::Pipeline(RendererAPI::BlendMode blend, RendererAPI::CullMode cull, bool depth)
+    ID3D12PipelineState* DX12Context::Pipeline(RendererAPI::BlendMode blend, RendererAPI::CullMode cull, bool depth, bool depthWrite)
     {
         std::ostringstream key;
-        key << m_Program->ID << '/' << int(blend) << '/' << int(cull) << '/' << depth << '/' << m_Layout.GetStride();
+        key << m_Program->ID << '/' << int(blend) << '/' << int(cull) << '/' << depth << '/' << depthWrite << '/' << m_Layout.GetStride();
         for (auto& color : m_Target->Colors) key << '/' << int(color->Format);
         std::vector<std::string> semantics;
         std::vector<D3D12_INPUT_ELEMENT_DESC> elements;
@@ -63,7 +63,7 @@ namespace CCEngine
         info.RasterizerState.CullMode = cull == RendererAPI::CullMode::Back ? D3D12_CULL_MODE_BACK : D3D12_CULL_MODE_NONE;
         info.RasterizerState.DepthClipEnable = TRUE;
         info.DepthStencilState.DepthEnable = depth;
-        info.DepthStencilState.DepthWriteMask = depth ? D3D12_DEPTH_WRITE_MASK_ALL : D3D12_DEPTH_WRITE_MASK_ZERO;
+        info.DepthStencilState.DepthWriteMask = depthWrite ? D3D12_DEPTH_WRITE_MASK_ALL : D3D12_DEPTH_WRITE_MASK_ZERO;
         info.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
         info.DepthStencilState.StencilReadMask = info.DepthStencilState.StencilWriteMask = 0xff;
         const D3D12_DEPTH_STENCILOP_DESC stencil{ D3D12_STENCIL_OP_KEEP, D3D12_STENCIL_OP_KEEP, D3D12_STENCIL_OP_KEEP, D3D12_COMPARISON_FUNC_ALWAYS };
@@ -94,7 +94,11 @@ namespace CCEngine
             desc.NumDescriptors = 1024; desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
             ComPtr<ID3D12DescriptorHeap> page;
             CheckDX12(m_Device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&page)), "Create DX12 descriptor page");
-            m_Pages.push_back(std::move(page)); m_PageUsed = 0;
+            desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER; desc.NumDescriptors = 32 * 5;
+            ComPtr<ID3D12DescriptorHeap> samplerPage;
+            CheckDX12(m_Device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&samplerPage)), "Create DX12 sampler page");
+            m_Pages.reserve(m_Pages.size() + 1); m_SamplerPages.reserve(m_SamplerPages.size() + 1);
+            m_Pages.push_back(std::move(page)); m_SamplerPages.push_back(std::move(samplerPage)); m_PageUsed = 0;
         }
         auto* heap = m_Pages.back().Get();
         const UINT step = m_Device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
@@ -110,9 +114,34 @@ namespace CCEngine
             m_Device->CopyDescriptorsSimple(1, cpu, image->SRV->GetCPUDescriptorHandleForHeapStart(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
             cpu.ptr += step;
         }
+        auto* samplerHeap = m_SamplerPages.back().Get();
+        const UINT samplerStep = m_Device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
+        auto samplerCPU = samplerHeap->GetCPUDescriptorHandleForHeapStart();
+        auto samplerGPU = samplerHeap->GetGPUDescriptorHandleForHeapStart();
+        samplerCPU.ptr += SIZE_T(m_PageUsed / 32) * 5 * samplerStep;
+        samplerGPU.ptr += UINT64(m_PageUsed / 32) * 5 * samplerStep;
+        const D3D12_TEXTURE_ADDRESS_MODE modes[] = { D3D12_TEXTURE_ADDRESS_MODE_WRAP, D3D12_TEXTURE_ADDRESS_MODE_CLAMP, D3D12_TEXTURE_ADDRESS_MODE_MIRROR };
+        // 같은 draw의 s0 및 s2~s5를 한 스냅샷에 저장한다. 이전 draw의 설정은 덮어쓰지 않는다.
+        for (uint32_t i = 0; i < 5; ++i)
+        {
+            const auto& description = i == 0 ? m_CommonSampler : m_MaterialSamplers[i - 1];
+            description.ValidateDeviceLimit(16);
+            D3D12_SAMPLER_DESC sampler{};
+            sampler.AddressU = modes[uint32_t(description.U)]; sampler.AddressV = modes[uint32_t(description.V)];
+            sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+            sampler.Filter = description.Anisotropy > 1 ? D3D12_FILTER_ANISOTROPIC :
+                D3D12_ENCODE_BASIC_FILTER(uint32_t(description.Min), uint32_t(description.Mag),
+                    description.Mip == SamplerMipFilter::Linear ? 1 : 0, D3D12_FILTER_REDUCTION_TYPE_STANDARD);
+            sampler.MaxLOD = description.Mip == SamplerMipFilter::Disabled ? 0.0f : D3D12_FLOAT32_MAX;
+            sampler.MaxAnisotropy = description.Anisotropy; sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+            m_Device->CreateSampler(&sampler, samplerCPU);
+            samplerCPU.ptr += samplerStep;
+        }
         m_PageUsed += 32;
-        m_List->SetDescriptorHeaps(1, &heap);
+        ID3D12DescriptorHeap* heaps[] = { heap, samplerHeap };
+        m_List->SetDescriptorHeaps(2, heaps);
         m_List->SetGraphicsRootDescriptorTable(8, gpu);
+        m_List->SetGraphicsRootDescriptorTable(9, samplerGPU);
         for (UINT i = 0; i < 8; ++i)
         {
             auto buffer = m_Uniforms[i] ? m_Uniforms[i] : m_EmptyUniform;
@@ -120,7 +149,7 @@ namespace CCEngine
             m_List->SetGraphicsRootConstantBufferView(i, buffer->Resource->GetGPUVirtualAddress());
         }
     }
-    void DX12Context::Draw(uint32_t count, RendererAPI::BlendMode blend, RendererAPI::CullMode cull, bool depth)
+    void DX12Context::Draw(uint32_t count, RendererAPI::BlendMode blend, RendererAPI::CullMode cull, bool depth, bool depthWrite)
     {
         if (!count) return;
         if (!m_Target || !m_Program || !m_Vertex || !m_Index || count > m_IndexCount)
@@ -131,7 +160,7 @@ namespace CCEngine
         if (m_Program->HasInputs) ResolveVertexInputs(m_Layout, m_Program->Inputs);
         if (!m_Viewport.Width || !m_Viewport.Height ||
             (m_ScissorEnabled && (m_Scissor.left == m_Scissor.right || m_Scissor.top == m_Scissor.bottom))) return;
-        auto* pipeline = Pipeline(blend, cull, depth);
+        auto* pipeline = Pipeline(blend, cull, depth, depthWrite);
         ApplyTarget();
         m_List->SetGraphicsRootSignature(m_Root.Get());
         m_List->SetPipelineState(pipeline); BindDescriptors();

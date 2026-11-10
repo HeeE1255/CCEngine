@@ -7,9 +7,30 @@
 #include <chrono>
 #include <filesystem>
 #include <sstream>
+#include <fstream>
+#include <random>
+#include <Windows.h>
+#include "Renderer/ModelImporter.h"
 
 namespace CCEngine
 {
+    bool AssetUndoManager::EditTextFile(const std::filesystem::path& path, const std::string& before,
+        const std::string& after, const std::string& label)
+    {
+        if (before == after) return false;
+        Command command;
+        command.Operation = Kind::EditText;
+        command.Label = label;
+        Item item;
+        item.FromPath = path;
+        item.BeforeText = before;
+        item.AfterText = after;
+        command.Items.push_back(std::move(item));
+        if (!ApplyCommand(command, false, nullptr)) return false;
+        Push(command);
+        return true;
+    }
+
     void AssetUndoManager::Push(const Command& command)
     {
         if (command.Items.empty())
@@ -163,11 +184,51 @@ namespace CCEngine
         if (command.Items.empty())
             return false;
 
+        // 파일 편집은 한 파일만 허용한다. 여러 파일의 부분 성공을 한 번의 Undo 성공으로 기록하지 않는다.
+        if (command.Operation == Kind::EditText && command.Items.size() != 1) return false;
+
         bool changed = false;
         auto applyItem = [&](const Item& item) -> bool
         {
             switch (command.Operation)
             {
+                case Kind::EditText:
+                {
+                    const auto& expected = undo ? item.AfterText : item.BeforeText;
+                    const auto& replacement = undo ? item.BeforeText : item.AfterText;
+                    std::error_code ec;
+                    if (std::filesystem::file_size(item.FromPath, ec) != expected.size() || ec)
+                    {
+                        ConsoleLog::Warning("Asset history conflict or missing file; edit refused: " + item.FromPath.string());
+                        return false;
+                    }
+                    std::ifstream input(item.FromPath, std::ios::binary);
+                    std::string current((std::istreambuf_iterator<char>(input)), {});
+                    if (input.bad() || current != expected)
+                    {
+                        ConsoleLog::Warning("Asset history conflict; external edits preserved: " + item.FromPath.string());
+                        return false;
+                    }
+                    input.close();
+                    auto temporary = item.FromPath;
+                    temporary += "." + std::to_string(std::random_device{}()) + ".tmp";
+                    if (std::filesystem::exists(temporary)) return false;
+                    std::ofstream output(temporary, std::ios::binary);
+                    output << replacement;
+                    output.flush();
+                    const bool written = bool(output);
+                    output.close();
+                    if (!written || !output || !MoveFileExW(temporary.c_str(), item.FromPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+                    {
+                        const auto error = GetLastError();
+                        std::filesystem::remove(temporary, ec);
+                        ConsoleLog::Error("Asset text replacement failed (Windows " + std::to_string(error) + "): " + item.FromPath.string());
+                        return false;
+                    }
+                    AssetDatabase::MarkDirty();
+                    ModelImporter::ClearCache();
+                    return true;
+                }
                 case Kind::CreateFolder:
                 {
                     const std::filesystem::path& folderPath = item.ToPath;

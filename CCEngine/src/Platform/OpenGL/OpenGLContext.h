@@ -55,6 +55,7 @@ namespace CCEngine
     X(void, TextureSubImage2D, GLuint, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, const void*) \
     X(void, ClearTexImage, GLuint, GLint, GLenum, GLenum, const void*) \
     X(void, GetTextureSubImage, GLuint, GLint, GLint, GLint, GLint, GLsizei, GLsizei, GLsizei, GLenum, GLenum, GLsizei, void*) \
+    X(void, CopyImageSubData, GLuint, GLenum, GLint, GLint, GLint, GLint, GLuint, GLenum, GLint, GLint, GLint, GLint, GLsizei, GLsizei, GLsizei) \
     X(void, CreateFramebuffers, GLsizei, GLuint*) \
     X(void, DeleteFramebuffers, GLsizei, const GLuint*) \
     X(void, NamedFramebufferTexture, GLuint, GLenum, GLuint, GLint) \

@@ -33,11 +33,12 @@ namespace CCEngine
         uint64_t NextID() { return m_SharedDevice->NextID(); }
         void Flush();
         std::shared_ptr<DX12BufferAllocation> CreateBuffer(uint32_t bytes, const void* data = nullptr, bool constant = false);
-        std::shared_ptr<DX12Image> CreateImage(uint32_t width, uint32_t height, DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags);
-        std::shared_ptr<DX12Target> CreateTarget(uint32_t width, uint32_t height);
-        void Upload(const std::shared_ptr<DX12Image>& image, const void* pixels, size_t bytes);
+        std::shared_ptr<DX12Image> CreateImage(uint32_t width, uint32_t height, DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags, uint32_t mipLevels = 1);
+        std::shared_ptr<DX12Target> CreateTarget(uint32_t width, uint32_t height, DXGI_FORMAT colorFormat = DXGI_FORMAT_R8G8B8A8_UNORM);
+        void Upload(const std::shared_ptr<DX12Image>& image, const void* pixels, size_t bytes, uint32_t mipLevel = 0);
         void Read(const std::shared_ptr<DX12Image>& image, uint32_t x, uint32_t y, uint32_t width, uint32_t height, void* pixels);
         void ClearID(const std::shared_ptr<DX12Target>& target, int32_t value);
+        void CopyImage(const std::shared_ptr<DX12Image>& source, const std::shared_ptr<DX12Image>& destination);
         void BindTarget(std::shared_ptr<DX12Target> target);
         bool IsBound(const std::shared_ptr<DX12Target>& target) const { return m_Target == target; }
         void ReleaseTarget(const std::shared_ptr<DX12Target>& target) { if (m_Target == target) m_Target.reset(); }
@@ -51,10 +52,21 @@ namespace CCEngine
         void UpdateTexture(RendererHandle handle, std::shared_ptr<DX12Image> image);
         void UnregisterTexture(RendererHandle handle);
         void BindTexture(uint32_t slot, RendererHandle handle);
+        void SetCommonSampler(const SamplerDescription* description)
+        {
+            if (description) description->Key();
+            m_CommonSampler = description ? *description : SamplerDescription{};
+        }
+        void SetMaterialSampler(uint32_t slot, const SamplerDescription* description)
+        {
+            if (slot >= 4) throw std::out_of_range("Material sampler slot");
+            if (description) description->Key();
+            m_MaterialSamplers[slot] = description ? *description : SamplerDescription{};
+        }
         void Viewport(uint32_t x, uint32_t y, uint32_t width, uint32_t height);
         void Scissor(uint32_t x, uint32_t y, uint32_t width, uint32_t height);
         void ScissorEnabled(bool enabled) { m_ScissorEnabled = enabled; }
-        void Draw(uint32_t count, RendererAPI::BlendMode blend, RendererAPI::CullMode cull, bool depth);
+        void Draw(uint32_t count, RendererAPI::BlendMode blend, RendererAPI::CullMode cull, bool depth, bool depthWrite);
     private:
         HWND m_Window;
         std::shared_ptr<DX12Device> m_SharedDevice;
@@ -83,6 +95,9 @@ namespace CCEngine
         std::array<RendererHandle, 32> m_Textures{};
         std::vector<std::shared_ptr<void>> m_Pending;
         std::vector<ComPtr<ID3D12DescriptorHeap>> m_Pages;
+        std::vector<ComPtr<ID3D12DescriptorHeap>> m_SamplerPages;
+        SamplerDescription m_CommonSampler;
+        std::array<SamplerDescription, 4> m_MaterialSamplers;
         uint32_t m_PageUsed = 1024;
         std::map<std::string, ComPtr<ID3D12PipelineState>> m_Pipelines;
         std::unique_ptr<DX12RendererAPI> m_API;
@@ -91,7 +106,7 @@ namespace CCEngine
         void Transition(const std::shared_ptr<DX12Image>& image, D3D12_RESOURCE_STATES state);
         void ApplyTarget();
         std::shared_ptr<DX12Target> MakeTarget(std::vector<std::shared_ptr<DX12Image>> colors, bool backbuffer);
-        ID3D12PipelineState* Pipeline(RendererAPI::BlendMode blend, RendererAPI::CullMode cull, bool depth);
+        ID3D12PipelineState* Pipeline(RendererAPI::BlendMode blend, RendererAPI::CullMode cull, bool depth, bool depthWrite);
         void BindDescriptors();
     };
 }

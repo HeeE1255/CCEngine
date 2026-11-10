@@ -26,8 +26,9 @@ namespace CCEngine
         VkImageAspectFlags Aspect;
         VkImageLayout Layout = VK_IMAGE_LAYOUT_UNDEFINED;
         bool Owned = true;
+        uint32_t MipLevels = 1;
         VulkanImageAllocation(VulkanContext& context, VkExtent2D size, VkFormat format,
-            VkImageUsageFlags usage, VkImageAspectFlags aspect, VkImage external = VK_NULL_HANDLE);
+            VkImageUsageFlags usage, VkImageAspectFlags aspect, VkImage external = VK_NULL_HANDLE, uint32_t mipLevels = 1);
         ~VulkanImageAllocation();
         VulkanImageAllocation(const VulkanImageAllocation&) = delete;
         VulkanImageAllocation& operator=(const VulkanImageAllocation&) = delete;

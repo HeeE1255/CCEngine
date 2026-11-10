@@ -32,7 +32,7 @@ These are implemented development features, not a claim of production certificat
 
 The RHI separates common rendering code from graphics API implementations. Shader packages for non-DX11 backends are integrated into editor startup and game builds. The toolchain includes offline compilation, reflection/layout validation, incremental shader caching, and first-frame validation for packaged players.
 
-Choose the editor API in Project Settings, save, and restart the editor. The selected backend drives both scene rendering and editor UI; this is not a live viewport-only switch. Build Settings selects the standalone player's API separately. A backend must be compiled in, supported by the device, and supplied with compatible shader packages.
+Choose the editor API in Project Settings and use **Save & Restart Editor**. Unsaved scene changes receive a Save / Don't Save / Cancel prompt, and the new process starts only after the current windows and graphics device are released. The selected backend drives both scene rendering and editor UI; this is not a live viewport-only switch. Build Settings selects the standalone player's API separately. A backend must be compiled in, supported by the device, and supplied with compatible shader packages.
 
 The current RHI implementation and execution-validation scope is complete, including editor multi-window rendering, player packaging, and minimize/restore behavior. This does not certify every GPU or driver combination.
 
@@ -174,7 +174,7 @@ CCEngine은 C++로 개발하는 Windows 게임 엔진 및 에디터입니다. �
 
 현재 계획한 RHI 구현 및 실행 검증 범위는 완료했습니다. 멀티 윈도우 렌더링, Player 패키징, 최소화와 복원을 확인했으며, 모든 GPU와 드라이버 조합을 보증한다는 의미는 아닙니다.
 
-에디터 API는 Project Settings에서 선택하고 저장한 뒤 에디터를 재시작하면 적용됩니다. 씬 화면만 바꾸는 방식이 아니라 에디터 UI까지 같은 백엔드로 구동합니다. 배포할 Player의 API는 Build Settings에서 별도로 선택합니다. 해당 백엔드가 빌드에 포함되어 있고 GPU 지원과 셰이더 패키지가 준비되어 있어야 합니다.
+에디터 API는 Project Settings에서 선택한 뒤 **Save & Restart Editor**로 적용합니다. 미저장 씬은 저장/버리기/취소를 선택할 수 있고, 기존 창과 GPU 장치가 정리된 뒤 새 에디터 프로세스가 시작됩니다. 씬 화면만 바꾸는 방식이 아니라 에디터 UI까지 같은 백엔드로 구동합니다. 배포할 Player의 API는 Build Settings에서 별도로 선택합니다. 해당 백엔드가 빌드에 포함되어 있고 GPU 지원과 셰이더 패키지가 준비되어 있어야 합니다.
 
 모든 백엔드를 포함하려면 Vulkan SDK 설치 후 위 [Build](#build)의 MSBuild 명령을 사용하세요. 기본 빌드에서는 선택 백엔드가 자동 활성화되지 않습니다. 비 DX11 셰이더 준비에는 Python, DXC, SPIRV-Cross가 필요하며 에디터의 셰이더 도구 설정에서 경로를 지정합니다.
 

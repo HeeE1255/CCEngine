@@ -3,11 +3,13 @@
 #include "stb_image.h"
 #include <system_error>
 #include <iostream>
+#include "Renderer/TextureMipChain.h"
+#include <wrl/client.h>
 
 namespace CCEngine
 {
-    DX11Texture2D::DX11Texture2D(const std::string& path)
-        : m_Path(path)
+    DX11Texture2D::DX11Texture2D(const std::string& path, TextureColorSpace colorSpace)
+        : Texture2D(colorSpace, path), m_Path(path)
     {
         int width, height, channels;
 
@@ -27,7 +29,7 @@ namespace CCEngine
         textureDesc.Height = m_Height;
         textureDesc.MipLevels = 1;
         textureDesc.ArraySize = 1;
-        textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        textureDesc.Format = colorSpace == TextureColorSpace::SRGB ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM;
         textureDesc.SampleDesc.Count = 1;
         textureDesc.Usage = D3D11_USAGE_DEFAULT;
         textureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
@@ -58,15 +60,15 @@ namespace CCEngine
     // =========================================================================
     // 가로, 세로 크기만 받아 메모리에 빈 텍스처 생성
     // =========================================================================
-    DX11Texture2D::DX11Texture2D(uint32_t width, uint32_t height)
-        : m_Width(width), m_Height(height)
+    DX11Texture2D::DX11Texture2D(uint32_t width, uint32_t height, TextureColorSpace colorSpace)
+        : Texture2D(colorSpace), m_Width(width), m_Height(height)
     {
         D3D11_TEXTURE2D_DESC textureDesc = {};
         textureDesc.Width = m_Width;
         textureDesc.Height = m_Height;
         textureDesc.MipLevels = 1;
         textureDesc.ArraySize = 1;
-        textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        textureDesc.Format = colorSpace == TextureColorSpace::SRGB ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM;
         textureDesc.SampleDesc.Count = 1;
         textureDesc.Usage = D3D11_USAGE_DEFAULT;
         textureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
@@ -86,7 +88,8 @@ namespace CCEngine
         }
     }
 
-    DX11Texture2D::DX11Texture2D(uint32_t width, uint32_t height, void* data)
+    DX11Texture2D::DX11Texture2D(uint32_t width, uint32_t height, void* data, TextureColorSpace colorSpace)
+        : Texture2D(colorSpace)
     {
         m_Width = width;
         m_Height = height;
@@ -102,7 +105,7 @@ namespace CCEngine
         textureDesc.Height = m_Height;
         textureDesc.MipLevels = 1;
         textureDesc.ArraySize = 1;               // ★ 필수!
-        textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        textureDesc.Format = colorSpace == TextureColorSpace::SRGB ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM;
         textureDesc.SampleDesc.Count = 1;        // ★ 필수! (0이면 무조건 실패)
         textureDesc.Usage = D3D11_USAGE_DEFAULT;
         textureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
@@ -157,6 +160,7 @@ namespace CCEngine
     // =========================================================================
     void DX11Texture2D::SetData(void* data, uint32_t size)
     {
+        if (UpdateMipData(m_Width, m_Height, data, size)) return;
         uint32_t bpp = 4; // R, G, B, A (각 1바이트)
         if (size != m_Width * m_Height * bpp)
         {
@@ -166,5 +170,38 @@ namespace CCEngine
 
         // UpdateSubresource를 사용하여 텍스처 데이터 덮어쓰기
         DX11Context::Get()->GetDeviceContext()->UpdateSubresource(m_Texture, 0, nullptr, data, m_Width * bpp, 0);
+    }
+
+    void DX11Texture2D::UploadMipChain(const TextureMipChain& chain)
+    {
+        if (m_Texture && m_TextureView && m_MipLevelCount == chain.Levels.size())
+        {
+            // SetData에서는 SRV 주소를 유지한다. UI가 보관한 기존 핸들이 끊기지 않게 한다.
+            auto* context = DX11Context::Get()->GetDeviceContext();
+            for (UINT i = 0; i < chain.Levels.size(); ++i)
+            {
+                const auto& level = chain.Levels[i];
+                context->UpdateSubresource(m_Texture, i, nullptr, chain.Pixels.data() + level.Offset, level.RowPitch, 0);
+            }
+            return;
+        }
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width = m_Width; desc.Height = m_Height;
+        desc.MipLevels = static_cast<UINT>(chain.Levels.size()); desc.ArraySize = 1;
+        desc.Format = m_ColorSpace == TextureColorSpace::SRGB ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1; desc.Usage = D3D11_USAGE_DEFAULT; desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        std::vector<D3D11_SUBRESOURCE_DATA> data;
+        for (const auto& level : chain.Levels)
+            data.push_back({ chain.Pixels.data() + level.Offset, level.RowPitch, 0 });
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> image;
+        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> view;
+        auto* device = DX11Context::Get()->GetDevice();
+        if (FAILED(device->CreateTexture2D(&desc, data.data(), &image)) ||
+            FAILED(device->CreateShaderResourceView(image.Get(), nullptr, &view)))
+            throw std::runtime_error("DX11 mip texture creation failed");
+        // 전 레벨 생성이 성공한 뒤 교체한다. 실패하면 기존 텍스처는 그대로 남는다.
+        if (m_TextureView) m_TextureView->Release();
+        if (m_Texture) m_Texture->Release();
+        m_Texture = image.Detach(); m_TextureView = view.Detach();
     }
 }

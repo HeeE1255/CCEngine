@@ -54,6 +54,8 @@ namespace CCEngine {
             // 나중에 glClearTexImage 등의 로직이 들어갈 자리
         }
 
+        virtual bool CopyAttachmentTo(uint32_t, Framebuffer&) override { return false; }
+
     private:
         uint32_t m_RendererID = 0;
 

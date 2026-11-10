@@ -23,6 +23,8 @@
 #include "Utils/PlatformUtils.h"
 #include "Utils/MathUtils.h"
 #include "Renderer/ModelImporter.h"
+#include <map>
+#include <set>
 #include "Application.h"
 #include "UI/HierarchyItem.h"
 #include "UI/DockManager.h"
@@ -922,6 +924,10 @@ namespace CCEngine {
         if (!startScenePath.empty())
             OpenScene(startScenePath);
 
+        // 저장되지 않은 기본 씬도 이 시점의 상태를 기준점으로 삼는다.
+        // 이후 Inspector, Gizmo, Undo/Redo로 내용이 바뀌면 직렬화 결과가 달라져 재시작 전에 정확히 감지된다.
+        UpdateSavedSceneSnapshot();
+
         Application* app = Application::Get();
         if (app)
         {
@@ -1202,17 +1208,24 @@ namespace CCEngine {
         m_Framebuffer->ClearAttachment(1, -1);
 
         m_ActiveScene->OnUpdate(deltaTime);
-        m_ActiveScene->OnRender2D(m_Camera);
-        m_ActiveScene->OnRender3D(m_Camera);
-        RenderSceneGrid(m_Camera);
-
-        // 자체 기즈모 시스템 구현
         auto selectedEntity = m_HierarchyPanel->GetSelectedEntity();
         auto selectedEntities = m_HierarchyPanel->GetSelectedEntities();
-        RenderPhysicsDebugView(m_Camera, selectedEntities);
-        RenderRootMotionDebugView(m_Camera, selectedEntities);
-        m_GizmoSystem.OnRenderSkeleton(selectedEntity);
-        m_GizmoSystem.OnRender(selectedEntities, selectedEntity, m_Camera.GetViewMatrix(), m_Camera.GetProjectionMatrix());
+        CameraComponent scenePreview;
+        scenePreview.HDR = m_SceneHDRPreview;
+        scenePreview.ExposureEV = m_SceneExposureEV;
+        scenePreview.ToneMapping = m_SceneToneMapping;
+        auto renderEditorOverlay = [this, selectedEntity, selectedEntities]()
+        {
+            // 그리드와 기즈모도 HDR 장면과 같은 깊이 버퍼에 그려 가림 관계를 유지한다.
+            RenderSceneGrid(m_Camera);
+            RenderPhysicsDebugView(m_Camera, selectedEntities);
+            RenderRootMotionDebugView(m_Camera, selectedEntities);
+            m_GizmoSystem.OnRenderSkeleton(selectedEntity);
+            m_GizmoSystem.OnRender(selectedEntities, selectedEntity, m_Camera.GetViewMatrix(), m_Camera.GetProjectionMatrix());
+        };
+        Renderer3D::RenderCamera(*m_ActiveScene, m_Camera, scenePreview,
+            m_Framebuffer->GetSpecification().Width, m_Framebuffer->GetSpecification().Height,
+            m_Framebuffer, renderEditorOverlay);
 
         m_Framebuffer->Unbind();
         AddEditorHitchStage(editorHitchStages, "EditorSceneRender", editorStageStartedAt);
@@ -1241,8 +1254,8 @@ namespace CCEngine {
                 gameCamera.SetPosition(transformComp.Translation);
                 gameCamera.SetRotation(transformComp.QuaternionRotation);
 
-                m_ActiveScene->OnRender2D(gameCamera);
-                m_ActiveScene->OnRender3D(gameCamera);
+                Renderer3D::RenderCamera(*m_ActiveScene, gameCamera, cameraComp,
+                    m_GameFramebuffer->GetSpecification().Width, m_GameFramebuffer->GetSpecification().Height, m_GameFramebuffer);
                 break;
             }
         }
@@ -1296,12 +1309,18 @@ namespace CCEngine {
         if (now - m_AssetFileRefreshRequestedAt < refreshDelay)
             return;
 
+        // Inspector의 지연 저장과 외부 파일 갱신이 경합하면 아직 저장하지 않은 값을 잃을 수 있다.
+        if (std::any_of(m_InspectorPanels.begin(), m_InspectorPanels.end(),
+            [](auto* panel) { return panel && panel->HasPendingMaterialEdits(); })) return;
+
         std::filesystem::path assetsRoot = std::filesystem::current_path() / "assets";
 
         // 파일 감시 스레드는 신호만 모으고, 실제 DB 갱신은 메인 스레드에서 한다.
         // 렌더/UI가 쓰는 캐시를 다른 스레드에서 건드리면 재현 어려운 충돌이 생긴다.
         AssetDatabase::MarkDirty(assetsRoot);
         AssetDatabase::Scan(assetsRoot);
+
+        RefreshChangedTextures(m_PendingAssetFileWatcherPaths);
 
         m_PendingAssetFileRefresh = false;
         m_PendingAssetFileWatcherPaths.clear();
@@ -2259,6 +2278,7 @@ namespace CCEngine {
         }
 
         UpdateSceneGridButton();
+        UpdateSceneHDRButtons();
         UpdatePhysicsDebugButton();
         UpdateRootMotionDebugButton();
     }
@@ -2429,6 +2449,24 @@ namespace CCEngine {
                 m_BtnSceneGrid->SetText("Grid: Off");
                 m_BtnSceneGrid->SetActive(false);
                 break;
+        }
+    }
+
+    void EditorLayer::UpdateSceneHDRButtons()
+    {
+        if (m_BtnSceneHDR)
+        {
+            m_BtnSceneHDR->SetText(m_SceneHDRPreview ? "HDR Preview: On" : "HDR Preview: Off");
+            m_BtnSceneHDR->SetActive(m_SceneHDRPreview);
+        }
+        std::ostringstream exposure;
+        exposure << std::fixed << std::setprecision(1) << m_SceneExposureEV;
+        if (m_BtnSceneExposureDown) m_BtnSceneExposureDown->SetText("EV -  (" + exposure.str() + ")");
+        if (m_BtnSceneExposureUp) m_BtnSceneExposureUp->SetText("EV +  (" + exposure.str() + ")");
+        if (m_BtnSceneToneMapping)
+        {
+            m_BtnSceneToneMapping->SetText(m_SceneToneMapping == 1 ? "Tone Mapping: Reinhard" : "Tone Mapping: Clamp");
+            m_BtnSceneToneMapping->SetActive(m_SceneToneMapping == 1);
         }
     }
 
@@ -3032,39 +3070,56 @@ namespace CCEngine {
     // =========================================================================
     // 파일 세이브/로드 및 단축키 로직
     // =========================================================================
-    void EditorLayer::SaveScene()
+    bool EditorLayer::SaveScene()
     {
         if (IsInPlayMode())
         {
             ConsoleLog::Warning("Stop Play Mode before saving the scene. Runtime scene changes are temporary.");
-            return;
+            return false;
         }
 
-        if (m_CurrentScenePath.empty()) { SaveSceneAs(); return; }
+        if (m_CurrentScenePath.empty())
+            return SaveSceneAs();
+
         CCEngine::SceneSerializer serializer(m_ActiveScene);
-        serializer.Serialize(m_CurrentScenePath);
+        if (!serializer.Serialize(m_CurrentScenePath))
+        {
+            ConsoleLog::Error("Failed to save scene: " + m_CurrentScenePath);
+            return false;
+        }
+
+        UpdateSavedSceneSnapshot();
         ConsoleLog::Info("Scene saved: " + m_CurrentScenePath);
         printf("Scene Saved to: %s\n", m_CurrentScenePath.c_str());
+        return true;
     }
 
-    void EditorLayer::SaveSceneAs()
+    bool EditorLayer::SaveSceneAs()
     {
         if (IsInPlayMode())
         {
             ConsoleLog::Warning("Stop Play Mode before saving the scene. Runtime scene changes are temporary.");
-            return;
+            return false;
         }
 
         std::filesystem::path initialDirPath = std::filesystem::current_path() / "assets" / "scenes";
         std::string initialDirStr = initialDirPath.string();
         std::string filepath = CCEngine::PlatformUtils::SaveFile("CCEngine Scene (*.ccscene)\0*.ccscene\0", initialDirStr.c_str());
-        if (!filepath.empty()) {
-            m_CurrentScenePath = filepath;
-            CCEngine::SceneSerializer serializer(m_ActiveScene);
-            serializer.Serialize(m_CurrentScenePath);
-            ConsoleLog::Info("Scene saved as: " + m_CurrentScenePath);
-            printf("Scene Saved As: %s\n", m_CurrentScenePath.c_str());
+        if (filepath.empty())
+            return false;
+
+        CCEngine::SceneSerializer serializer(m_ActiveScene);
+        if (!serializer.Serialize(filepath))
+        {
+            ConsoleLog::Error("Failed to save scene as: " + filepath);
+            return false;
         }
+
+        m_CurrentScenePath = filepath;
+        UpdateSavedSceneSnapshot();
+        ConsoleLog::Info("Scene saved as: " + m_CurrentScenePath);
+        printf("Scene Saved As: %s\n", m_CurrentScenePath.c_str());
+        return true;
     }
 
     void EditorLayer::OpenScene()
@@ -3097,6 +3152,7 @@ namespace CCEngine {
             m_UndoManager.ClearTransformHistory();
             m_UndoManager.ClearSceneStructureHistory();
             RefreshEditorSelection(CCEngine::Entity{});
+            UpdateSavedSceneSnapshot();
             ConsoleLog::Info("Scene loaded: " + m_CurrentScenePath);
             printf("Scene Loaded from: %s\n", m_CurrentScenePath.c_str());
         }
@@ -3175,12 +3231,83 @@ namespace CCEngine {
         OpenScene(startScene);
     }
 
-    void EditorLayer::SaveProjectSettings()
+    bool EditorLayer::SaveProjectSettings()
     {
         m_ProjectSettings.Normalize();
-        m_ProjectSettings.Save();
+        const bool saved = m_ProjectSettings.Save();
         if (m_ProjectSettingsPanel)
             m_ProjectSettingsPanel->OnOpened();
+        if (!saved)
+            ConsoleLog::Error("Failed to save project settings. Editor restart was not requested.");
+        return saved;
+    }
+
+    std::string EditorLayer::CaptureSceneSnapshot() const
+    {
+        if (!m_ActiveScene || IsInPlayMode())
+            return {};
+
+        try
+        {
+            SceneSerializer serializer(m_ActiveScene);
+            return serializer.SerializeToString();
+        }
+        catch (const std::exception& error)
+        {
+            ConsoleLog::Error(std::string("Failed to inspect unsaved scene changes: ") + error.what());
+            return {};
+        }
+    }
+
+    bool EditorLayer::HasUnsavedSceneChanges() const
+    {
+        const std::string currentSnapshot = CaptureSceneSnapshot();
+        // 직렬화 자체가 실패하면 변경 없음으로 단정하지 않는다. 저장 여부를 묻는 쪽이 데이터 손실보다 안전하다.
+        return currentSnapshot.empty() || currentSnapshot != m_SavedSceneSnapshot;
+    }
+
+    void EditorLayer::UpdateSavedSceneSnapshot()
+    {
+        m_SavedSceneSnapshot = CaptureSceneSnapshot();
+    }
+
+    void EditorLayer::RestartEditorForGraphicsAPI()
+    {
+        Application* app = Application::Get();
+        if (!app)
+            return;
+        if (IsInPlayMode())
+        {
+            ConsoleLog::Warning("Stop Play Mode before changing the editor graphics API.");
+            return;
+        }
+
+        const std::string currentAPI = RendererAPI::GetAPIName(RendererAPI::GetAPI());
+        if (currentAPI == m_ProjectSettings.Data().EditorGraphicsAPI)
+        {
+            SaveProjectSettings();
+            ConsoleLog::Info("The selected graphics API is already active.");
+            return;
+        }
+
+        if (HasUnsavedSceneChanges())
+        {
+            const int choice = MessageBoxW(
+                static_cast<HWND>(app->GetWindow().GetNativeWindow()),
+                L"The current scene has unsaved changes.\n\nSave before restarting the editor?",
+                L"Restart CCEngine",
+                MB_YESNOCANCEL | MB_ICONWARNING | MB_DEFBUTTON1);
+            if (choice == IDCANCEL || choice == 0)
+                return;
+            if (choice == IDYES && !SaveScene())
+                return;
+        }
+
+        if (!SaveProjectSettings())
+            return;
+
+        ConsoleLog::Info("Restarting editor with graphics API: " + m_ProjectSettings.Data().EditorGraphicsAPI);
+        app->RequestRestart();
     }
 
     void EditorLayer::ApplyProjectGameResolution()
@@ -4509,6 +4636,7 @@ namespace CCEngine {
             ConsoleLog::Error("Failed to save animator state machine test scene: " + m_CurrentScenePath);
             return false;
         }
+        UpdateSavedSceneSnapshot();
 
         RefreshEditorSelection(modelEntity);
         ConsoleLog::Info("Animator state machine test scene created: " + m_CurrentScenePath);
@@ -4624,6 +4752,86 @@ namespace CCEngine {
         if (openGraph)
             OpenAnimatorGraphEditorWindow(entity);
         return true;
+    }
+
+    void EditorLayer::BeginMaterialBinding(const std::string& modelPath)
+    {
+        try
+        {
+            const auto wide = [](const std::string& text)
+            {
+                const int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), nullptr, 0);
+                if (size <= 0) throw std::runtime_error("Invalid UTF-8 material label");
+                std::wstring result(size, L'\0');
+                MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), result.data(), size);
+                return result;
+            };
+            Model model(modelPath);
+            std::map<unsigned int, std::string> slots;
+            for (const auto& mesh : model.GetMeshes())
+                if (mesh && mesh->ImportedMaterial)
+                    slots.emplace(mesh->ImportedMaterial->SourceIndex, mesh->ImportedMaterial->Name);
+            if (slots.empty()) return;
+            HMENU menu = CreatePopupMenu();
+            if (!menu) return;
+            struct MenuGuard { HMENU Handle; ~MenuGuard() { DestroyMenu(Handle); } } guard{ menu };
+            std::vector<std::pair<unsigned int, std::string>> choices(slots.begin(), slots.end());
+            for (size_t i = 0; i < choices.size(); ++i)
+            {
+                const auto label = wide(std::to_string(choices[i].first) + ": " + choices[i].second);
+                AppendMenuW(menu, MF_STRING, i + 1, label.c_str());
+            }
+            POINT cursor{};
+            GetCursorPos(&cursor);
+            const auto choice = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY, cursor.x, cursor.y, 0, GetActiveWindow(), nullptr);
+            if (!choice || choice > choices.size()) return;
+            const auto [slot, name] = choices[choice - 1];
+            BeginAssetPick("Material for slot " + std::to_string(slot) + ": " + name, { "material" },
+                [this, modelPath, slot, name, wide](const std::filesystem::path& path, const std::string&)
+                {
+                    const auto message = wide("Model: " + modelPath + "\nSlot: " + std::to_string(slot) + ": " + name +
+                        "\nMaterial: " + path.string() + "\n\nPreserve material values and register this source baseline?\n"
+                        "This pins the source index. Reordering or renaming source slots may require relinking.");
+                    if (MessageBoxW(GetActiveWindow(), message.c_str(), L"Link Material", MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK)
+                        return false;
+                    // 선택창이 열린 사이 원본이 바뀔 수 있으므로 저장 직전 슬롯을 다시 검사한다.
+                    std::error_code sizeError;
+                    if (std::filesystem::file_size(path, sizeError) > 4u * 1024u * 1024u || sizeError)
+                    {
+                        ConsoleLog::Error("Material unavailable or exceeds editable history limit (4 MiB)");
+                        return false;
+                    }
+                    std::ifstream beforeFile(path, std::ios::binary);
+                    if (!beforeFile) return false;
+                    const std::string before((std::istreambuf_iterator<char>(beforeFile)), {});
+                    if (beforeFile.bad()) return false;
+                    beforeFile.close();
+                    if (!ModelImporter::BindMaterial(modelPath, slot, name, path.string())) return false;
+                    std::ifstream afterFile(path, std::ios::binary);
+                    const std::string after((std::istreambuf_iterator<char>(afterFile)), {});
+                    if (afterFile.is_open() && !afterFile.bad() && before != after)
+                    {
+                        AssetUndoManager::Command command;
+                        command.Operation = AssetUndoManager::Kind::EditText;
+                        command.Label = "Link Material";
+                        AssetUndoManager::Item item;
+                        item.FromPath = path;
+                        item.BeforeText = before;
+                        item.AfterText = after;
+                        command.Items.push_back(std::move(item));
+                        m_AssetUndoManager.Push(command);
+                        MarkHistoryPanelDirty();
+                    }
+                    for (auto* browser : m_AssetBrowserPanels) if (browser) browser->Refresh(true);
+                    QueueAssetReferenceValidation();
+                    ConsoleLog::Info("Material linked: " + path.string());
+                    return true;
+                });
+        }
+        catch (const std::exception& error)
+        {
+            ConsoleLog::Error("Cannot open material binding: " + std::string(error.what()));
+        }
     }
 
     void EditorLayer::BeginAssetPick(const std::string& label, const std::vector<std::string>& acceptedTypes,
@@ -4821,32 +5029,181 @@ namespace CCEngine {
         }
     }
 
-    void EditorLayer::RefreshMaterialAssetReferences(const std::filesystem::path& materialPath)
+    bool EditorLayer::RefreshChangedTextures(const std::vector<std::filesystem::path>& paths)
     {
-        if (!m_ActiveScene || materialPath.empty())
+        std::vector<std::filesystem::path> textures;
+        for (const auto& path : paths)
+            if (AssetDatabase::GetAssetKind(path) == AssetKind::Texture) textures.push_back(path);
+        if (textures.empty()) return true;
+        if (std::any_of(m_InspectorPanels.begin(), m_InspectorPanels.end(),
+            [](auto* panel) { return panel && panel->HasPendingMaterialEdits(); }))
+        {
+            ConsoleLog::Warning("Texture refresh deferred: pending Material Inspector edits. Retry Reimport after saving.");
+            return false;
+        }
+        const auto changed = [&](const std::string& path)
+        {
+            if (path.empty()) return false;
+            for (const auto& texture : textures)
+            {
+                std::error_code error;
+                // 삭제된 파일도 식별해야 한다. equivalent만 쓰면 두 파일 중 하나가 없어질 때 놓친다.
+                auto left = std::filesystem::weakly_canonical(path, error);
+                if (error) continue;
+                auto right = std::filesystem::weakly_canonical(texture, error);
+                if (!error && _wcsicmp(left.c_str(), right.c_str()) == 0) return true;
+            }
+            return false;
+        };
+        std::vector<std::string> affected;
+        for (const auto& path : AssetDatabase::GetAssetPaths(AssetKind::Material))
+        {
+            try
+            {
+                MaterialAsset material;
+                if (!material.LoadFromFile(path, false)) continue;
+                bool usesTexture = changed(material.AlbedoTexturePath) || changed(material.NormalTexturePath);
+                for (const auto& [name, value] : material.ShaderProperties)
+                    if (value.Type == ShaderPropertyType::Texture2D && changed(value.TexturePath)) usesTexture = true;
+                if (usesTexture) affected.push_back(path.string());
+            }
+            catch (const std::exception& error)
+            {
+                ConsoleLog::Warning("Texture dependency scan skipped material: " + path.string() + ": " + error.what());
+            }
+        }
+        std::vector<MeshComponent*> directTargets;
+        std::vector<TextureReloadRequest> directRequests;
+        const std::array<Scene*, 2> scenes{ m_ActiveScene, m_EditorScene };
+        for (size_t i = 0; i < scenes.size(); ++i)
+        {
+            if (!scenes[i] || (i == 1 && scenes[i] == scenes[0])) continue;
+            auto meshes = scenes[i]->GetRegistry().view<MeshComponent>();
+            for (auto entity : meshes)
+            {
+                auto& mesh = meshes.get<MeshComponent>(entity);
+                std::string source = mesh.AlbedoPath;
+                if (!mesh.AlbedoAssetGuid.empty())
+                {
+                    const auto resolved = AssetDatabase::GetPathFromGuid(mesh.AlbedoAssetGuid);
+                    if (!resolved.empty()) source = resolved.string();
+                }
+                if (source.empty() && mesh.AlbedoMap) source = mesh.AlbedoMap->GetSourcePath();
+                if (!changed(source)) continue;
+                directTargets.push_back(&mesh);
+                directRequests.push_back({ source, mesh.AlbedoMap ? mesh.AlbedoMap->GetCreateOptions() : TextureCreateOptions{} });
+            }
+        }
+        if (affected.empty() && directRequests.empty()) return true;
+        std::vector<std::shared_ptr<Texture2D>> prepared;
+        // GPU 준비와 캐시 교체가 성공하기 전에는 ECS의 기존 shared_ptr를 건드리지 않는다.
+        // 편집 씬도 함께 교체하므로 Stop 후 이전 이미지가 되살아나지 않는다.
+        if (!RefreshReimportedMaterials(affected, directRequests, &prepared)) return false;
+        for (size_t i = 0; i < directTargets.size(); ++i)
+            directTargets[i]->AlbedoMap = std::move(prepared[i]);
+        return true;
+    }
+
+    bool EditorLayer::RefreshReimportedMaterials(const std::vector<std::string>& paths,
+        const std::vector<TextureReloadRequest>& directTextures,
+        std::vector<std::shared_ptr<Texture2D>>* preparedDirectTextures)
+    {
+        const auto blockPreviews = [&](bool blocked)
+        {
+            // 창이 아니라 편집 세션이 실패 상태를 소유해야 새 창에서도 잘못된 프리뷰를 다시 만들지 않는다.
+            for (const auto& path : paths)
+            {
+                if (blocked) m_BlockedMaterialPreviewPaths.insert(path);
+                else m_BlockedMaterialPreviewPaths.erase(path);
+            }
+            for (auto* browser : m_AssetBrowserPanels)
+                if (browser) browser->SetMaterialRefreshBlocked(paths, blocked);
+        };
+        std::vector<MaterialAsset> materials;
+        try
+        {
+            materials.reserve(paths.size());
+            for (const auto& path : paths)
+            {
+                MaterialAsset material;
+                if (!material.LoadFromFile(path, false))
+                    throw std::runtime_error("Cannot read reimported material: " + path);
+                materials.push_back(std::move(material));
+            }
+        }
+        catch (const std::exception& error)
+        {
+            ConsoleLog::Error("Material display update cancelled: " + std::string(error.what()));
+            blockPreviews(true);
+            return false;
+        }
+        if (!Renderer3D::PrepareReimportedMaterialResources(materials, directTextures, preparedDirectTextures))
+        {
+            blockPreviews(true);
+            return false;
+        }
+        blockPreviews(false);
+        for (size_t i = 0; i < paths.size(); ++i) RefreshMaterialAssetReferences(paths[i], &materials[i]);
+        for (auto* inspector : m_InspectorPanels)
+            if (inspector)
+                for (const auto& path : paths) inspector->NotifyMaterialReimported(path);
+        for (auto* browser : m_AssetBrowserPanels)
+            if (browser) browser->RefreshReimportPreviews();
+        return true;
+    }
+
+    void EditorLayer::RefreshMaterialAssetReferences(const std::filesystem::path& materialPath, const MaterialAsset* prepared)
+    {
+        if ((!m_ActiveScene && !m_EditorScene) || materialPath.empty())
             return;
 
         MaterialAsset latestMaterial;
-        if (!latestMaterial.LoadFromFile(materialPath))
+        if (prepared) latestMaterial = *prepared;
+        else if (!latestMaterial.LoadFromFile(materialPath, false))
             return;
 
         const std::string materialGuid = AssetDatabase::GetGuidFromPath(materialPath);
         const std::string materialPathText = materialPath.string();
 
-        auto view = m_ActiveScene->GetRegistry().view<MeshComponent>();
-        for (auto entityID : view)
+        const auto matches = [&](const std::string& guid, const std::string& path)
         {
-            auto& mesh = view.get<MeshComponent>(entityID);
-            const bool sameGuid = !materialGuid.empty() && mesh.MaterialAssetGuid == materialGuid;
-            const bool samePath = mesh.MaterialPath == materialPathText;
-            if (!sameGuid && !samePath)
-                continue;
+            // GUID가 있으면 경로보다 우선한다. 삭제 후 같은 경로에 만든 다른 에셋을 잘못 연결하지 않는다.
+            if (!guid.empty() && !materialGuid.empty()) return guid == materialGuid;
+            if (path.empty()) return false;
+            std::error_code error;
+            return std::filesystem::equivalent(path, materialPath, error) && !error;
+        };
 
-            // 인스펙터에서 Material 파일을 바꾸면 현재 씬의 참조도 즉시 다시 읽는다.
-            // 나중에 Material 캐시가 들어가면 이 부분은 캐시 dirty 처리로 바뀐다.
-            mesh.Material = std::make_shared<MaterialAsset>(latestMaterial);
-            mesh.MaterialPath = materialPathText;
-            mesh.MaterialAssetGuid = materialGuid;
+        // Play의 복사본만 갱신하면 Stop 시 보관된 편집 씬의 옛 재질이 다시 나타난다.
+        // 저장된 에셋 변경만 양쪽에 적용하고, 실행 중 바뀐 Transform/컴포넌트는 복사하지 않는다.
+        const std::array<Scene*, 2> scenes{ m_ActiveScene, m_EditorScene };
+        for (size_t sceneIndex = 0; sceneIndex < scenes.size(); ++sceneIndex)
+        {
+            Scene* scene = scenes[sceneIndex];
+            if (!scene || (sceneIndex == 1 && scene == scenes[0])) continue;
+            auto view = scene->GetRegistry().view<MeshComponent>();
+            for (auto entityID : view)
+            {
+                auto& mesh = view.get<MeshComponent>(entityID);
+                if (matches(mesh.MaterialAssetGuid, mesh.MaterialPath))
+                {
+                    mesh.Material = std::make_shared<MaterialAsset>(latestMaterial);
+                    mesh.MaterialPath = materialPathText;
+                    mesh.MaterialAssetGuid = materialGuid;
+                    mesh.MaterialMissing = false;
+                }
+                for (auto& slot : mesh.MaterialSlots)
+                {
+                    if (matches(slot.MaterialAssetGuid, slot.MaterialPath))
+                    {
+                        // 서로 다른 씬의 가변 Material 인스턴스를 공유하지 않는다.
+                        slot.Material = std::make_shared<MaterialAsset>(latestMaterial);
+                        slot.MaterialPath = materialPathText;
+                        slot.MaterialAssetGuid = materialGuid;
+                        slot.Missing = false;
+                    }
+                }
+            }
         }
 
     }
@@ -4977,7 +5334,23 @@ namespace CCEngine {
             return;
         }
 
-        if (!m_HierarchyPanel->IsPointInside(mouseX, mouseY))
+        bool sceneModelDrop = false;
+        if (assetType == "model" && m_RootUI)
+        {
+            // 빈 씬 영역에도 모델을 놓을 수 있어야 한다. 엔티티 피킹 결과 대신
+            // 최상위 UI를 검사해 다른 창 뒤에 가려진 뷰포트로 드롭되는 것을 막는다.
+            const auto hitTest = [&](auto&& self, UI::Widget* widget) -> UI::Widget*
+            {
+                if (!widget || !widget->IsVisible() || !widget->IsPointInside(mouseX, mouseY)) return nullptr;
+                const auto& children = widget->GetChildren();
+                for (auto it = children.rbegin(); it != children.rend(); ++it)
+                    if (auto* hit = self(self, *it)) return hit;
+                return widget;
+            };
+            auto* hit = hitTest(hitTest, m_RootUI);
+            sceneModelDrop = hit && std::find(m_ViewportWidgets.begin(), m_ViewportWidgets.end(), hit) != m_ViewportWidgets.end();
+        }
+        if (!m_HierarchyPanel->IsPointInside(mouseX, mouseY) && !sceneModelDrop)
             return;
 
         if (assetType == "scene")
@@ -5487,6 +5860,7 @@ namespace CCEngine {
             browser->SetExternalWatcherActive(m_AssetFileWatcher.IsRunning());
             browser->SetOnPrefabSelected([this](const std::string& path) { InstantiatePrefab(path); });
             browser->SetOnModelSelected([this](const std::string& path) { ImportModelAsset(path); });
+            browser->SetOnMaterialBindingRequested([this](const std::string& path) { BeginMaterialBinding(path); });
             browser->SetOnSceneSelected([this](const std::string& path) { OpenScene(path); });
             browser->SetOnAssetSelected([this](const std::string& path, const std::string& type) { SelectAssetForInspection(path, type); });
             browser->SetOnCodeAssetOpened([this](const std::string& path)
@@ -5510,6 +5884,14 @@ namespace CCEngine {
                     QueueAssetReferenceValidation();
                 });
             browser->SetOnAssetHistoryChanged([this]() { MarkHistoryPanelDirty(); });
+            browser->SetOnMaterialsReimported([this](const std::vector<std::string>& paths) { return RefreshReimportedMaterials(paths); });
+            browser->SetOnTexturesReimported([this](const std::vector<std::filesystem::path>& paths) { return RefreshChangedTextures(paths); });
+            browser->SetCanReimportMaterials([this]() {
+                return std::none_of(m_InspectorPanels.begin(), m_InspectorPanels.end(),
+                    [](auto* panel) { return panel && panel->HasPendingMaterialEdits(); });
+            });
+            browser->SetMaterialRefreshBlocked(std::vector<std::string>(
+                m_BlockedMaterialPreviewPaths.begin(), m_BlockedMaterialPreviewPaths.end()), true);
             m_AssetBrowserPanels.push_back(browser);
         };
 
@@ -6167,7 +6549,7 @@ namespace CCEngine {
         m_SceneViewDropdownPanel->SetAnchorMin(0.0f, 0.0f);
         m_SceneViewDropdownPanel->SetAnchorMax(0.0f, 0.0f);
         m_SceneViewDropdownPanel->SetOffsetMin(500.0f, 88.0f);
-        m_SceneViewDropdownPanel->SetOffsetMax(700.0f, 244.0f);
+        m_SceneViewDropdownPanel->SetOffsetMax(700.0f, 322.0f);
         m_RootUI->AddChild(m_SceneViewDropdownPanel);
 
         m_BtnSceneGrid = addDropdownButton(m_SceneViewDropdownPanel, "BtnSceneGrid", "Grid: RGB", 0.0f);
@@ -6177,6 +6559,10 @@ namespace CCEngine {
         m_BtnRootMotionClear = addDropdownButton(m_SceneViewDropdownPanel, "BtnRootMotionClear", "Clear Root Path", 104.0f);
         m_BtnRootMotionPathShorter = addDropdownButton(m_SceneViewDropdownPanel, "BtnRootMotionPathShorter", "Limit -", 130.0f, 0.0f, -100.0f);
         m_BtnRootMotionPathLonger = addDropdownButton(m_SceneViewDropdownPanel, "BtnRootMotionPathLonger", "Limit +", 130.0f, 100.0f, 0.0f);
+        m_BtnSceneHDR = addDropdownButton(m_SceneViewDropdownPanel, "BtnSceneHDR", "HDR Preview: Off", 156.0f);
+        m_BtnSceneExposureDown = addDropdownButton(m_SceneViewDropdownPanel, "BtnSceneExposureDown", "EV -  (0.0)", 182.0f, 0.0f, -100.0f);
+        m_BtnSceneExposureUp = addDropdownButton(m_SceneViewDropdownPanel, "BtnSceneExposureUp", "EV +  (0.0)", 182.0f, 100.0f, 0.0f);
+        m_BtnSceneToneMapping = addDropdownButton(m_SceneViewDropdownPanel, "BtnSceneToneMapping", "Tone Mapping: Reinhard", 208.0f);
 
         m_RootMotionDebugDropdownPanel = new UI::Panel("RootMotionDebugDropdown", { 0.18f, 0.18f, 0.18f, 1.0f });
         m_RootMotionDebugDropdownPanel->SetVisible(false);
@@ -6290,6 +6676,7 @@ namespace CCEngine {
         m_AssetBrowserPanel->SetExternalWatcherActive(m_AssetFileWatcher.IsRunning());
         m_AssetBrowserPanel->SetOnPrefabSelected([this](const std::string& path) { InstantiatePrefab(path); });
         m_AssetBrowserPanel->SetOnModelSelected([this](const std::string& path) { ImportModelAsset(path); });
+        m_AssetBrowserPanel->SetOnMaterialBindingRequested([this](const std::string& path) { BeginMaterialBinding(path); });
         m_AssetBrowserPanel->SetOnSceneSelected([this](const std::string& path) { OpenScene(path); });
         m_AssetBrowserPanel->SetOnAssetSelected([this](const std::string& path, const std::string& type) { SelectAssetForInspection(path, type); });
         m_AssetBrowserPanel->SetOnCodeAssetOpened([this](const std::string& path)
@@ -6313,7 +6700,15 @@ namespace CCEngine {
                 QueueAssetReferenceValidation();
             });
         m_AssetBrowserPanel->SetOnAssetHistoryChanged([this]() { MarkHistoryPanelDirty(); });
+        m_AssetBrowserPanel->SetOnMaterialsReimported([this](const std::vector<std::string>& paths) { return RefreshReimportedMaterials(paths); });
+        m_AssetBrowserPanel->SetOnTexturesReimported([this](const std::vector<std::filesystem::path>& paths) { return RefreshChangedTextures(paths); });
+        m_AssetBrowserPanel->SetCanReimportMaterials([this]() {
+            return std::none_of(m_InspectorPanels.begin(), m_InspectorPanels.end(),
+                [](auto* panel) { return panel && panel->HasPendingMaterialEdits(); });
+        });
         m_RootUI->AddChild(m_AssetBrowserPanel);
+        m_AssetBrowserPanel->SetMaterialRefreshBlocked(std::vector<std::string>(
+            m_BlockedMaterialPreviewPaths.begin(), m_BlockedMaterialPreviewPaths.end()), true);
         m_AssetBrowserPanels.push_back(m_AssetBrowserPanel);
 
         m_FileDropdownPanel = new UI::Panel("FileDropdownUI", { 0.18f, 0.18f, 0.18f, 1.0f });
@@ -6431,7 +6826,8 @@ namespace CCEngine {
             [this]() { SetCurrentSceneAsProjectStartScene(); },
             [this]() { OpenProjectStartScene(); },
             [this]() { SaveProjectSettings(); },
-            [this]() { ApplyProjectGameResolution(); });
+            [this]() { ApplyProjectGameResolution(); },
+            [this]() { RestartEditorForGraphicsAPI(); });
         m_ProjectSettingsPanel->SetKeyBindingPickerCallback(
             [this](UI::KeyBindingInput* targetInput) { OpenKeyBindingPickerWindow(targetInput); });
 
@@ -6691,6 +7087,26 @@ namespace CCEngine {
                     default: m_SceneGridMode = SceneGridMode::RGB; break;
                 }
                 UpdateSceneGridButton();
+            });
+        m_BtnSceneHDR->SetOnClick([this]()
+            {
+                m_SceneHDRPreview = !m_SceneHDRPreview;
+                UpdateSceneHDRButtons();
+            });
+        m_BtnSceneExposureDown->SetOnClick([this]()
+            {
+                m_SceneExposureEV = std::clamp(m_SceneExposureEV - 0.5f, -16.0f, 16.0f);
+                UpdateSceneHDRButtons();
+            });
+        m_BtnSceneExposureUp->SetOnClick([this]()
+            {
+                m_SceneExposureEV = std::clamp(m_SceneExposureEV + 0.5f, -16.0f, 16.0f);
+                UpdateSceneHDRButtons();
+            });
+        m_BtnSceneToneMapping->SetOnClick([this]()
+            {
+                m_SceneToneMapping = m_SceneToneMapping == 1 ? 0 : 1;
+                UpdateSceneHDRButtons();
             });
         m_BtnPhysicsDebug->SetOnClick([this]()
             {

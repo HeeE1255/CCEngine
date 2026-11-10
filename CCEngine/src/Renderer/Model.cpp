@@ -1,6 +1,12 @@
 #include "Model.h"
 #include "Animation/Animator.h"
 #include <iostream>
+#include <filesystem>
+#include <algorithm>
+#include <cmath>
+#include <unordered_map>
+#include "Core/ConsoleLog.h"
+#include <assimp/GltfMaterial.h>
 
 namespace CCEngine
 {
@@ -31,13 +37,146 @@ namespace CCEngine
         // 이때 클립 캐시에 복사해 두면 Animator 시작 시 같은 FBX를 다시 열지 않아도 된다.
         AnimationClip::PrimeCacheFromScene(path, scene);
 
-        m_Directory = path.substr(0, path.find_last_of('/'));
-        if (m_Directory == path)
-        {
-            m_Directory = path.substr(0, path.find_last_of('\\'));
-        }
+        m_Directory = std::filesystem::path(path).parent_path().string();
+        ReadMaterials(scene);
 
         m_RootNode = ProcessNode(scene->mRootNode, scene);
+    }
+
+    void Model::ReadMaterials(const aiScene* scene)
+    {
+        m_ImportedMaterials.clear();
+        m_ImportedMaterials.reserve(scene->mNumMaterials);
+        std::unordered_map<const aiTexture*, std::shared_ptr<const ImportedEmbeddedTexture>> embeddedCache;
+        size_t embeddedBytes = 0;
+        constexpr size_t maxEmbeddedBytes = 256u * 1024u * 1024u;
+        auto copyEmbedded = [&](const aiTexture* image) -> std::shared_ptr<const ImportedEmbeddedTexture>
+        {
+            const auto cached = embeddedCache.find(image);
+            if (cached != embeddedCache.end()) return cached->second;
+            auto& cachedValue = embeddedCache[image];
+            const uint64_t bytes = image->mHeight == 0 ? image->mWidth :
+                uint64_t(image->mWidth) * image->mHeight * 4u;
+            if (!image->pcData || !bytes || bytes > maxEmbeddedBytes - embeddedBytes ||
+                (image->mHeight && (image->mWidth > 16384 || image->mHeight > 16384)))
+            {
+                ConsoleLog::Warning("Embedded texture rejected: invalid dimensions or 256 MiB model budget exceeded: " + m_FilePath);
+                return nullptr;
+            }
+            auto data = std::make_shared<ImportedEmbeddedTexture>();
+            for (; data->SourceIndex < scene->mNumTextures; ++data->SourceIndex)
+                if (scene->mTextures[data->SourceIndex] == image) break;
+            if (data->SourceIndex == scene->mNumTextures) return nullptr;
+            data->Width = image->mWidth;
+            data->Height = image->mHeight;
+            data->Bytes.resize(static_cast<size_t>(bytes));
+            // Assimp Importer가 파괴되면 pcData도 사라진다. 참조를 저장하지 않고 한 번만 복사해 공유한다.
+            if (!image->mHeight)
+                std::copy_n(reinterpret_cast<const unsigned char*>(image->pcData), data->Bytes.size(), data->Bytes.data());
+            else
+                for (size_t pixel = 0; pixel < data->Bytes.size() / 4; ++pixel)
+                {
+                    const auto& value = image->pcData[pixel];
+                    data->Bytes[pixel * 4] = value.b;
+                    data->Bytes[pixel * 4 + 1] = value.g;
+                    data->Bytes[pixel * 4 + 2] = value.r;
+                    data->Bytes[pixel * 4 + 3] = value.a;
+                }
+            embeddedBytes += data->Bytes.size();
+            cachedValue = data;
+            return cachedValue;
+        };
+        const auto finiteUnit = [](float value, float fallback)
+        {
+            return std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : fallback;
+        };
+        for (unsigned int index = 0; index < scene->mNumMaterials; ++index)
+        {
+            const aiMaterial* source = scene->mMaterials[index];
+            auto material = std::make_shared<ImportedMaterialData>();
+            material->SourceIndex = index;
+            material->ModelPath = m_FilePath;
+            aiString name;
+            source->Get(AI_MATKEY_NAME, name);
+            material->Name = name.length ? name.C_Str() : "Material " + std::to_string(index);
+            aiColor4D color(1, 1, 1, 1);
+            if (source->Get(AI_MATKEY_BASE_COLOR, color) != AI_SUCCESS)
+                source->Get(AI_MATKEY_COLOR_DIFFUSE, color);
+            material->BaseColor = { finiteUnit(color.r, 1), finiteUnit(color.g, 1),
+                finiteUnit(color.b, 1), finiteUnit(color.a, 1) };
+            float value = 0.0f;
+            if (source->Get(AI_MATKEY_METALLIC_FACTOR, value) == AI_SUCCESS)
+                material->Metallic = finiteUnit(value, 0.0f);
+            if (source->Get(AI_MATKEY_ROUGHNESS_FACTOR, value) == AI_SUCCESS)
+                material->Roughness = finiteUnit(value, 0.5f);
+            if (source->Get(AI_MATKEY_OPACITY, value) == AI_SUCCESS)
+                material->Opacity = finiteUnit(value, 1.0f);
+
+            auto readTextures = [&](aiTextureType type, ImportedTextureSemantic semantic)
+            {
+                for (unsigned int slot = 0; slot < source->GetTextureCount(type); ++slot)
+                {
+                    aiString reference;
+                    unsigned int uvChannel = 0;
+                    aiTextureMapping mapping = aiTextureMapping_UV;
+                    aiTextureMapMode address[3] = { aiTextureMapMode_Wrap, aiTextureMapMode_Wrap, aiTextureMapMode_Wrap };
+                    aiTextureOp operation = aiTextureOp_Multiply;
+                    ai_real blend = 1.0f;
+                    if (source->GetTexture(type, slot, &reference, &mapping, &uvChannel, &blend, &operation, address) != AI_SUCCESS)
+                        continue;
+                    ImportedTextureReference texture;
+                    texture.Semantic = semantic;
+                    texture.SourceReference = reference.C_Str();
+                    texture.UVChannel = uvChannel;
+                    texture.SourceTextureType = static_cast<unsigned int>(type);
+                    texture.SourceTextureSlot = slot;
+                    texture.Mapping = static_cast<unsigned int>(mapping);
+                    texture.AddressU = static_cast<unsigned int>(address[0]);
+                    texture.AddressV = static_cast<unsigned int>(address[1]);
+                    texture.Operation = static_cast<unsigned int>(operation);
+                    texture.Blend = static_cast<float>(blend);
+                    source->Get(AI_MATKEY_TEXFLAGS(type, slot), texture.Flags);
+                    aiUVTransform transform;
+                    source->Get(AI_MATKEY_UVTRANSFORM(type, slot), transform);
+                    // Assimp 후처리 이후의 UV 규약을 보존한다. 회전은 라디안이며 중심은 (0.5, 0.5)다.
+                    // 파일 원본 좌표로 재해석하면 FlipUVs가 반영된 메시와 방향이 달라질 수 있다.
+                    texture.UVOffset = { transform.mTranslation.x, transform.mTranslation.y };
+                    texture.UVScale = { transform.mScaling.x, transform.mScaling.y };
+                    texture.UVRotation = transform.mRotation;
+                    source->Get(AI_MATKEY_GLTF_MAPPINGFILTER_MIN(type, slot), texture.MinFilter);
+                    source->Get(AI_MATKEY_GLTF_MAPPINGFILTER_MAG(type, slot), texture.MagFilter);
+                    texture.ValidSampling = std::isfinite(texture.Blend) && std::isfinite(texture.UVOffset.x) &&
+                        std::isfinite(texture.UVOffset.y) && std::isfinite(texture.UVScale.x) &&
+                        std::isfinite(texture.UVScale.y) && std::isfinite(texture.UVRotation);
+                    // 내장 텍스처의 *번호는 파일명이 아니다. 원본 모델과 참조를 함께 보존해
+                    // 나중에 추출할 때 찾을 수 있게 하고, 일반 파일 로더에는 전달하지 않는다.
+                    const auto* embedded = scene->GetEmbeddedTexture(reference.C_Str());
+                    texture.Embedded = embedded != nullptr;
+                    if (texture.Embedded)
+                    {
+                        texture.EmbeddedData = copyEmbedded(embedded);
+                        texture.Exists = texture.EmbeddedData != nullptr;
+                    }
+                    else if (!texture.SourceReference.empty() && texture.SourceReference.front() != '*')
+                    {
+                        auto path = std::filesystem::path(texture.SourceReference);
+                        if (path.is_relative()) path = std::filesystem::path(m_Directory) / path;
+                        texture.FilePath = path.lexically_normal().string();
+                        std::error_code error;
+                        texture.Exists = std::filesystem::is_regular_file(path, error);
+                    }
+                    material->Textures.push_back(std::move(texture));
+                }
+            };
+            readTextures(source->GetTextureCount(aiTextureType_BASE_COLOR) > 0
+                ? aiTextureType_BASE_COLOR : aiTextureType_DIFFUSE, ImportedTextureSemantic::BaseColor);
+            readTextures(aiTextureType_NORMALS, ImportedTextureSemantic::Normal);
+            // Metallic/Roughness가 같은 이미지여도 서로 다른 의미로 보존한다.
+            // 채널 패킹 규칙을 확인하기 전에는 두 값을 같은 RGB 샘플로 간주하면 안 된다.
+            readTextures(aiTextureType_METALNESS, ImportedTextureSemantic::Metallic);
+            readTextures(aiTextureType_DIFFUSE_ROUGHNESS, ImportedTextureSemantic::Roughness);
+            m_ImportedMaterials.push_back(std::move(material));
+        }
     }
 
     ModelNode Model::ProcessNode(aiNode* node, const aiScene* scene, const std::string& parentPath)
@@ -140,13 +279,18 @@ namespace CCEngine
         }
         newMesh->Name = meshName;
 
-        if (mesh->mMaterialIndex >= 0)
+        if (mesh->mMaterialIndex < m_ImportedMaterials.size())
         {
-            aiMaterial* material = scene->mMaterials[mesh->mMaterialIndex];
-            aiString str;
-            if (material->GetTexture(aiTextureType_DIFFUSE, 0, &str) == AI_SUCCESS)
+            newMesh->ImportedMaterial = m_ImportedMaterials[mesh->mMaterialIndex];
+            for (const auto& texture : newMesh->ImportedMaterial->Textures)
             {
-                newMesh->TexturePath = m_Directory + "/" + str.C_Str();
+                if (texture.Semantic == ImportedTextureSemantic::BaseColor &&
+                    texture.UVChannel == 0 && texture.Mapping == aiTextureMapping_UV &&
+                    texture.ValidSampling && !texture.Embedded && texture.Exists)
+                {
+                    newMesh->TexturePath = texture.FilePath;
+                    break;
+                }
             }
         }
 

@@ -26,6 +26,7 @@ namespace CCEngine
         VkDevice Native() const { return m_Device; }
         VkPhysicalDevice Physical() const { return m_Physical; }
         const VkPhysicalDeviceProperties& Properties() const { return m_Properties; }
+        uint32_t MaxSamplerAnisotropy() const { return m_MaxSamplerAnisotropy; }
         VkQueue Queue() const { return m_Queue; }
         uint32_t QueueFamily() const { return m_QueueFamily; }
         void EnsureSurface(VkSurfaceKHR surface);
@@ -47,6 +48,7 @@ namespace CCEngine
         void UnregisterTexture(RendererHandle handle) noexcept;
         VkDescriptorImageInfo ResolveTexture(RendererHandle handle, const VkDescriptorImageInfo& empty) const;
     private:
+        uint32_t m_MaxSamplerAnisotropy = 1;
         VkInstance m_Instance = VK_NULL_HANDLE;
         VkDevice m_Device = VK_NULL_HANDLE;
         VkPhysicalDevice m_Physical = VK_NULL_HANDLE;

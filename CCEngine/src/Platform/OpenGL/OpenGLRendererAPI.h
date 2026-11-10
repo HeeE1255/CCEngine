@@ -5,6 +5,8 @@
 #include "Renderer/RendererAPI.h"
 #include "Renderer/GraphicsContext.h"
 #include <memory>
+#include <map>
+#include <array>
 
 namespace CCEngine
 {
@@ -12,6 +14,7 @@ namespace CCEngine
     class OpenGLRendererAPI final : public RendererAPI
     {
     public:
+        uint32_t GetMaxSamplerAnisotropy() const override { return m_MaxSamplerAnisotropy; }
         // 로더는 wglGetProcAddress 실패 시 opengl32.dll의 GetProcAddress도 조회해야 한다.
         using ProcAddress = void* (*)(const char*);
         OpenGLRendererAPI(GraphicsContext& context, ProcAddress load);
@@ -28,6 +31,7 @@ namespace CCEngine
         void SetViewport(uint32_t x, uint32_t y, uint32_t width, uint32_t height) override;
         void ResizeContext(uint32_t width, uint32_t height) override;
         void SetDepthTest(bool enable) override;
+        void SetDepthWrite(bool enable) override;
         bool IsYAxisFlipped() const override { return true; }
         void SetScissor(uint32_t x, uint32_t y, uint32_t width, uint32_t height) override;
         void SetScissorEnable(bool enable) override;
@@ -35,6 +39,9 @@ namespace CCEngine
         void SetCullMode(CullMode mode) override;
         void BindTexture(uint32_t slot, RendererHandle handle) override;
         void UnbindTextures(uint32_t startSlot, uint32_t count) override;
+        void SetCommonSampler(const SamplerDescription* description) override;
+        void SetMaterialSampler(uint32_t slot, const SamplerDescription* description) override;
+        void ReleaseSamplerResources() noexcept;
 
     private:
         struct Functions;
@@ -42,6 +49,12 @@ namespace CCEngine
         GraphicsContext& m_Context;
         uint32_t m_Width = 0, m_Height = 0;
         uint32_t m_TextureSlots = 0, m_ColorTargets = 0;
+        uint32_t m_MaxSamplerAnisotropy = 1;
+        std::map<uint32_t, uint32_t> m_Samplers;
+        uint32_t m_CommonSampler = 0;
+        std::array<uint32_t, 4> m_MaterialSamplers{};
+        std::array<uint32_t, 32> m_AppliedSamplers{};
+        uint32_t ResolveSampler(const SamplerDescription* description);
         float m_ClearColor[4] = { 0, 0, 0, 1 };
         void RequireTarget() const;
     };

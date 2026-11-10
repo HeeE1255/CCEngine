@@ -371,6 +371,13 @@ namespace CCEngine
         return std::find(m_CommandLineArgs.begin(), m_CommandLineArgs.end(), flag) != m_CommandLineArgs.end();
     }
 
+    void Application::RequestRestart()
+    {
+        m_RestartRequested = true;
+        if (m_Window)
+            m_Window->SetShouldClose(true);
+    }
+
     void Application::ForgetInputWindow(Window* window)
     {
         if (!window)

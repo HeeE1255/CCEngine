@@ -2839,6 +2839,25 @@ namespace CCEngine
                 return nullptr;
             };
 
+        struct MeshRenderSubmission
+        {
+            DirectX::XMMATRIX Transform;
+            std::shared_ptr<Mesh> MeshData;
+            std::shared_ptr<Texture2D> Texture;
+            DirectX::XMFLOAT4 Color;
+            std::shared_ptr<MaterialAsset> Material;
+            const std::vector<DirectX::XMMATRIX>* BoneMatrices = nullptr;
+            int EntityID = -1;
+            float CameraDistanceSquared = 0.0f;
+            bool ForceErrorShader = false;
+            uint64_t SubmissionOrder = 0;
+        };
+
+        std::vector<MeshRenderSubmission> opaqueSubmissions;
+        std::vector<MeshRenderSubmission> transparentSubmissions;
+        const DirectX::XMFLOAT3 cameraPosition = camera.GetPosition();
+        uint64_t submissionOrder = 0;
+
         auto meshView = m_Registry.view<TransformComponent, MeshComponent>();
         meshView.each([&](auto entityID, auto& tc, auto& mesh)
             {
@@ -2877,37 +2896,69 @@ namespace CCEngine
                 {
                     // Material이 연결된 메시만 재질 값을 우선한다.
                     // 기존 씬은 BaseColor/AlbedoMap을 그대로 쓰기 때문에 구버전 데이터가 깨지지 않는다.
-                    renderColor = mesh.Material->AlbedoColor;
+                    // 재질 색은 b4에서 적용한다. b1에도 넣으면 색과 알파가 제곱된다.
+                    renderColor = { 1.0f, 1.0f, 1.0f, 1.0f };
                     if (mesh.Material->AlbedoTexture)
                         renderTexture = mesh.Material->AlbedoTexture;
                 }
                 const bool forceErrorShader = mesh.MaterialMissing;
 
                 const bool canUseSkinning = animatorComp && mesh.MeshData && mesh.MeshData->HasSkinWeights();
+                DirectX::XMMATRIX renderTransform = getTransform(entity);
+                const std::vector<DirectX::XMMATRIX>* boneMatrices = nullptr;
                 if (canUseSkinning)
                 {
-                    DirectX::XMMATRIX rootWorldTransform = getTransform(rootEntity);
+                    renderTransform = getTransform(rootEntity);
                     auto& animator = animatorComp->AnimPlayer;
+                    boneMatrices = &animator.GetFinalBoneMatrices();
+                }
 
-                    Renderer3D::DrawSkinnedMesh(
-                        rootWorldTransform,
-                        mesh.MeshData,
-                        renderTexture,
-                        renderColor,
-                        mesh.Material.get(),
-                        (int)entityID,
-                        animator.GetFinalBoneMatrices(),
-                        forceErrorShader
-                    );
-                }
-                else
-                {
-                    // Animator 컴포넌트가 붙어 있어도 큐브/스피어 같은 일반 메시에는 본 가중치가 없다.
-                    // 이런 메시를 스킨드 셰이더로 보내면 빈 본 행렬을 기준으로 변형되어 사라져 보일 수 있다.
-                    DirectX::XMMATRIX worldTransform = getTransform(entity);
-                    Renderer3D::DrawMesh(worldTransform, mesh.MeshData, renderTexture, renderColor, mesh.Material.get(), (int)entityID, forceErrorShader);
-                }
+                DirectX::XMFLOAT4X4 world;
+                DirectX::XMStoreFloat4x4(&world, renderTransform);
+                const float dx = world._41 - cameraPosition.x;
+                const float dy = world._42 - cameraPosition.y;
+                const float dz = world._43 - cameraPosition.z;
+
+                MeshRenderSubmission submission{
+                    renderTransform, mesh.MeshData, renderTexture, renderColor, mesh.Material,
+                    boneMatrices, (int)entityID, dx * dx + dy * dy + dz * dz, forceErrorShader,
+                    submissionOrder++ };
+                auto& queue = mesh.Material && mesh.Material->IsTransparent()
+                    ? transparentSubmissions
+                    : opaqueSubmissions;
+                queue.push_back(std::move(submission));
             });
+
+        auto drawSubmission = [](const MeshRenderSubmission& submission)
+        {
+            if (submission.BoneMatrices)
+            {
+                Renderer3D::DrawSkinnedMesh(submission.Transform, submission.MeshData, submission.Texture,
+                    submission.Color, submission.Material.get(), submission.EntityID,
+                    *submission.BoneMatrices, submission.ForceErrorShader);
+                return;
+            }
+
+            // Animator가 있어도 일반 메시는 본 가중치가 없으므로 정적 경로를 유지한다.
+            Renderer3D::DrawMesh(submission.Transform, submission.MeshData, submission.Texture,
+                submission.Color, submission.Material.get(), submission.EntityID, submission.ForceErrorShader);
+        };
+
+        for (const auto& submission : opaqueSubmissions)
+            drawSubmission(submission);
+
+        // 알파 블렌딩은 순서에 의존한다. 깊이 버퍼를 읽되 쓰지 않고, 카메라에서 먼 메시부터 합성한다.
+        // XMMATRIX는 16바이트 정렬 타입이라 stable_sort의 임시 버퍼가 구형 ABI 설정과 충돌할 수 있다.
+        // 제출 순번을 보조 키로 명시하면 일반 sort에서도 같은 거리의 결과가 매 프레임 결정적이다.
+        std::sort(transparentSubmissions.begin(), transparentSubmissions.end(),
+            [](const MeshRenderSubmission& a, const MeshRenderSubmission& b)
+            {
+                if (a.CameraDistanceSquared != b.CameraDistanceSquared)
+                    return a.CameraDistanceSquared > b.CameraDistanceSquared;
+                return a.SubmissionOrder < b.SubmissionOrder;
+            });
+        for (const auto& submission : transparentSubmissions)
+            drawSubmission(submission);
 
         Renderer3D::EndScene();
     }

@@ -25,6 +25,10 @@ namespace CCEngine
 {
     namespace
     {
+        bool SupportedBindingContract(const nlohmann::json& value)
+        {
+            return value == "cc-hlsl-rhi-v1" || value == "cc-hlsl-rhi-v2";
+        }
         struct Package
         {
             std::filesystem::path Vertex, Pixel;
@@ -113,7 +117,7 @@ namespace CCEngine
             if (!file) throw std::runtime_error("Cannot open backend shader manifest");
             const auto json = nlohmann::json::parse(file);
             if (json.at("schema").get<int>() != 1 || !json.at("success").get<bool>() ||
-                json.at("bindingContract").get<std::string>() != "cc-hlsl-rhi-v1")
+                !SupportedBindingContract(json.at("bindingContract")))
                 throw std::runtime_error("Incomplete or incompatible backend shader package");
             const auto root = std::filesystem::canonical(manifest.parent_path());
             const nlohmann::json* selected = nullptr;
@@ -200,7 +204,7 @@ namespace
             auto json = nlohmann::json::parse(input);
             const auto targets = json.at("targets").get<std::vector<std::string>>();
             if (json.at("schema") != 1 || json.at("success") != true ||
-                json.at("bindingContract") != "cc-hlsl-rhi-v1" ||
+                !SupportedBindingContract(json.at("bindingContract")) ||
                 !json.at("shaders").is_array() || !json.at("defines").is_array() ||
                 std::find(targets.begin(), targets.end(), backend) == targets.end())
                 throw std::runtime_error("Incompatible shader manifest: " + path.string());
@@ -309,7 +313,7 @@ namespace
             throw std::runtime_error("Cannot open backend shader manifest: " + manifest.string());
         const auto metadata = nlohmann::json::parse(input);
         if (metadata.at("schema") != 1 || metadata.at("success") != true ||
-            metadata.at("bindingContract") != "cc-hlsl-rhi-v1" ||
+            !SupportedBindingContract(metadata.at("bindingContract")) ||
             !metadata.at("targets").is_array() || !metadata.at("shaders").is_array())
             throw std::runtime_error("Incomplete or incompatible backend shader package");
 
@@ -355,7 +359,7 @@ namespace
             if (!file) throw std::runtime_error("Cannot open DX12 shader manifest: " + path.string());
             auto json = nlohmann::json::parse(file);
             if (json.at("schema").get<int>() != 1 || !json.at("success").get<bool>() ||
-                json.at("bindingContract").get<std::string>() != "cc-hlsl-rhi-v1" ||
+                !SupportedBindingContract(json.at("bindingContract")) ||
                 !json.at("shaders").is_array() || !json.at("defines").is_array())
                 throw std::runtime_error("Incomplete DX12 shader package");
             const auto targets = json.at("targets").get<std::vector<std::string>>();

@@ -54,6 +54,7 @@ namespace CCEngine
         void Defer(std::function<void()> destroy);
         void Transition(VkCommandBuffer command, VulkanImageAllocation& image, VkImageLayout next);
         void Upload(VulkanImageAllocation& image, const void* data, uint32_t bytes);
+        void Upload(VulkanImageAllocation& image, const struct TextureMipChain& chain);
         void ReadImage(VulkanImageAllocation& image, uint32_t x, uint32_t y, uint32_t width, uint32_t height, void* destination);
         void BindTarget(VulkanRenderTarget& target);
         void ReleaseTarget(VulkanRenderTarget& target);
@@ -90,6 +91,8 @@ namespace CCEngine
         std::map<std::string, VkPipeline> m_Pipelines;
         VkSampler m_Sampler = VK_NULL_HANDLE;
         VkSampler m_LinearSampler = VK_NULL_HANDLE;
+        std::map<uint32_t, VkSampler> m_MaterialSamplers;
+        VkSampler ResolveSampler(const SamplerDescription& description);
         std::shared_ptr<VulkanImageAllocation> m_EmptyImage;
         std::shared_ptr<VulkanBufferAllocation> m_EmptyUniform, m_Vertex, m_Index;
         std::array<std::shared_ptr<VulkanBufferAllocation>, 8> m_Uniforms;

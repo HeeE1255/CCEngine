@@ -7,9 +7,9 @@ namespace CCEngine
     class OpenGLTexture2D final : public Texture2D
     {
     public:
-        explicit OpenGLTexture2D(const std::string& path);
-        OpenGLTexture2D(uint32_t width, uint32_t height);
-        OpenGLTexture2D(OpenGLContext& context, uint32_t width, uint32_t height, const void* pixels = nullptr);
+        explicit OpenGLTexture2D(const std::string& path, TextureColorSpace colorSpace = TextureColorSpace::Linear);
+        OpenGLTexture2D(uint32_t width, uint32_t height, TextureColorSpace colorSpace = TextureColorSpace::Linear);
+        OpenGLTexture2D(OpenGLContext& context, uint32_t width, uint32_t height, const void* pixels = nullptr, TextureColorSpace colorSpace = TextureColorSpace::Linear);
         ~OpenGLTexture2D() override;
         OpenGLTexture2D(const OpenGLTexture2D&) = delete;
         OpenGLTexture2D& operator=(const OpenGLTexture2D&) = delete;
@@ -18,6 +18,7 @@ namespace CCEngine
         void SetData(void* data, uint32_t size) override;
         RendererHandle GetRendererID() const override { return reinterpret_cast<RendererHandle>(static_cast<uintptr_t>(m_Texture)); }
     private:
+        void UploadMipChain(const TextureMipChain& chain) override;
         OpenGLContext& Context() const { return OpenGLContext::CurrentFor(m_Device); }
         std::shared_ptr<OpenGLDevice> m_Device;
         GLuint m_Texture = 0;

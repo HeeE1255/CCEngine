@@ -58,7 +58,7 @@ namespace CCEngine
             switch (node->Type)
             {
                 case VisualShaderNodeType::Color:
-                    expression = "AlbedoColor";
+                    expression = "DecodeMaterialColor(AlbedoColor)";
                     break;
                 case VisualShaderNodeType::Texture2D:
                     expression = "AlbedoTexture.Sample(LinearSampler, input.TexCoord)";
@@ -93,11 +93,11 @@ namespace CCEngine
                     expression = "saturate(1.0f - " + inputOrDefault(node->InputA, "float4(0.0f, 0.0f, 0.0f, 0.0f)") + ")";
                     break;
                 case VisualShaderNodeType::Power:
-                    expression = "pow(saturate(" + inputOrDefault(node->InputA, "AlbedoColor") + "), " +
+                    expression = "pow(saturate(" + inputOrDefault(node->InputA, "DecodeMaterialColor(AlbedoColor)") + "), " +
                         FloatLiteral((std::clamp)(node->Value, 0.1f, 12.0f)) + ")";
                     break;
                 case VisualShaderNodeType::Saturate:
-                    expression = "saturate(" + inputOrDefault(node->InputA, "AlbedoColor") + ")";
+                    expression = "saturate(" + inputOrDefault(node->InputA, "DecodeMaterialColor(AlbedoColor)") + ")";
                     break;
                 case VisualShaderNodeType::UV:
                     expression = "float4(input.TexCoord, 0.0f, 1.0f)";
@@ -106,10 +106,10 @@ namespace CCEngine
                     expression = "float4(SurfaceValues.zzz, 1.0f)";
                     break;
                 case VisualShaderNodeType::Output:
-                    expression = inputOrDefault(node->InputA, "AlbedoColor");
+                    expression = inputOrDefault(node->InputA, "DecodeMaterialColor(AlbedoColor)");
                     break;
                 default:
-                    expression = "AlbedoColor";
+                    expression = "DecodeMaterialColor(AlbedoColor)";
                     break;
             }
 
@@ -273,13 +273,14 @@ namespace CCEngine
         std::unordered_set<int> visiting;
         const std::string finalExpression = outputNodeId >= 0
             ? BuildNodeExpression(nodesById, outputNodeId, visiting)
-            : "AlbedoColor";
+            : "DecodeMaterialColor(AlbedoColor)";
 
         std::ostringstream source;
         source
             << "// Generated from Visual Shader: " << Name << "\n"
             << "// @property Color AlbedoColor = " << color.x << "," << color.y << "," << color.z << "," << color.w << "\n"
             << "// @property Texture2D AlbedoTexture\n"
+            << "// @property Toggle LinearColorSpace = false\n"
             << "cbuffer CameraBuffer : register(b0)\n"
             << "{\n"
             << "    matrix ViewProjection;\n"
@@ -298,6 +299,13 @@ namespace CCEngine
             << "};\n\n"
             << "Texture2D AlbedoTexture : register(t0);\n"
             << "SamplerState LinearSampler : register(s0);\n\n"
+            // 색 선택기 값만 입력에서 선형화한다. 텍스처는 GPU가 변환하므로 다시 변환하지 않는다.
+            << "float4 DecodeMaterialColor(float4 c)\n"
+            << "{\n"
+            << "    if (((uint)SurfaceValues.w & 2u) != 0u)\n"
+            << "        c.rgb = lerp(pow(max((c.rgb + 0.055f) / 1.055f, 0.0f), 2.4f), c.rgb / 12.92f, step(c.rgb, 0.04045f));\n"
+            << "    return c;\n"
+            << "}\n\n"
             << "struct VSInput\n"
             << "{\n"
             << "    float3 Position : POSITION;\n"
@@ -321,7 +329,11 @@ namespace CCEngine
             << "}\n\n"
             << "float4 PSMain(PSInput input) : SV_TARGET\n"
             << "{\n"
-            << "    return " << finalExpression << ";\n"
+            << "    float4 result = " << finalExpression << ";\n"
+            // 현재 UNORM 출력은 화면용 값이다. RGB만 한 번 인코딩하고 알파는 그대로 전달한다.
+            << "    if (((uint)SurfaceValues.w & 6u) == 2u)\n"
+            << "        result.rgb = lerp(1.055f * pow(max(result.rgb, 0.0f), 1.0f / 2.4f) - 0.055f, result.rgb * 12.92f, step(result.rgb, 0.0031308f));\n"
+            << "    return result;\n"
             << "}\n";
         return source.str();
     }

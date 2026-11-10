@@ -801,6 +801,8 @@ namespace CCEngine
 
             for (auto& [key, value] : object.items())
             {
+                // 재임포트 비교 기준은 현재 참조 복구로 변경하면 안 된다.
+                if (key == "ImportRecord") continue;
                 std::string childLocation = jsonLocation + "/" + key;
                 if (value.is_object())
                     ValidateSceneOrPrefabObject(value, sourceFile, childLocation, repairFiles, report);
@@ -1272,6 +1274,18 @@ namespace CCEngine
         return it->second.SourcePath;
     }
 
+    std::vector<std::filesystem::path> AssetDatabase::GetAssetPaths(AssetKind kind)
+    {
+        // 호출자가 순회하는 중 meta 등록이 일어나도 무효화되지 않도록 경로 복사본을 돌려준다.
+        const auto root = s_LastScanRoot.empty() ? std::filesystem::path("assets") : s_LastScanRoot;
+        ScanIfNeeded(root);
+        std::vector<std::filesystem::path> paths;
+        for (const auto& [guid, metadata] : s_GuidToMetadata)
+            if (metadata.Type == kind) paths.push_back(metadata.SourcePath);
+        std::sort(paths.begin(), paths.end());
+        return paths;
+    }
+
     std::filesystem::path AssetDatabase::GetPathFromAddress(const std::string& address)
     {
         if (address.empty())
@@ -1432,6 +1446,9 @@ namespace CCEngine
             // Shader import는 meta 갱신과 컴파일 검증을 함께 끝내야 성공으로 본다.
             // 그래야 문법 오류가 있는 셰이더가 "정상 임포트"처럼 보이지 않는다.
             ConsoleLog::Info(compileResult.Summary);
+            const ShaderHDRCompatibilityReport hdr = ShaderCompiler::AnalyzeHDRCompatibility(assetPath);
+            if (hdr.Status == ShaderHDRCompatibility::NeedsMigration)
+                ConsoleLog::Warning(assetPath.filename().string() + ": " + hdr.Summary + ". " + hdr.Guidance);
         }
 
         result.Success = true;

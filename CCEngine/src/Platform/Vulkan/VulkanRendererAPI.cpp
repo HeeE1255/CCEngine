@@ -8,6 +8,10 @@
 
 namespace CCEngine
 {
+    uint32_t VulkanRendererAPI::GetMaxSamplerAnisotropy() const
+    {
+        return m_Services.Device ? m_Services.Device->MaxSamplerAnisotropy() : 1;
+    }
     namespace
     {
         bool IsSampledImage(const VkDescriptorImageInfo& image)
@@ -210,7 +214,7 @@ namespace CCEngine
         VkPipelineDepthStencilStateCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
         info.depthTestEnable = state.DepthTest ? VK_TRUE : VK_FALSE;
-        info.depthWriteEnable = info.depthTestEnable;
+        info.depthWriteEnable = state.DepthWrite ? VK_TRUE : VK_FALSE;
         info.depthCompareOp = VK_COMPARE_OP_LESS;
         info.maxDepthBounds = 1.0f;
         return info;

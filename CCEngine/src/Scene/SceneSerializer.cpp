@@ -485,6 +485,9 @@ namespace CCEngine
                 entityData["CameraComponent"]["NearClip"] = camera.NearClip;
                 entityData["CameraComponent"]["FarClip"] = camera.FarClip;
                 entityData["CameraComponent"]["Primary"] = camera.Primary;
+                entityData["CameraComponent"]["HDR"] = camera.HDR;
+                entityData["CameraComponent"]["ExposureEV"] = camera.ExposureEV;
+                entityData["CameraComponent"]["ToneMapping"] = camera.ToneMapping;
             }
 
             if (entity.HasComponent<AudioComponent>())
@@ -935,6 +938,9 @@ namespace CCEngine
                 camera.NearClip = cameraData["NearClip"].get<float>();
                 camera.FarClip = cameraData["FarClip"].get<float>();
                 camera.Primary = cameraData["Primary"].get<bool>();
+                camera.HDR = cameraData.value("HDR", false);
+                camera.ExposureEV = cameraData.value("ExposureEV", 0.0f);
+                camera.ToneMapping = cameraData.value("ToneMapping", 1) == 0 ? 0 : 1;
             }
 
             if (entityData.contains("AudioComponent"))
@@ -1153,7 +1159,7 @@ namespace CCEngine
 
             std::function<void(const ModelNode&, bool)> restoreNode = [&](const ModelNode& node, bool isRootNode)
             {
-                if (isRootNode)
+                if (isRootNode && node.Meshes.empty())
                 {
                     for (const auto& child : node.Children)
                         restoreNode(child, false);
@@ -1217,8 +1223,11 @@ namespace CCEngine
     {
     }
 
-    bool SceneSerializer::Serialize(const std::string& filepath)
+    std::string SceneSerializer::SerializeToString() const
     {
+        if (!m_Scene)
+            return {};
+
         nlohmann::json sceneData;
         sceneData["Scene"] = "Untitled Scene";
         sceneData["Entities"] = nlohmann::json::array();
@@ -1237,11 +1246,23 @@ namespace CCEngine
                 sceneData["Entities"].push_back(entityData);
             });
 
+        return sceneData.dump(4);
+    }
+
+    bool SceneSerializer::Serialize(const std::string& filepath)
+    {
+        const std::string sceneText = SerializeToString();
+        if (sceneText.empty())
+            return false;
+
         std::ofstream fout(filepath);
         if (!fout.is_open())
             return false;
 
-        fout << sceneData.dump(4);
+        fout << sceneText;
+        if (!fout.good())
+            return false;
+
         AssetDatabase::EnsureMetaFile(filepath);
         return true;
     }

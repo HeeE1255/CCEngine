@@ -49,6 +49,7 @@ namespace CCEngine
         std::string m_FilePath;
 
         std::vector<std::shared_ptr<Mesh>> m_AllMeshes; // 인스펙터 표(Table) 출력용
+        std::vector<std::shared_ptr<const ImportedMaterialData>> m_ImportedMaterials;
         ModelNode m_RootNode; // 하이어라키 트리 생성용 원본 데이터
 
         std::map<std::string, BoneInfo> m_BoneInfoMap; // 뼈 이름 -> 뼈 정보(인덱스, 오프셋 행렬) 매핑
@@ -60,6 +61,7 @@ namespace CCEngine
 
         // Assimp 파싱을 위한 재귀 함수들
         void LoadModel(const std::string& path);
+        void ReadMaterials(const aiScene* scene);
         ModelNode ProcessNode(aiNode* node, const aiScene* scene, const std::string& parentPath = "");
         std::shared_ptr<Mesh> ProcessMesh(aiMesh* mesh, const aiScene* scene, const std::string& nodeName);
     };

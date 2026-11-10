@@ -42,10 +42,11 @@ Vulkan SDK 설치 후 저장소 루트에서 실행합니다. `VULKAN_SDK` 환�
 
 ### 에디터와 Player 설정
 
-1. Project Settings에서 에디터의 Graphics API를 선택하고 설정을 저장합니다. `N/A`는 현재 실행 파일에서 사용할 수 없는 백엔드입니다.
-2. 편집 중인 씬을 따로 저장한 뒤 에디터를 종료하고 다시 실행합니다. 프로젝트 설정 저장이 씬 저장을 대신하지는 않습니다.
-3. 선택한 API는 Scene View뿐 아니라 에디터 UI와 보조 창에도 적용됩니다. 실행 도중 장치를 교체하지 않습니다.
-4. Player는 Build Settings에서 API를 별도로 지정합니다. 에디터 API를 바꿨다고 기존 Player 패키지가 바뀌지는 않습니다.
+1. Project Settings의 Graphics에서 에디터 Graphics API를 선택합니다. `N/A`는 현재 실행 파일에서 사용할 수 없는 백엔드입니다.
+2. 현재 API와 다른 항목을 선택하면 `Save & Restart Editor`가 나타납니다. 누르면 프로젝트 설정을 저장하고, 기존 GPU 장치와 창을 모두 정리한 뒤 에디터가 자동으로 다시 실행됩니다.
+3. 씬에 미저장 변경이 있으면 먼저 저장 여부를 묻습니다. `Yes`는 저장 후 재시작, `No`는 씬 변경을 버리고 재시작, `Cancel`은 설정 저장과 재시작을 모두 취소합니다. 아직 경로가 없는 씬에서 `Yes`를 누르면 Save As 창이 열리며, 여기서 취소해도 재시작하지 않습니다.
+4. 선택한 API는 Scene View뿐 아니라 에디터 UI와 보조 창에도 적용됩니다. 실행 도중 장치를 교체하지 않습니다.
+5. Player는 Build Settings에서 API를 별도로 지정합니다. 에디터 API를 바꿨다고 기존 Player 패키지가 바뀌지는 않습니다.
 
 비 DX11 백엔드는 Python, DXC, SPIRV-Cross로 셰이더 패키지를 준비합니다. 에디터의 Shader Tools 설정에서 도구 경로를 지정하고 진단을 확인하세요. 배포 시에는 생성된 셰이더 패키지를 포함한 빌드 폴더 전체가 필요합니다.
 
@@ -67,7 +68,7 @@ Set-Location .\Sandbox
 | Player에서 패키지 로드 실패 | 선택 API와 패키지 일치 여부, 빌드 폴더 전체 배포 여부 |
 | 새 빌드 검증 실패 | 실패 로그를 확인하고 원인을 수정한 뒤 다시 빌드. 이전 성공 결과를 새 결과로 혼동하지 않기 |
 
-현재 API 전환은 수동 저장·종료·재실행 방식입니다. 자동 재시작과 미저장 씬 확인 대화상자는 별도 후속 기능입니다.
+자동 재시작이 실패하면 오류 창이 표시됩니다. 이 경우 에디터를 직접 다시 실행하면 저장된 API 설정이 적용됩니다.
 
 ## 화면 구성
 
@@ -196,6 +197,24 @@ Player 로그는 `%LOCALAPPDATA%/CCEngine/Logs/<Product>/`에 최대 5개 세션
 출력 폴더를 수동으로 재사용할 때 `.ccengine-build` Marker가 없으면 엔진은 해당 폴더를 삭제하거나 덮어쓰지 않습니다. 다른 폴더를 선택하거나 비어 있는 출력 폴더를 사용하세요.
 
 엔진 개발자는 `tools/BuildEngine.ps1`로 검증된 최신 amd64 MSBuild를 선택할 수 있습니다. `tools/VerifyBuildMatrix.ps1`은 Debug/Release Editor, Development/Release Player, 이동된 Release Player를 검사하고, `tools/VerifyBuildStability.ps1`은 같은 입력의 반복 빌드와 Manifest 결정성을 검사합니다. 결과 파일은 Git에 포함되지 않는 `local/` 아래에 저장됩니다.
+
+## 재질 색 공간
+
+재질 Inspector의 **Linear Color Space**를 켜면 색을 선형 값으로 바꾼 뒤 조명을 계산합니다. 기존 재질과 새 재질 모두 기본값은 꺼짐이며, 저장된 씬의 색감을 임의로 변경하지 않습니다. 체크 상태는 재질의 ShaderProperties에 저장됩니다.
+
+| 입력 | 켰을 때 처리 |
+| --- | --- |
+| Albedo 텍스처 | sRGB 포맷으로 읽어 GPU에서 RGB를 선형화 |
+| Albedo 색상·오브젝트 Tint·광원 색 | 기본/PBR 셰이더에서 선형화 |
+| Normal·마스크·거칠기·금속성 | 수치 데이터 그대로 유지 |
+| 알파·광원 강도 | 색 변환하지 않음 |
+| UI·폰트·기존 화면 텍스처 | 기존 표시 방식 유지 |
+
+같은 이미지가 색상 슬롯과 데이터 슬롯에 함께 쓰여도 캐시는 색 공간별로 분리됩니다. DX11/DX12/OpenGL/Vulkan 모두 같은 정책을 사용하며 텍스처 픽셀 갱신 후에도 색 공간을 유지합니다. C++에서 만드는 텍스처는 `Texture2D::Create(..., TextureColorSpace::SRGB)`로 지정할 수 있습니다. 기본값 `Linear`는 픽셀에 색 변환을 하지 않는다는 뜻입니다.
+
+커스텀 HLSL은 `// @property Toggle LinearColorSpace = false`를 선언하고 입력/출력 변환을 구현해야 합니다. b4의 `SurfaceValues.w`는 정수 비트로 해석하며 bit 0은 노멀맵 존재, bit 1은 선형 처리 사용입니다. 기본 Albedo 외의 색 텍스처는 `// @property Texture2D EmissionTexture [sRGB]`처럼 표시합니다. 선언 없는 텍스처와 `[Linear]` 텍스처는 데이터로 취급합니다. Normal 슬롯은 항상 Linear입니다. 색 선택기에서 온 사용자 Color 속성은 커스텀 셰이더에서 변환해야 하며, 이미 GPU가 변환한 텍스처를 다시 선형화하면 안 됩니다.
+
+비주얼 셰이더는 다음 생성/저장부터 위 계약을 포함합니다. 기존에 생성된 HLSL은 자동으로 덮어쓰지 않습니다. 현재 기본/PBR/비주얼 셰이더는 UNORM 화면 출력 직전에 RGB를 sRGB로 한 번 변환합니다. **HDR 타깃·노출·톤매핑·선형 공간에서의 투명 합성까지 완료된 것은 아닙니다.** 실제 GPU별 화면 비교는 별도 QA 대상입니다.
 
 ## 기존 학습 자료
 

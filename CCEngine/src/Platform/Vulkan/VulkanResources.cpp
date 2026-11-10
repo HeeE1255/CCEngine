@@ -1,6 +1,7 @@
 #include "VulkanResources.h"
 #if defined(CC_ENABLE_VULKAN_RHI)
 #include <cstring>
+#include <algorithm>
 #include <stdexcept>
 namespace CCEngine
 {
@@ -44,14 +45,18 @@ namespace CCEngine
         Owner->Defer([device, buffer, memory]() { vkDestroyBuffer(device, buffer, nullptr); vkFreeMemory(device, memory, nullptr); });
     }
     VulkanImageAllocation::VulkanImageAllocation(VulkanContext& context, VkExtent2D size, VkFormat format,
-        VkImageUsageFlags usage, VkImageAspectFlags aspect, VkImage external)
-        : Owner(context.SharedDevice()), Image(external), Format(format), Extent(size), Aspect(aspect), Owned(!external)
+        VkImageUsageFlags usage, VkImageAspectFlags aspect, VkImage external, uint32_t mipLevels)
+        : Owner(context.SharedDevice()), Image(external), Format(format), Extent(size), Aspect(aspect), Owned(!external), MipLevels(mipLevels)
     {
         if (!Owner) throw std::logic_error("Vulkan resource requires an initialized device");
         Owner->RequireReady();
         if (!size.width || !size.height || size.width > context.Properties().limits.maxImageDimension2D || size.height > context.Properties().limits.maxImageDimension2D)
             throw std::invalid_argument("Invalid Vulkan image size");
         const VkDevice device = context.Device();
+        uint32_t maxLevels = 1;
+        for (uint32_t dimension = (std::max)(size.width, size.height); dimension > 1; dimension /= 2) ++maxLevels;
+        if (!mipLevels || mipLevels > maxLevels || (external && mipLevels != 1))
+            throw std::invalid_argument("Invalid Vulkan mip level count");
         try
         {
             if (Owned)
@@ -59,11 +64,11 @@ namespace CCEngine
                 VkImageFormatProperties supported{};
                 CheckVulkan(vkGetPhysicalDeviceImageFormatProperties(context.PhysicalDevice(), format, VK_IMAGE_TYPE_2D,
                     VK_IMAGE_TILING_OPTIMAL, usage, 0, &supported), "Image format support");
-                if (size.width > supported.maxExtent.width || size.height > supported.maxExtent.height)
+                if (size.width > supported.maxExtent.width || size.height > supported.maxExtent.height || mipLevels > supported.maxMipLevels)
                     throw std::out_of_range("Image exceeds format-specific device limits");
                 VkImageCreateInfo info{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
                 info.imageType = VK_IMAGE_TYPE_2D; info.format = format; info.extent = { size.width, size.height, 1 };
-                info.mipLevels = 1; info.arrayLayers = 1; info.samples = VK_SAMPLE_COUNT_1_BIT;
+                info.mipLevels = mipLevels; info.arrayLayers = 1; info.samples = VK_SAMPLE_COUNT_1_BIT;
                 info.tiling = VK_IMAGE_TILING_OPTIMAL; info.usage = usage; info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
                 CheckVulkan(vkCreateImage(device, &info, nullptr, &Image), "vkCreateImage");
                 VkMemoryRequirements requirements{}; vkGetImageMemoryRequirements(device, Image, &requirements);
@@ -75,7 +80,7 @@ namespace CCEngine
             }
             VkImageViewCreateInfo view{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
             view.image = Image; view.viewType = VK_IMAGE_VIEW_TYPE_2D; view.format = format;
-            view.subresourceRange = { aspect, 0, 1, 0, 1 };
+            view.subresourceRange = { aspect, 0, mipLevels, 0, 1 };
             CheckVulkan(vkCreateImageView(device, &view, nullptr, &View), "vkCreateImageView");
         }
         catch (...)

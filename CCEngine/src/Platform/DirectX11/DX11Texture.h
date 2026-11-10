@@ -8,9 +8,9 @@ namespace CCEngine
     class DX11Texture2D : public Texture2D
     {
     public:
-        DX11Texture2D(const std::string& path);
-        DX11Texture2D(uint32_t width, uint32_t height); // 빈 텍스처 생성자
-		DX11Texture2D(uint32_t width, uint32_t height, void* data); // 데이터로 텍스처 생성자
+        DX11Texture2D(const std::string& path, TextureColorSpace colorSpace = TextureColorSpace::Linear);
+        DX11Texture2D(uint32_t width, uint32_t height, TextureColorSpace colorSpace = TextureColorSpace::Linear);
+        DX11Texture2D(uint32_t width, uint32_t height, void* data, TextureColorSpace colorSpace = TextureColorSpace::Linear);
         virtual ~DX11Texture2D();
 
         virtual void Bind(uint32_t slot = 0) const override;
@@ -21,6 +21,7 @@ namespace CCEngine
         virtual RendererHandle GetRendererID() const override { return (RendererHandle)m_TextureView; }
 
     private:
+        void UploadMipChain(const TextureMipChain& chain) override;
         std::string m_Path;
         uint32_t m_Width = 0;
         uint32_t m_Height = 0; 

@@ -6,6 +6,12 @@ cbuffer Camera : register(b0)
     matrix ViewProjection;
 };
 
+cbuffer SceneOutput : register(b5) { float4 OutputFlags; };
+float3 DecodeColor(float3 value)
+{
+    return lerp(pow(max((value + 0.055f) / 1.055f, 0.0f), 2.4f), value / 12.92f, step(value, 0.04045f));
+}
+
 // ==========================================
 // 2. 입력/출력 구조체
 // ==========================================
@@ -63,7 +69,7 @@ struct PS_OUTPUT
 PS_OUTPUT PSMain(PS_INPUT input)
 {
     PS_OUTPUT output;
-    float4 texColor = input.Color;
+    float4 texColor = 1.0f;
 
     int index = (int) input.TexIndex;
     
@@ -86,7 +92,15 @@ PS_OUTPUT PSMain(PS_INPUT input)
     else if (index == 7)
         texColor *= textures[7].Sample(g_Sampler, input.TexCoord);
 
-    output.Color = texColor;
+    float4 tint = input.Color;
+    if (OutputFlags.x > 0.5f)
+    {
+        // sRGB 텍스처는 샘플러에서 이미 변환됐다. 같은 RGB를 두 번 디코딩하지 않는다.
+        if (index < 0 || (((uint)OutputFlags.y >> (uint)max(index, 0)) & 1u) == 0u)
+            texColor.rgb = DecodeColor(texColor.rgb);
+        tint.rgb = DecodeColor(tint.rgb);
+    }
+    output.Color = texColor * tint;
     output.EntityID = input.EntityID;
 
     return output;

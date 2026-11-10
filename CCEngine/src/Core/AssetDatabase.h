@@ -88,6 +88,7 @@ namespace CCEngine
 
         static std::string GetGuidFromPath(const std::filesystem::path& assetPath);
         static std::filesystem::path GetPathFromGuid(const std::string& guid);
+        static std::vector<std::filesystem::path> GetAssetPaths(AssetKind kind);
         static std::filesystem::path GetPathFromAddress(const std::string& address);
 
         static AssetKind GetAssetKind(const std::filesystem::path& assetPath);

@@ -42,7 +42,7 @@ namespace CCEngine
     OpenGLFramebuffer::OpenGLFramebuffer(const FramebufferSpecification& spec)
         : OpenGLFramebuffer(OpenGLContext::Current(), spec) {}
     OpenGLFramebuffer::OpenGLFramebuffer(OpenGLContext& context, const FramebufferSpecification& spec)
-        : m_Device(context.SharedDevice()) { Resize(spec.Width, spec.Height); }
+        : m_Device(context.SharedDevice()), m_Spec(spec) { Resize(spec.Width, spec.Height); }
     OpenGLFramebuffer::~OpenGLFramebuffer() = default;
     void OpenGLFramebuffer::Resize(uint32_t width, uint32_t height)
     {
@@ -54,7 +54,7 @@ namespace CCEngine
         if (m_Storage && width == m_Spec.Width && height == m_Spec.Height) return;
         auto next = std::make_unique<Storage>(m_Device);
         gl.CreateTextures(GL_TEXTURE_2D, 3, next->Textures);
-        const GLenum formats[3] = { 0x8058 /* RGBA8 */, 0x8235 /* R32I */, 0x88F0 /* D24S8 */ };
+        const GLenum formats[3] = { m_Spec.ColorFormat == FramebufferColorFormat::RGBA16Float ? 0x881Au /* RGBA16F */ : 0x8058u, 0x8235, 0x88F0 };
         for (uint32_t i = 0; i < 3; ++i)
         {
             gl.TextureStorage2D(next->Textures[i], 1, formats[i], width, height);
@@ -66,7 +66,7 @@ namespace CCEngine
         if (!next->Textures[0] || !next->Textures[1] || !next->Textures[2] || glGetError() != GL_NO_ERROR)
             throw std::runtime_error("OpenGL framebuffer allocation is incomplete");
         const bool bound = m_Storage && context.HasAttachments(m_Storage->Lifetime);
-        m_Storage.swap(next); m_Spec = { width, height };
+        m_Storage.swap(next); m_Spec.Width = width; m_Spec.Height = height;
         if (bound) Bind();
     }
     void OpenGLFramebuffer::Bind()
@@ -99,7 +99,7 @@ namespace CCEngine
     }
     bool OpenGLFramebuffer::ReadColorPixels(std::vector<uint32_t>& out)
     {
-        out.clear(); if (!m_Storage) return false;
+        out.clear(); if (!m_Storage || m_Spec.ColorFormat != FramebufferColorFormat::RGBA8) return false;
         PackScope pack(Context()); out.resize(size_t(m_Spec.Width) * m_Spec.Height);
         pack.GL.GetTextureSubImage(m_Storage->Textures[0], 0, 0, 0, 0, m_Spec.Width, m_Spec.Height, 1,
             GL_RGBA, GL_UNSIGNED_BYTE, static_cast<GLsizei>(out.size() * 4), out.data());
@@ -113,6 +113,17 @@ namespace CCEngine
     {
         if (!m_Storage || index != 1) throw std::invalid_argument("Integer clear requires the picking attachment");
         Context().GL().ClearTexImage(m_Storage->Textures[1], 0, 0x8D94, GL_INT, &value);
+    }
+    bool OpenGLFramebuffer::CopyAttachmentTo(uint32_t index, Framebuffer& destination)
+    {
+        auto* target = dynamic_cast<OpenGLFramebuffer*>(&destination);
+        if (!target || index != 1 || !m_Storage || !target->m_Storage || m_Device != target->m_Device ||
+            m_Spec.Width != target->m_Spec.Width || m_Spec.Height != target->m_Spec.Height)
+            return false;
+        Context().GL().CopyImageSubData(m_Storage->Textures[1], GL_TEXTURE_2D, 0, 0, 0, 0,
+            target->m_Storage->Textures[1], GL_TEXTURE_2D, 0, 0, 0, 0,
+            static_cast<GLsizei>(m_Spec.Width), static_cast<GLsizei>(m_Spec.Height), 1);
+        return glGetError() == GL_NO_ERROR;
     }
 }
 #endif

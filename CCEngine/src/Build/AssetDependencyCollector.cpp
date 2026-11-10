@@ -147,7 +147,11 @@ namespace CCEngine
                     references.emplace_back(audioGuid, audioPath, location + "/AudioPath");
 
                 for (auto iterator = value.begin(); iterator != value.end(); ++iterator)
+                {
+                    // 임포트 기준값은 비교용 이력이다. 현재 재질에서 제거한 텍스처를 배포에 다시 포함하지 않는다.
+                    if (iterator.key() == "ImportRecord") continue;
                     CollectJsonReferences(iterator.value(), location + "/" + iterator.key(), references);
+                }
             }
             else if (value.is_array())
             {

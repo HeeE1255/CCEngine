@@ -250,6 +250,9 @@
     <ClInclude Include="src\Renderer\Renderer2D.h" />
     <ClInclude Include="src\Renderer\Renderer3D.h" />
     <ClInclude Include="src\Renderer\RendererAPI.h" />
+    <ClInclude Include="src\Renderer\SamplerDescription.h" />
+    <ClInclude Include="src\Renderer\MaterialUVTransform.h" />
+    <ClInclude Include="src\Renderer\TextureMipChain.h" />
     <ClInclude Include="src\Renderer\RendererHandle.h" />
     <ClInclude Include="src\Renderer\RuntimeShaderLibrary.h" />
     <ClInclude Include="src\Renderer\Shader.h" />
@@ -392,6 +395,7 @@
     <ClCompile Include="src\Renderer\BackendShaderPackage.cpp" />
     <ClCompile Include="src\Renderer\ShaderProperty.cpp" />
     <ClCompile Include="src\Renderer\Texture.cpp" />
+    <ClCompile Include="src\Renderer\TextureMipChain.cpp" />
     <ClCompile Include="src\Renderer\UIRenderer.cpp" />
     <ClCompile Include="src\Renderer\VisualShaderAsset.cpp" />
     <ClCompile Include="src\Runtime\GameLayer.cpp" />

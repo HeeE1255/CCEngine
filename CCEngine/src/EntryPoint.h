@@ -110,6 +110,41 @@ namespace
             }
         }
     }
+
+    bool RelaunchCurrentExecutable()
+    {
+        wchar_t executablePath[32768] = {};
+        DWORD length = GetModuleFileNameW(nullptr, executablePath, static_cast<DWORD>(std::size(executablePath)));
+        if (length == 0 || length >= std::size(executablePath))
+            return false;
+
+        // 기존 프로세스의 -dx11 같은 임시 복구 인수는 넘기지 않는다.
+        // 저장된 Project Settings가 다음 실행의 API를 결정해야 사용자가 선택한 값이 실제로 적용된다.
+        std::wstring commandLine = L"\"" + std::wstring(executablePath, length) + L"\"";
+        std::vector<wchar_t> mutableCommand(commandLine.begin(), commandLine.end());
+        mutableCommand.push_back(L'\0');
+
+        STARTUPINFOW startupInfo{};
+        startupInfo.cb = sizeof(startupInfo);
+        PROCESS_INFORMATION processInfo{};
+        BOOL created = CreateProcessW(
+            executablePath,
+            mutableCommand.data(),
+            nullptr,
+            nullptr,
+            FALSE,
+            CREATE_NEW_PROCESS_GROUP,
+            nullptr,
+            nullptr,
+            &startupInfo,
+            &processInfo);
+        if (!created)
+            return false;
+
+        CloseHandle(processInfo.hThread);
+        CloseHandle(processInfo.hProcess);
+        return true;
+    }
 }
 
 int main(int argc, char** argv) 
@@ -149,6 +184,7 @@ int main(int argc, char** argv)
 
     // 엔진 애플리케이션 생성 및 실행
     int exitCode = 0;
+    bool restartRequested = false;
     {
         std::vector<std::string> commandLineArgs;
         commandLineArgs.reserve(argc > 1 ? (size_t)argc - 1 : 0);
@@ -162,6 +198,7 @@ int main(int argc, char** argv)
                 throw std::runtime_error("Application factory returned null.");
             app->Run();
             exitCode = app->GetExitCode();
+            restartRequested = app->IsRestartRequested();
         }
         catch (const std::exception& error)
         {
@@ -196,6 +233,17 @@ int main(int argc, char** argv)
 
     // destructor 본문 안에서 검사하면 Window, LayerStack 같은 멤버가 아직 살아 있어 정상 해제 예정 메모리도 누수처럼 보인다.
     CCEngine::MemoryManager::Shutdown();
+
+    // 새 에디터는 기존 창, GPU 장치와 캐시가 모두 정리된 뒤 시작한다.
+    // 이 순서를 지켜야 서로 다른 그래픽 API 프로세스가 같은 리소스를 동시에 소유하지 않는다.
+    if (restartRequested && !RelaunchCurrentExecutable())
+    {
+        MessageBoxW(nullptr,
+            L"CCEngine could not restart automatically. Please start the editor again manually.",
+            L"CCEngine Restart Failed",
+            MB_OK | MB_ICONERROR);
+        return 1;
+    }
 
     // 메모리 누수 확인
     //_CrtDumpMemoryLeaks();

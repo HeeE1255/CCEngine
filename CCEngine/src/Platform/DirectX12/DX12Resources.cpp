@@ -1,6 +1,7 @@
 #include "DX12Context.h"
 #if defined(CC_ENABLE_DX12_RHI)
 #include <cstring>
+#include <algorithm>
 #include <stdexcept>
 namespace CCEngine
 {
@@ -34,18 +35,22 @@ namespace CCEngine
         buffer->Resource->Unmap(0, nullptr);
         return buffer;
     }
-    std::shared_ptr<DX12Image> DX12Context::CreateImage(uint32_t width, uint32_t height, DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags)
+    std::shared_ptr<DX12Image> DX12Context::CreateImage(uint32_t width, uint32_t height, DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags, uint32_t mipLevels)
     {
         m_SharedDevice->RequireUsable();
         if (!m_Device || m_Failed) throw std::logic_error("DX12 device unavailable");
         if (!width || !height || width > D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION || height > D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION)
             throw std::invalid_argument("Invalid DX12 image size");
-        if (format != DXGI_FORMAT_R8G8B8A8_UNORM && format != DXGI_FORMAT_R32_SINT && format != DXGI_FORMAT_D32_FLOAT)
+        if (format != DXGI_FORMAT_R8G8B8A8_UNORM && format != DXGI_FORMAT_R8G8B8A8_UNORM_SRGB && format != DXGI_FORMAT_R16G16B16A16_FLOAT && format != DXGI_FORMAT_R32_SINT && format != DXGI_FORMAT_D32_FLOAT)
             throw std::invalid_argument("Unsupported DX12 image format");
         auto image = std::make_shared<DX12Image>(); image->Owner = m_SharedDevice;
+        uint32_t maxLevels = 1;
+        for (uint32_t size = (std::max)(width, height); size > 1; size /= 2) ++maxLevels;
+        if (!mipLevels || mipLevels > maxLevels || (flags != D3D12_RESOURCE_FLAG_NONE && mipLevels != 1))
+            throw std::invalid_argument("Invalid DX12 mip level count");
         image->Width = width; image->Height = height; image->Format = format;
         D3D12_RESOURCE_DESC desc{}; desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        desc.Width = width; desc.Height = height; desc.DepthOrArraySize = desc.MipLevels = 1;
+        desc.Width = width; desc.Height = height; desc.DepthOrArraySize = 1; desc.MipLevels = static_cast<UINT16>(mipLevels);
         desc.Format = format; desc.SampleDesc.Count = 1; desc.Flags = flags;
         D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT;
         CheckDX12(m_Device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, image->State,
@@ -55,7 +60,7 @@ namespace CCEngine
             D3D12_DESCRIPTOR_HEAP_DESC srv{}; srv.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; srv.NumDescriptors = 1;
             CheckDX12(m_Device->CreateDescriptorHeap(&srv, IID_PPV_ARGS(&image->SRV)), "Create DX12 SRV storage");
             D3D12_SHADER_RESOURCE_VIEW_DESC view{}; view.Format = format; view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-            view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; view.Texture2D.MipLevels = 1;
+            view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; view.Texture2D.MipLevels = mipLevels;
             m_Device->CreateShaderResourceView(image->Resource.Get(), &view, image->SRV->GetCPUDescriptorHandleForHeapStart());
         }
         return image;
@@ -84,35 +89,43 @@ namespace CCEngine
         m_Device->CreateDepthStencilView(target->Depth->Resource.Get(), nullptr, target->DSV->GetCPUDescriptorHandleForHeapStart());
         return target;
     }
-    std::shared_ptr<DX12Target> DX12Context::CreateTarget(uint32_t width, uint32_t height)
+    std::shared_ptr<DX12Target> DX12Context::CreateTarget(uint32_t width, uint32_t height, DXGI_FORMAT colorFormat)
     {
-        return MakeTarget({ CreateImage(width, height, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET),
+        return MakeTarget({ CreateImage(width, height, colorFormat, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET),
             CreateImage(width, height, DXGI_FORMAT_R32_SINT, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) }, false);
     }
-    void DX12Context::Upload(const std::shared_ptr<DX12Image>& image, const void* pixels, size_t bytes)
+    void DX12Context::Upload(const std::shared_ptr<DX12Image>& image, const void* pixels, size_t bytes, uint32_t mipLevel)
     {
+        if (image && image->Format == DXGI_FORMAT_R16G16B16A16_FLOAT)
+            throw std::invalid_argument("RGBA8 upload cannot write an HDR image");
         if (!image || image->Owner.lock() != m_SharedDevice || !pixels || image->Format == DXGI_FORMAT_D32_FLOAT ||
-            uint64_t(image->Width) * image->Height * 4 != bytes) throw std::invalid_argument("Invalid DX12 image upload");
+            mipLevel >= image->Resource->GetDesc().MipLevels) throw std::invalid_argument("Invalid DX12 image upload");
+        const uint32_t width = (std::max)(1u, image->Width >> mipLevel);
+        const uint32_t height = (std::max)(1u, image->Height >> mipLevel);
+        if (uint64_t(width) * height * 4 != bytes) throw std::invalid_argument("DX12 mip byte count mismatch");
         auto desc = image->Resource->GetDesc();
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{}; UINT64 size = 0;
-        m_Device->GetCopyableFootprints(&desc, 0, 1, 0, &footprint, nullptr, nullptr, &size);
+        m_Device->GetCopyableFootprints(&desc, mipLevel, 1, 0, &footprint, nullptr, nullptr, &size);
         auto staging = std::make_shared<ComPtr<ID3D12Resource>>(TransferBuffer(m_Device.Get(), size, D3D12_HEAP_TYPE_UPLOAD));
         void* mapped = nullptr; const D3D12_RANGE none{ 0, 0 };
         CheckDX12((*staging)->Map(0, &none, &mapped), "Map DX12 image upload");
-        for (uint32_t y = 0; y < image->Height; ++y)
+        for (uint32_t y = 0; y < height; ++y)
             std::memcpy(static_cast<uint8_t*>(mapped) + footprint.Offset + size_t(y) * footprint.Footprint.RowPitch,
-                static_cast<const uint8_t*>(pixels) + size_t(y) * image->Width * 4, size_t(image->Width) * 4);
+                static_cast<const uint8_t*>(pixels) + size_t(y) * width * 4, size_t(width) * 4);
         (*staging)->Unmap(0, nullptr);
         const auto previous = image->State;
         Transition(image, D3D12_RESOURCE_STATE_COPY_DEST); m_Pending.push_back(staging);
         D3D12_TEXTURE_COPY_LOCATION source{}; source.pResource = staging->Get(); source.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
         source.PlacedFootprint = footprint;
         D3D12_TEXTURE_COPY_LOCATION destination{}; destination.pResource = image->Resource.Get(); destination.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        destination.SubresourceIndex = mipLevel;
         m_List->CopyTextureRegion(&destination, 0, 0, 0, &source, nullptr);
         Transition(image, previous == D3D12_RESOURCE_STATE_COMMON ? D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE : previous);
     }
     void DX12Context::Read(const std::shared_ptr<DX12Image>& image, uint32_t x, uint32_t y, uint32_t width, uint32_t height, void* pixels)
     {
+        if (image && image->Format == DXGI_FORMAT_R16G16B16A16_FLOAT)
+            throw std::invalid_argument("Read HDR pixels from the tone-mapped RGBA8 target");
         if (!image || image->Owner.lock() != m_SharedDevice || !pixels || !width || !height || image->Format == DXGI_FORMAT_D32_FLOAT ||
             x > image->Width || y > image->Height || width > image->Width - x || height > image->Height - y)
             throw std::invalid_argument("Invalid DX12 readback");

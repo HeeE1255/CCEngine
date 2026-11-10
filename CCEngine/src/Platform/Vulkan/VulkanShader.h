@@ -7,7 +7,7 @@ namespace CCEngine
     class VulkanShader final : public Shader
     {
     public:
-        // cc-hlsl-rhi-v1: set 0의 b=0~7, t=8~39, s=40~41. 리소스 배열은 DXC에서 펼친다.
+        // cc-hlsl-rhi-v2: set 0의 b=0~7, t=8~39, s=40~45. v1 패키지도 읽는다.
         // 기본 entry는 변환 도구가 지정한 main이며 기존 결합 sampler 배열 SPIR-V와는 호환되지 않는다.
         VulkanShader(VulkanContext& context, const std::vector<uint32_t>& vertex, const std::vector<uint32_t>& fragment,
             const std::string& vertexEntry = "main", const std::string& fragmentEntry = "main");

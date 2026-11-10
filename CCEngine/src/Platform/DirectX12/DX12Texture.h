@@ -7,9 +7,9 @@ namespace CCEngine
     class DX12Texture2D final : public Texture2D
     {
     public:
-        explicit DX12Texture2D(const std::string& path);
-        DX12Texture2D(uint32_t width, uint32_t height);
-        DX12Texture2D(DX12Context& context, uint32_t width, uint32_t height, const void* pixels = nullptr);
+        explicit DX12Texture2D(const std::string& path, TextureColorSpace colorSpace = TextureColorSpace::Linear);
+        DX12Texture2D(uint32_t width, uint32_t height, TextureColorSpace colorSpace = TextureColorSpace::Linear);
+        DX12Texture2D(DX12Context& context, uint32_t width, uint32_t height, const void* pixels = nullptr, TextureColorSpace colorSpace = TextureColorSpace::Linear);
         ~DX12Texture2D() override;
         DX12Texture2D(const DX12Texture2D&) = delete;
         DX12Texture2D& operator=(const DX12Texture2D&) = delete;
@@ -18,6 +18,7 @@ namespace CCEngine
         void SetData(void* data, uint32_t size) override;
         RendererHandle GetRendererID() const override { return m_Handle; }
     private:
+        void UploadMipChain(const TextureMipChain& chain) override;
         std::shared_ptr<DX12Device> m_Device;
         uint32_t m_Width = 0, m_Height = 0;
         RendererHandle m_Handle = nullptr;

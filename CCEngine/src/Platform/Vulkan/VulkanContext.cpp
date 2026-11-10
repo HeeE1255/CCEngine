@@ -80,15 +80,15 @@ namespace CCEngine
             if (limits.maxPerStageResources <= 8) throw std::runtime_error("Insufficient Vulkan stage resources");
             m_TextureSlots = 32;
             if (limits.maxPerStageDescriptorSampledImages < 32 || limits.maxDescriptorSetSampledImages < 32 ||
-                limits.maxPerStageDescriptorSamplers < 2 || limits.maxDescriptorSetSamplers < 2 || limits.maxPerStageResources < 42 ||
+                limits.maxPerStageDescriptorSamplers < 6 || limits.maxDescriptorSetSamplers < 6 || limits.maxPerStageResources < 46 ||
                 limits.maxDescriptorSetUniformBuffers < 8 || limits.maxPerStageDescriptorUniformBuffers < 8)
                 throw std::runtime_error("Vulkan descriptor limits do not meet the backend binding contract");
-            std::array<VkDescriptorSetLayoutBinding, 42> bindings{};
+            std::array<VkDescriptorSetLayoutBinding, 46> bindings{};
             for (uint32_t i = 0; i < 8; ++i) bindings[i] = { i, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr };
-            // 공통 HLSL의 b0~7 / t0~31 / s0~1을 서로 겹치지 않는 set 0 binding으로 옮긴다.
+            // 공통 HLSL의 b0~7 / t0~31 / s0~5를 서로 겹치지 않는 set 0 binding으로 옮긴다.
             for (uint32_t i = 0; i < 32; ++i)
                 bindings[8 + i] = { 8 + i, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr };
-            for (uint32_t i = 0; i < 2; ++i)
+            for (uint32_t i = 0; i < 6; ++i)
                 bindings[40 + i] = { 40 + i, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr };
             VkDescriptorSetLayoutCreateInfo set{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
             set.bindingCount = static_cast<uint32_t>(bindings.size()); set.pBindings = bindings.data();
@@ -284,6 +284,8 @@ namespace CCEngine
             if (m_SetLayout) vkDestroyDescriptorSetLayout(m_Device, m_SetLayout, nullptr);
             if (m_Sampler) vkDestroySampler(m_Device, m_Sampler, nullptr);
             if (m_LinearSampler) vkDestroySampler(m_Device, m_LinearSampler, nullptr);
+            for (const auto& entry : m_MaterialSamplers) vkDestroySampler(m_Device, entry.second, nullptr);
+            m_MaterialSamplers.clear();
             if (m_Acquire) vkDestroySemaphore(m_Device, m_Acquire, nullptr);
             if (m_Fence) vkDestroyFence(m_Device, m_Fence, nullptr);
             if (m_CommandPool) vkDestroyCommandPool(m_Device, m_CommandPool, nullptr);

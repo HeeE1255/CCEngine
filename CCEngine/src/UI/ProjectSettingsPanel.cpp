@@ -141,6 +141,13 @@ namespace CCEngine::UI
             m_GraphicsAPIButtons[i] = button;
         }
 
+        m_BtnRestartEditor = new Button("BtnRestartEditorForGraphicsAPI", "Save & Restart Editor");
+        m_BtnRestartEditor->SetAnchorMin(0.0f, 0.0f);
+        m_BtnRestartEditor->SetAnchorMax(1.0f, 0.0f);
+        m_BtnRestartEditor->SetOffsetMin(SidebarWidth + 18.0f, 370.0f);
+        m_BtnRestartEditor->SetOffsetMax(-16.0f, 396.0f);
+        AddChild(m_BtnRestartEditor);
+
         auto configureInputBinding = [this](KeyBindingInput*& input, const char* name, const char* binding, float y, std::string ProjectSettingsData::* target)
             {
                 input = new KeyBindingInput(name, binding);
@@ -227,19 +234,22 @@ namespace CCEngine::UI
         m_BtnSaveSettings = new Button("BtnSaveProjectSettings", "Save Project Settings");
         m_BtnSaveSettings->SetAnchorMin(0.0f, 0.0f);
         m_BtnSaveSettings->SetAnchorMax(1.0f, 0.0f);
-        m_BtnSaveSettings->SetOffsetMin(SidebarWidth + 18.0f, 392.0f);
-        m_BtnSaveSettings->SetOffsetMax(-16.0f, 418.0f);
+        m_BtnSaveSettings->SetOffsetMin(SidebarWidth + 18.0f, 430.0f);
+        m_BtnSaveSettings->SetOffsetMax(-16.0f, 456.0f);
         AddChild(m_BtnSaveSettings);
 
         SelectPage(SettingsPage::Project);
     }
 
-    void ProjectSettingsPanel::SetCallbacks(std::function<void()> setStartScene, std::function<void()> openStartScene, std::function<void()> saveSettings, std::function<void()> applyResolution)
+    void ProjectSettingsPanel::SetCallbacks(std::function<void()> setStartScene, std::function<void()> openStartScene,
+        std::function<void()> saveSettings, std::function<void()> applyResolution,
+        std::function<void()> restartEditor)
     {
         m_BtnSetStartScene->SetOnClick(std::move(setStartScene));
         m_BtnOpenStartScene->SetOnClick(std::move(openStartScene));
         m_BtnSaveSettings->SetOnClick(std::move(saveSettings));
         m_BtnApplyResolution->SetOnClick(std::move(applyResolution));
+        m_BtnRestartEditor->SetOnClick(std::move(restartEditor));
     }
 
     void ProjectSettingsPanel::SetKeyBindingPickerCallback(std::function<void(KeyBindingInput*)> callback)
@@ -327,6 +337,7 @@ namespace CCEngine::UI
         if (m_GameWidthInput) m_GameWidthInput->SetVisible(isGraphics);
         if (m_GameHeightInput) m_GameHeightInput->SetVisible(isGraphics);
         if (m_BtnApplyResolution) m_BtnApplyResolution->SetVisible(isGraphics);
+        if (m_BtnRestartEditor) m_BtnRestartEditor->SetVisible(isGraphics);
         for (auto* button : m_GraphicsAPIButtons)
             if (button) button->SetVisible(isGraphics);
         if (m_MoveForwardInput) m_MoveForwardInput->SetVisible(isInput);
@@ -445,6 +456,9 @@ namespace CCEngine::UI
             UIRenderer::DrawString("Height", detailX + 285.0f, y + 50.0f, { 0.62f, 0.62f, 0.62f, 1.0f });
             UIRenderer::DrawString("Used as the default resolution for play/build output.", detailX, y + 122.0f, { 0.62f, 0.62f, 0.62f, 1.0f });
             const std::string currentAPI = RendererAPI::GetAPIName(RendererAPI::GetAPI());
+            const bool restartPending = currentAPI != data.EditorGraphicsAPI;
+            if (m_BtnRestartEditor)
+                m_BtnRestartEditor->SetVisible(restartPending);
             UIRenderer::DrawString("Editor API", detailX, m_CalculatedPos.y + 270.0f, { 0.68f, 0.68f, 0.68f, 1.0f });
             UIRenderer::DrawString(currentAPI, detailX + 120.0f, m_CalculatedPos.y + 270.0f, { 0.88f, 0.88f, 0.88f, 1.0f });
             UIRenderer::DrawString("Next Launch", detailX, m_CalculatedPos.y + 296.0f, { 0.68f, 0.68f, 0.68f, 1.0f });
@@ -453,9 +467,9 @@ namespace CCEngine::UI
             const char* names[] = { "DirectX11", "DirectX12", "OpenGL", "Vulkan" };
             for (int i = 0; i < 4; ++i)
                 m_GraphicsAPIButtons[i]->SetActive(data.EditorGraphicsAPI == names[i]);
-            if (currentAPI != data.EditorGraphicsAPI)
-                UIRenderer::DrawString("Pending: save and restart editor", detailX,
-                    m_CalculatedPos.y + 384.0f, { 0.95f, 0.75f, 0.35f, 1.0f });
+            if (restartPending)
+                UIRenderer::DrawString("Restart required to apply the selected API", detailX,
+                    m_CalculatedPos.y + 410.0f, { 0.95f, 0.75f, 0.35f, 1.0f });
         }
         else
         {

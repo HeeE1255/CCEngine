@@ -6,6 +6,45 @@
 
 namespace CCEngine
 {
+    ID3D11SamplerState* DX11RendererAPI::ResolveSampler(const SamplerDescription* description)
+    {
+        ID3D11SamplerState* sampler = nullptr;
+        if (description)
+        {
+            description->ValidateDeviceLimit(GetMaxSamplerAnisotropy());
+            const auto key = description->Key();
+            auto found = m_Samplers.find(key);
+            if (found == m_Samplers.end())
+            {
+                D3D11_SAMPLER_DESC info{};
+                const D3D11_TEXTURE_ADDRESS_MODE modes[] = { D3D11_TEXTURE_ADDRESS_WRAP, D3D11_TEXTURE_ADDRESS_CLAMP, D3D11_TEXTURE_ADDRESS_MIRROR };
+                info.AddressU = modes[uint32_t(description->U)]; info.AddressV = modes[uint32_t(description->V)];
+                info.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+                info.Filter = description->Anisotropy > 1 ? D3D11_FILTER_ANISOTROPIC :
+                    D3D11_ENCODE_BASIC_FILTER(uint32_t(description->Min), uint32_t(description->Mag),
+                        description->Mip == SamplerMipFilter::Linear ? 1 : 0, D3D11_FILTER_REDUCTION_TYPE_STANDARD);
+                info.MaxLOD = description->Mip == SamplerMipFilter::Disabled ? 0.0f : D3D11_FLOAT32_MAX;
+                info.MaxAnisotropy = description->Anisotropy; info.ComparisonFunc = D3D11_COMPARISON_ALWAYS;
+                Microsoft::WRL::ComPtr<ID3D11SamplerState> created;
+                if (FAILED(m_Context.GetDevice()->CreateSamplerState(&info, &created)))
+                    throw std::runtime_error("Create DX11 material sampler failed");
+                found = m_Samplers.emplace(key, std::move(created)).first;
+            }
+            sampler = found->second.Get();
+        }
+        return sampler;
+    }
+    void DX11RendererAPI::SetCommonSampler(const SamplerDescription* description)
+    {
+        auto* sampler = ResolveSampler(description);
+        m_Context.GetDeviceContext()->PSSetSamplers(0, 1, &sampler);
+    }
+    void DX11RendererAPI::SetMaterialSampler(uint32_t slot, const SamplerDescription* description)
+    {
+        if (slot >= 4) throw std::out_of_range("Material sampler slot");
+        auto* sampler = ResolveSampler(description);
+        m_Context.GetDeviceContext()->PSSetSamplers(slot + 2, 1, &sampler);
+    }
     DX11RendererAPI::DX11RendererAPI(DX11Context& context)
         : m_Context(context)
     {
@@ -14,9 +53,11 @@ namespace CCEngine
         D3D11_BLEND_DESC blendDesc = {};
 
         blendDesc.AlphaToCoverageEnable = FALSE;
-        blendDesc.IndependentBlendEnable = FALSE;
+        blendDesc.IndependentBlendEnable = TRUE;
         blendDesc.RenderTarget[0].BlendEnable = FALSE;
         blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+        blendDesc.RenderTarget[1].BlendEnable = FALSE;
+        blendDesc.RenderTarget[1].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
         if (FAILED(device->CreateBlendState(&blendDesc, m_OpaqueBlendState.GetAddressOf())))
             throw std::runtime_error("CreateBlendState failed.");
 
@@ -137,18 +178,33 @@ namespace CCEngine
 
     void DX11RendererAPI::SetDepthTest(bool enable)
     {
+        m_DepthTestEnabled = enable;
+        ApplyDepthState();
+    }
+
+    void DX11RendererAPI::SetDepthWrite(bool enable)
+    {
+        m_DepthWriteEnabled = enable;
+        ApplyDepthState();
+    }
+
+    void DX11RendererAPI::ApplyDepthState()
+    {
         auto device = m_Context.GetDevice();
         auto context = m_Context.GetDeviceContext();
 
-
-        if (!m_DepthEnabled || !m_DepthDisabled)
+        if (!m_DepthEnabled || !m_DepthReadOnly || !m_DepthDisabled)
         {
-            // 
             CD3D11_DEPTH_STENCIL_DESC desc(D3D11_DEFAULT);
             desc.DepthEnable = TRUE;
             desc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
             desc.DepthFunc = D3D11_COMPARISON_LESS;
             if (FAILED(device->CreateDepthStencilState(&desc, m_DepthEnabled.ReleaseAndGetAddressOf())))
+                throw std::runtime_error("CreateDepthStencilState failed.");
+
+            desc.DepthEnable = TRUE;
+            desc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+            if (FAILED(device->CreateDepthStencilState(&desc, m_DepthReadOnly.ReleaseAndGetAddressOf())))
                 throw std::runtime_error("CreateDepthStencilState failed.");
 
             desc.DepthEnable = FALSE;
@@ -157,10 +213,12 @@ namespace CCEngine
                 throw std::runtime_error("CreateDepthStencilState failed.");
         }
 
-        // 상태가 정상적으로 생성되었을 때만 적용
-        if (m_DepthEnabled && m_DepthDisabled)
+        if (m_DepthEnabled && m_DepthReadOnly && m_DepthDisabled)
         {
-            context->OMSetDepthStencilState(enable ? m_DepthEnabled.Get() : m_DepthDisabled.Get(), 1);
+            ID3D11DepthStencilState* state = !m_DepthTestEnabled
+                ? m_DepthDisabled.Get()
+                : (m_DepthWriteEnabled ? m_DepthEnabled.Get() : m_DepthReadOnly.Get());
+            context->OMSetDepthStencilState(state, 1);
         }
     }
 

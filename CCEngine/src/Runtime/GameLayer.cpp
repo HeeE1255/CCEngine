@@ -5,6 +5,7 @@
 #include "Core/ConsoleLog.h"
 #include "Core/PathContext.h"
 #include "Renderer/Renderer.h"
+#include "Renderer/Renderer3D.h"
 #include "Scene/Components.h"
 #include "Scene/Entity.h"
 #include "Scene/Scene.h"
@@ -149,8 +150,7 @@ namespace CCEngine
             camera.SetPosition(transform.Translation);
             camera.SetRotation(transform.QuaternionRotation);
 
-            m_Scene->OnRender2D(camera);
-            m_Scene->OnRender3D(camera);
+            Renderer3D::RenderCamera(*m_Scene, camera, cameraComponent, window.GetWidth(), window.GetHeight());
             return;
         }
 

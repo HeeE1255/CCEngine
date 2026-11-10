@@ -42,6 +42,8 @@ namespace CCEngine
         const std::vector<std::string>& GetCommandLineArgs() const { return m_CommandLineArgs; }
         void SetExitCode(int exitCode) { m_ExitCode = exitCode; }
         int GetExitCode() const { return m_ExitCode; }
+        void RequestRestart();
+        bool IsRestartRequested() const { return m_RestartRequested; }
 
         inline static Application* Get() { return s_Instance; }
 
@@ -66,6 +68,7 @@ namespace CCEngine
         std::vector<Window*> m_ModalInputWindows;
         std::vector<std::string> m_CommandLineArgs;
         int m_ExitCode = 0;
+        bool m_RestartRequested = false;
     };
 
     // 클라이언트(Sandbox 등)에서 정의해서 엔진에 넘겨줄 팩토리 함수

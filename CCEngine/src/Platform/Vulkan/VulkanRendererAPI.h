@@ -7,6 +7,7 @@
 #include <memory>
 #include <unordered_map>
 #include <vector>
+#include <array>
 
 namespace CCEngine
 {
@@ -16,6 +17,9 @@ namespace CCEngine
         RendererAPI::BlendMode Blend = RendererAPI::BlendMode::Opaque;
         RendererAPI::CullMode Cull = RendererAPI::CullMode::Back;
         bool DepthTest = true;
+        bool DepthWrite = true;
+        SamplerDescription CommonSampler;
+        std::array<SamplerDescription, 4> MaterialSamplers;
     };
 
     struct VulkanDrawBinding
@@ -45,6 +49,7 @@ namespace CCEngine
     class VulkanRendererAPI final : public RendererAPI
     {
     public:
+        uint32_t GetMaxSamplerAnisotropy() const override;
         // Vulkan 1.1 이상. PrepareDraw가 반환하는 pipeline은 dynamic viewport/scissor를 사용한다.
         explicit VulkanRendererAPI(VulkanRendererServices services);
         ~VulkanRendererAPI() override = default;
@@ -79,6 +84,7 @@ namespace CCEngine
         void SetViewport(uint32_t x, uint32_t y, uint32_t width, uint32_t height) override;
         void ResizeContext(uint32_t width, uint32_t height) override;
         void SetDepthTest(bool enable) override { m_State.DepthTest = enable; }
+        void SetDepthWrite(bool enable) override { m_State.DepthWrite = enable; }
         bool IsYAxisFlipped() const override { return false; }
         void SetScissor(uint32_t x, uint32_t y, uint32_t width, uint32_t height) override;
         void SetScissorEnable(bool enable) override;
@@ -86,6 +92,17 @@ namespace CCEngine
         void SetCullMode(CullMode mode) override;
         void BindTexture(uint32_t slot, RendererHandle handle) override;
         void UnbindTextures(uint32_t startSlot, uint32_t count) override;
+        void SetCommonSampler(const SamplerDescription* description) override
+        {
+            if (description) description->ValidateDeviceLimit(GetMaxSamplerAnisotropy());
+            m_State.CommonSampler = description ? *description : SamplerDescription{};
+        }
+        void SetMaterialSampler(uint32_t slot, const SamplerDescription* description) override
+        {
+            if (slot >= 4) throw std::out_of_range("Material sampler slot");
+            if (description) description->ValidateDeviceLimit(GetMaxSamplerAnisotropy());
+            m_State.MaterialSamplers[slot] = description ? *description : SamplerDescription{};
+        }
 
     private:
         VulkanRendererServices m_Services;

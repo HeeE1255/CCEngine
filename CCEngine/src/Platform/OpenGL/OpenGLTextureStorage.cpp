@@ -4,9 +4,10 @@
 #include "stb_image.h"
 #include <stdexcept>
 #include <limits>
+#include "Renderer/TextureMipChain.h"
 namespace CCEngine
 {
-    OpenGLTexture2D::OpenGLTexture2D(const std::string& path) : m_Device(OpenGLContext::Current().SharedDevice())
+    OpenGLTexture2D::OpenGLTexture2D(const std::string& path, TextureColorSpace colorSpace) : Texture2D(colorSpace, path), m_Device(OpenGLContext::Current().SharedDevice())
     {
         int width = 0, height = 0, channels = 0;
         stbi_uc* pixels = stbi_load(path.c_str(), &width, &height, &channels, 4);
@@ -15,17 +16,18 @@ namespace CCEngine
         try { Allocate(pixels); } catch (...) { stbi_image_free(pixels); throw; }
         stbi_image_free(pixels);
     }
-    OpenGLTexture2D::OpenGLTexture2D(uint32_t width, uint32_t height)
-        : OpenGLTexture2D(OpenGLContext::Current(), width, height) {}
-    OpenGLTexture2D::OpenGLTexture2D(OpenGLContext& context, uint32_t width, uint32_t height, const void* pixels)
-        : m_Device(context.SharedDevice()), m_Width(width), m_Height(height) { Allocate(pixels); }
+    OpenGLTexture2D::OpenGLTexture2D(uint32_t width, uint32_t height, TextureColorSpace colorSpace)
+        : OpenGLTexture2D(OpenGLContext::Current(), width, height, nullptr, colorSpace) {}
+    OpenGLTexture2D::OpenGLTexture2D(OpenGLContext& context, uint32_t width, uint32_t height, const void* pixels, TextureColorSpace colorSpace)
+        : Texture2D(colorSpace), m_Device(context.SharedDevice()), m_Width(width), m_Height(height) { Allocate(pixels); }
     void OpenGLTexture2D::Allocate(const void* pixels)
     {
         auto& gl = Context().GL(); GLint limit = 0; glGetIntegerv(GL_MAX_TEXTURE_SIZE, &limit);
         if (!m_Width || !m_Height || m_Width > static_cast<uint32_t>(limit) || m_Height > static_cast<uint32_t>(limit) ||
             uint64_t(m_Width) * m_Height * 4 > UINT32_MAX) throw std::invalid_argument("Invalid OpenGL texture size");
         gl.CreateTextures(GL_TEXTURE_2D, 1, &m_Texture);
-        gl.TextureStorage2D(m_Texture, 1, 0x8058, m_Width, m_Height);
+        constexpr GLenum srgb8Alpha8 = 0x8C43;
+        gl.TextureStorage2D(m_Texture, 1, m_ColorSpace == TextureColorSpace::SRGB ? srgb8Alpha8 : 0x8058, m_Width, m_Height);
         gl.TextureParameteri(m_Texture, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         gl.TextureParameteri(m_Texture, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         gl.TextureParameteri(m_Texture, GL_TEXTURE_WRAP_S, 0x812F);
@@ -47,6 +49,7 @@ namespace CCEngine
     void OpenGLTexture2D::Unbind(uint32_t slot) const { Context().Commands().BindTexture(slot, nullptr); }
     void OpenGLTexture2D::SetData(void* data, uint32_t size)
     {
+        if (UpdateMipData(m_Width, m_Height, data, size)) return;
         if (!data || uint64_t(m_Width) * m_Height * 4 != size) throw std::invalid_argument("RGBA8 texture upload size mismatch");
         auto& gl = Context().GL();
         GLint buffer = 0, alignment = 0, rowLength = 0, skipRows = 0, skipPixels = 0;
@@ -58,6 +61,42 @@ namespace CCEngine
         gl.BindBuffer(0x88EC, buffer); glPixelStorei(GL_UNPACK_ALIGNMENT, alignment);
         glPixelStorei(GL_UNPACK_ROW_LENGTH, rowLength); glPixelStorei(GL_UNPACK_SKIP_ROWS, skipRows); glPixelStorei(GL_UNPACK_SKIP_PIXELS, skipPixels);
         if (glGetError() != GL_NO_ERROR) throw std::runtime_error("OpenGL texture upload failed");
+    }
+
+    void OpenGLTexture2D::UploadMipChain(const TextureMipChain& chain)
+    {
+        auto& gl = Context().GL();
+        const bool replace = m_MipLevelCount != chain.Levels.size();
+        GLuint target = m_Texture;
+        if (replace)
+        {
+            gl.CreateTextures(GL_TEXTURE_2D, 1, &target);
+            gl.TextureStorage2D(target, static_cast<GLsizei>(chain.Levels.size()),
+                m_ColorSpace == TextureColorSpace::SRGB ? 0x8C43 : 0x8058, m_Width, m_Height);
+            gl.TextureParameteri(target, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            gl.TextureParameteri(target, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            gl.TextureParameteri(target, GL_TEXTURE_WRAP_S, 0x812F);
+            gl.TextureParameteri(target, GL_TEXTURE_WRAP_T, 0x812F);
+        }
+        GLint buffer = 0, alignment = 0, rowLength = 0, skipRows = 0, skipPixels = 0;
+        glGetIntegerv(0x88EF, &buffer); glGetIntegerv(GL_UNPACK_ALIGNMENT, &alignment);
+        glGetIntegerv(GL_UNPACK_ROW_LENGTH, &rowLength); glGetIntegerv(GL_UNPACK_SKIP_ROWS, &skipRows); glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &skipPixels);
+        gl.BindBuffer(0x88EC, 0); glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0); glPixelStorei(GL_UNPACK_SKIP_ROWS, 0); glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+        for (size_t i = 0; i < chain.Levels.size(); ++i)
+        {
+            const auto& level = chain.Levels[i];
+            gl.TextureSubImage2D(target, static_cast<GLint>(i), 0, 0, level.Width, level.Height,
+                GL_RGBA, GL_UNSIGNED_BYTE, chain.Pixels.data() + level.Offset);
+        }
+        gl.BindBuffer(0x88EC, buffer); glPixelStorei(GL_UNPACK_ALIGNMENT, alignment);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, rowLength); glPixelStorei(GL_UNPACK_SKIP_ROWS, skipRows); glPixelStorei(GL_UNPACK_SKIP_PIXELS, skipPixels);
+        if (glGetError() != GL_NO_ERROR)
+        {
+            if (replace) glDeleteTextures(1, &target);
+            throw std::runtime_error("OpenGL mip upload failed");
+        }
+        if (replace) { m_Device->DeleteTexture(m_Texture); m_Texture = target; }
     }
 }
 #endif

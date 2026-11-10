@@ -1,4 +1,5 @@
 #include "VulkanResources.h"
+#include "Renderer/TextureMipChain.h"
 #if defined(CC_ENABLE_VULKAN_RHI)
 #include <cstring>
 #include <limits>
@@ -26,7 +27,7 @@ namespace CCEngine
         barrier.oldLayout = image.Layout; barrier.newLayout = next;
         barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.image = image.Image;
-        barrier.subresourceRange = { image.Aspect, 0, 1, 0, 1 };
+        barrier.subresourceRange = { image.Aspect, 0, image.MipLevels, 0, 1 };
         barrier.srcAccessMask = image.Layout == VK_IMAGE_LAYOUT_UNDEFINED || image.Layout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
             ? 0 : VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
         switch (next)
@@ -143,7 +144,7 @@ namespace CCEngine
     }
     void VulkanContext::Upload(VulkanImageAllocation& image, const void* data, uint32_t bytes)
     {
-        if (!data || image.Format != VK_FORMAT_R8G8B8A8_UNORM ||
+        if (!data || image.MipLevels != 1 || (image.Format != VK_FORMAT_R8G8B8A8_UNORM && image.Format != VK_FORMAT_R8G8B8A8_SRGB) ||
             uint64_t(image.Extent.width) * image.Extent.height * 4 != bytes)
             throw std::invalid_argument("Vulkan upload requires complete RGBA8 data");
         auto staging = std::make_shared<VulkanBufferAllocation>(*this, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, data);
@@ -156,6 +157,36 @@ namespace CCEngine
             Transition(command, image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         });
     }
+    void VulkanContext::Upload(VulkanImageAllocation& image, const TextureMipChain& chain)
+    {
+        if (image.Owner != m_SharedDevice || chain.Levels.empty() || image.MipLevels != chain.Levels.size() ||
+            (image.Format != VK_FORMAT_R8G8B8A8_UNORM && image.Format != VK_FORMAT_R8G8B8A8_SRGB))
+            throw std::invalid_argument("Invalid Vulkan mip upload");
+        std::vector<VkBufferImageCopy> copies;
+        uint32_t width = image.Extent.width, height = image.Extent.height;
+        for (uint32_t i = 0; i < image.MipLevels; ++i)
+        {
+            const auto& level = chain.Levels[i];
+            if (level.Width != width || level.Height != height || level.RowPitch != width * 4 ||
+                level.Size != size_t(width) * height * 4 || level.Offset % 4 != 0 ||
+                level.Offset > chain.Pixels.size() || level.Size > chain.Pixels.size() - level.Offset)
+                throw std::invalid_argument("Invalid Vulkan mip layout");
+            VkBufferImageCopy copy{}; copy.bufferOffset = level.Offset;
+            copy.imageSubresource = { image.Aspect, i, 0, 1 }; copy.imageExtent = { width, height, 1 };
+            copies.push_back(copy);
+            width = (std::max)(1u, width / 2); height = (std::max)(1u, height / 2);
+        }
+        auto staging = std::make_shared<VulkanBufferAllocation>(*this, chain.Pixels.size(),
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT, chain.Pixels.data());
+        // 한 번의 제출로 전체 mip을 올린다. 레벨마다 queue 대기를 반복하지 않는다.
+        Execute([&](VkCommandBuffer command) {
+            Transition(command, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            vkCmdCopyBufferToImage(command, staging->Buffer, image.Image, image.Layout,
+                static_cast<uint32_t>(copies.size()), copies.data());
+            Transition(command, image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        });
+    }
+
     void VulkanContext::ReadImage(VulkanImageAllocation& image, uint32_t x, uint32_t y,
         uint32_t width, uint32_t height, void* destination)
     {

@@ -1293,7 +1293,7 @@ namespace CCEngine
                     std::ifstream packageInput(path);
                     nlohmann::json package; packageInput >> package;
                     if (package.at("schema") != 1 || package.at("success") != true ||
-                        package.at("bindingContract") != "cc-hlsl-rhi-v1" ||
+                        (package.at("bindingContract") != "cc-hlsl-rhi-v1" && package.at("bindingContract") != "cc-hlsl-rhi-v2") ||
                         (target == "dx12" && package.at("reflectionContract") != "cc-dxil-spirv-layout-v1") ||
                         package.at("targets") != nlohmann::json::array({ target }) ||
                         !package.at("shaders").is_array() || package.at("shaders").size() != 1)
@@ -1477,6 +1477,12 @@ namespace CCEngine
 
                 const std::string sourcePath = (std::filesystem::path("assets") / dependency.RelativePath).generic_string();
                 const std::string sourceHash = HashFile(dependency.SourcePath);
+                const ShaderHDRCompatibilityReport hdr = ShaderCompiler::AnalyzeHDRCompatibility(dependency.SourcePath);
+                if (hdr.Status == ShaderHDRCompatibility::NeedsMigration)
+                {
+                    AddMessage(report, GameBuildMessageSeverity::Warning, "Compile Shaders",
+                        hdr.Summary + ". " + hdr.Guidance, dependency.SourcePath);
+                }
                 std::vector<std::vector<std::string>> variants = { {} };
                 const auto usedVariants = materialVariants.find(Lowercase(dependency.SourcePath.lexically_normal().generic_string()));
                 if (usedVariants != materialVariants.end())
@@ -2181,7 +2187,7 @@ namespace CCEngine
                     uniform.SetData(color, sizeof(color));
                     uniform.Bind(0); shader->Bind(); vertex.Bind(); index.Bind();
                     context.Scissor(0, 0, 48, 64); context.ScissorEnabled(clip);
-                    context.Draw(6, RendererAPI::BlendMode::Opaque, RendererAPI::CullMode::None, false);
+                    context.Draw(6, RendererAPI::BlendMode::Opaque, RendererAPI::CullMode::None, false, false);
                     std::vector<uint8_t> pixels; uint32_t width = 0, height = 0;
                     if (!context.ReadBackBuffer(pixels, width, height) || width != 96 || height != 64 || pixels.size() != 96 * 64 * 4)
                         throw std::runtime_error("DX12 draw readback size mismatch.");
@@ -2551,6 +2557,7 @@ namespace CCEngine
         std::vector<std::filesystem::path> alwaysIncludeAssets = request.AlwaysIncludeAssets;
         alwaysIncludeAssets.emplace_back("assets/shaders/Renderer2D.hlsl");
         alwaysIncludeAssets.emplace_back("assets/shaders/Base3D.hlsl");
+        alwaysIncludeAssets.emplace_back("assets/shaders/ToneMap.hlsl");
         alwaysIncludeAssets.emplace_back("assets/shaders/ErrorShader.hlsl");
         alwaysIncludeAssets.emplace_back("assets/fonts/NotoSansKR-VariableFont_wght.ttf");
 

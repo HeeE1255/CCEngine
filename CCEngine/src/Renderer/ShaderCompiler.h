@@ -47,6 +47,21 @@ namespace CCEngine
         std::string Message;
     };
 
+    enum class ShaderHDRCompatibility
+    {
+        NotApplicable,
+        Compatible,
+        NeedsMigration,
+        Unreadable
+    };
+
+    struct CC_API ShaderHDRCompatibilityReport
+    {
+        ShaderHDRCompatibility Status = ShaderHDRCompatibility::NotApplicable;
+        std::string Summary;
+        std::string Guidance;
+    };
+
     class CC_API ShaderCompiler
     {
     public:
@@ -76,6 +91,7 @@ namespace CCEngine
         static bool IsRuntimeBytecodeOnly();
         static void ClearCache();
         static std::string GetRuntimeMaterialPropertySource(const std::filesystem::path& pixelBytecode);
+        static ShaderHDRCompatibilityReport AnalyzeHDRCompatibility(const std::filesystem::path& sourcePath);
 
     private:
         static ShaderCompileStageResult CompileStage(

@@ -30,6 +30,8 @@ namespace CCEngine
         bool HasRange = false;
         bool DefaultBool = false;
         std::string DefaultTexturePath;
+        // 색 텍스처만 sRGB로 읽는다. 노멀과 마스크 같은 수치 데이터의 기본값은 Linear다.
+        bool TextureSRGB = false;
     };
 
     struct CC_API ShaderPropertyValue

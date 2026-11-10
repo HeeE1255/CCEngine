@@ -70,8 +70,8 @@ namespace CCEngine {
             ThreeD
         };
 
-        void SaveScene();
-        void SaveSceneAs();
+        bool SaveScene();
+        bool SaveSceneAs();
         void OpenScene();
         void OpenScene(const std::string& filepath);
         void LoadSceneAdditive(const std::string& filepath);
@@ -85,6 +85,7 @@ namespace CCEngine {
         bool ApplyTextureAssetToEntity(Entity entity, const std::string& filepath);
         bool ApplyMaterialAssetToEntity(Entity entity, const std::string& filepath);
         bool AssignAnimatorControllerToEntity(Entity entity, const std::filesystem::path& controllerPath, bool openGraph);
+        void BeginMaterialBinding(const std::string& modelPath);
         void BeginAssetPick(const std::string& label, const std::vector<std::string>& acceptedTypes,
             std::function<bool(const std::filesystem::path&, const std::string&)> onPicked,
             std::function<void()> onClosed = {});
@@ -94,7 +95,11 @@ namespace CCEngine {
         void SelectAssetForInspection(const std::filesystem::path& assetPath, const std::string& assetType);
         void ClearMissingInspectorAssetSelections();
         void ApplyMaterialAssetPreview(const std::filesystem::path& materialPath, const MaterialAsset& material);
-        void RefreshMaterialAssetReferences(const std::filesystem::path& materialPath);
+        void RefreshMaterialAssetReferences(const std::filesystem::path& materialPath, const MaterialAsset* prepared = nullptr);
+        bool RefreshReimportedMaterials(const std::vector<std::string>& paths,
+            const std::vector<TextureReloadRequest>& directTextures = {},
+            std::vector<std::shared_ptr<Texture2D>>* preparedDirectTextures = nullptr);
+        bool RefreshChangedTextures(const std::vector<std::filesystem::path>& paths);
         Entity PickSceneEntityAt(float mouseX, float mouseY) const;
         void ShowObjectContextMenu(float x, float y, bool allowDelete);
         void ShowMeshObjectSubmenu();
@@ -128,7 +133,11 @@ namespace CCEngine {
         void RefreshColliderEditInspectors();
         void SetCurrentSceneAsProjectStartScene();
         void OpenProjectStartScene();
-        void SaveProjectSettings();
+        bool SaveProjectSettings();
+        void RestartEditorForGraphicsAPI();
+        std::string CaptureSceneSnapshot() const;
+        bool HasUnsavedSceneChanges() const;
+        void UpdateSavedSceneSnapshot();
         void ApplyProjectGameResolution();
         void ValidateAssetReferences(bool fullScan);
         void QueueAssetReferenceValidation();
@@ -150,6 +159,7 @@ namespace CCEngine {
         void UpdatePhysicsDebugButton();
         void UpdatePhysicsDebugOptionButtons();
         void UpdateSceneGridButton();
+        void UpdateSceneHDRButtons();
         void UpdateRootMotionDebugButton();
         void UpdateRootMotionDebugOptionButtons();
         void ClearRootMotionDebugPaths();
@@ -195,6 +205,7 @@ namespace CCEngine {
         float m_ClearColor[4] = { 0.1f, 0.1f, 0.1f, 1.0f };
         bool m_IsSPressedLastFrame = false;
         std::string m_CurrentScenePath = "";
+        std::string m_SavedSceneSnapshot;
         ProjectSettings m_ProjectSettings;
 
         int m_GizmoType = 0;
@@ -263,6 +274,10 @@ namespace CCEngine {
         UI::Button* m_BtnSceneViewOptions = nullptr;
         UI::Panel* m_SceneViewDropdownPanel = nullptr;
         UI::Button* m_BtnSceneGrid = nullptr;
+        UI::Button* m_BtnSceneHDR = nullptr;
+        UI::Button* m_BtnSceneExposureDown = nullptr;
+        UI::Button* m_BtnSceneExposureUp = nullptr;
+        UI::Button* m_BtnSceneToneMapping = nullptr;
         UI::Button* m_BtnPhysicsDebug = nullptr;
         UI::Panel* m_PhysicsDebugDropdownPanel = nullptr;
         UI::Button* m_BtnPhysicsDebugEnabled = nullptr;
@@ -314,6 +329,7 @@ namespace CCEngine {
         std::vector<UI::HierarchyPanel*> m_HierarchyPanels;
         std::vector<UI::InspectorPanel*> m_InspectorPanels;
         std::vector<UI::AssetBrowserPanel*> m_AssetBrowserPanels;
+        std::unordered_set<std::string> m_BlockedMaterialPreviewPaths;
         std::vector<UI::ConsolePanel*> m_ConsolePanels;
         std::vector<UI::Panel*> m_HistoryContentPanels;
 
@@ -337,6 +353,9 @@ namespace CCEngine {
         bool m_ShowPhysicsBodyCenters = true;
         bool m_PhysicsDebugTriggersOnly = false;
         SceneGridMode m_SceneGridMode = SceneGridMode::RGB;
+        bool m_SceneHDRPreview = false;
+        float m_SceneExposureEV = 0.0f;
+        int m_SceneToneMapping = 1;
         bool m_ShowRootMotionDebug = false;
         bool m_RootMotionDebugAllAnimators = false;
         bool m_ShowRootMotionPath = true;

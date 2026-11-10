@@ -61,7 +61,7 @@ namespace CCEngine
             if (!m_FenceEvent) throw std::runtime_error("Create DX12 fence event failed");
             BOOL tearing = FALSE;
             m_Tearing = SUCCEEDED(m_Factory->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &tearing, sizeof(tearing))) && tearing;
-            D3D12_ROOT_PARAMETER parameters[9]{};
+            D3D12_ROOT_PARAMETER parameters[10]{};
             for (UINT i = 0; i < 8; ++i)
             {
                 parameters[i].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
@@ -72,6 +72,12 @@ namespace CCEngine
             range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; range.NumDescriptors = 32;
             parameters[8].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
             parameters[8].DescriptorTable = { 1, &range }; parameters[8].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+            D3D12_DESCRIPTOR_RANGE samplerRanges[2]{};
+            samplerRanges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER; samplerRanges[0].NumDescriptors = 1;
+            samplerRanges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER; samplerRanges[1].NumDescriptors = 4;
+            samplerRanges[1].BaseShaderRegister = 2; samplerRanges[1].OffsetInDescriptorsFromTableStart = 1;
+            parameters[9].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+            parameters[9].DescriptorTable = { 2, samplerRanges }; parameters[9].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
             D3D12_STATIC_SAMPLER_DESC samplers[2]{};
             for (UINT i = 0; i < 2; ++i)
             {
@@ -81,10 +87,10 @@ namespace CCEngine
                 samplers[i].MaxLOD = D3D12_FLOAT32_MAX; samplers[i].ShaderRegister = i;
                 samplers[i].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
             }
-            // HLSL 계약: b0~b7, t0~t31, s0(linear), s1(point). 정수 ID 텍스처는 point sampler를 쓴다.
+            // s0는 draw별 descriptor로 고정한다. s1 정수 ID용 point sampler는 기존 계약을 유지한다.
             D3D12_ROOT_SIGNATURE_DESC signature{};
-            signature.NumParameters = 9; signature.pParameters = parameters;
-            signature.NumStaticSamplers = 2; signature.pStaticSamplers = samplers;
+            signature.NumParameters = 10; signature.pParameters = parameters;
+            signature.NumStaticSamplers = 1; signature.pStaticSamplers = &samplers[1];
             signature.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
             ComPtr<ID3DBlob> blob, error;
             const HRESULT serialized = D3D12SerializeRootSignature(&signature, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &error);
@@ -143,7 +149,7 @@ namespace CCEngine
             ID3D12CommandList* lists[] = { m_List.Get() }; m_Queue->ExecuteCommandLists(1, lists);
             Wait(); m_Recording = false;
             m_SharedDevice->FinishRecording(this);
-            m_Pending.clear(); m_Pages.clear(); m_PageUsed = 1024;
+            m_Pending.clear(); m_Pages.clear(); m_SamplerPages.clear(); m_PageUsed = 1024;
         }
         catch (...) { m_Failed = true; m_SharedDevice->MarkFailed(); throw; }
     }
@@ -218,6 +224,17 @@ namespace CCEngine
         D3D12_RESOURCE_BARRIER barrier{}; barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
         barrier.Transition = { image->Resource.Get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, image->State, state };
         m_List->ResourceBarrier(1, &barrier); image->State = state;
+    }
+    void DX12Context::CopyImage(const std::shared_ptr<DX12Image>& source, const std::shared_ptr<DX12Image>& destination)
+    {
+        if (!source || !destination || source->Owner.lock() != m_SharedDevice || destination->Owner.lock() != m_SharedDevice ||
+            source->Width != destination->Width || source->Height != destination->Height || source->Format != destination->Format)
+            throw std::invalid_argument("DX12 image copy requires matching images from the same device");
+        Transition(source, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        Transition(destination, D3D12_RESOURCE_STATE_COPY_DEST);
+        m_List->CopyResource(destination->Resource.Get(), source->Resource.Get());
+        Transition(source, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        Transition(destination, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
     void DX12Context::BindTarget(std::shared_ptr<DX12Target> target)
     {

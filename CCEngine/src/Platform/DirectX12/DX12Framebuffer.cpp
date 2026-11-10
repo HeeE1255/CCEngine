@@ -4,7 +4,7 @@
 namespace CCEngine
 {
     DX12Framebuffer::DX12Framebuffer(const FramebufferSpecification& spec) : DX12Framebuffer(DX12Context::Current(), spec) {}
-    DX12Framebuffer::DX12Framebuffer(DX12Context& context, const FramebufferSpecification& spec) : m_Device(context.SharedDevice())
+    DX12Framebuffer::DX12Framebuffer(DX12Context& context, const FramebufferSpecification& spec) : m_Device(context.SharedDevice()), m_Spec(spec)
     {
         Resize(spec.Width, spec.Height);
     }
@@ -17,7 +17,8 @@ namespace CCEngine
     {
         if (!width || !height) return;
         if (m_Target && width == m_Spec.Width && height == m_Spec.Height) return;
-        auto next = DX12Context::CurrentFor(m_Device).CreateTarget(width, height);
+        auto next = DX12Context::CurrentFor(m_Device).CreateTarget(width, height,
+            m_Spec.ColorFormat == FramebufferColorFormat::RGBA16Float ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_R8G8B8A8_UNORM);
         std::array<RendererHandle, 2> handles{};
         try
         {
@@ -28,7 +29,7 @@ namespace CCEngine
         const bool bound = m_Target && DX12Context::CurrentFor(m_Device).IsBound(m_Target);
         for (auto handle : m_Handles) if (handle) m_Device->UnregisterTexture(handle);
         m_Device->ReleaseTarget(m_Target);
-        m_Target = std::move(next); m_Handles = handles; m_Spec = { width, height };
+        m_Target = std::move(next); m_Handles = handles; m_Spec.Width = width; m_Spec.Height = height;
         if (bound) Bind();
     }
     void DX12Framebuffer::Bind()
@@ -48,7 +49,7 @@ namespace CCEngine
     }
     bool DX12Framebuffer::ReadColorPixels(std::vector<uint32_t>& pixels)
     {
-        pixels.clear(); if (!m_Target) return false;
+        pixels.clear(); if (!m_Target || m_Spec.ColorFormat != FramebufferColorFormat::RGBA8) return false;
         pixels.resize(size_t(m_Spec.Width) * m_Spec.Height);
         DX12Context::CurrentFor(m_Device).Read(m_Target->Colors[0], 0, 0, m_Spec.Width, m_Spec.Height, pixels.data()); return true;
     }
@@ -56,6 +57,15 @@ namespace CCEngine
     {
         if (index != 1) throw std::invalid_argument("Integer clear requires DX12 ID attachment");
         DX12Context::CurrentFor(m_Device).ClearID(m_Target, value);
+    }
+    bool DX12Framebuffer::CopyAttachmentTo(uint32_t index, Framebuffer& destination)
+    {
+        auto* target = dynamic_cast<DX12Framebuffer*>(&destination);
+        if (!target || index != 1 || !m_Target || !target->m_Target || m_Device != target->m_Device ||
+            m_Spec.Width != target->m_Spec.Width || m_Spec.Height != target->m_Spec.Height)
+            return false;
+        DX12Context::CurrentFor(m_Device).CopyImage(m_Target->Colors[1], target->m_Target->Colors[1]);
+        return true;
     }
 }
 #endif

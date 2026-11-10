@@ -38,13 +38,14 @@ namespace CCEngine
         const HGLRC previousRC = wglGetCurrentContext();
         if (m_RC)
         {
-            m_API.reset();
             if (wglMakeCurrent(m_DC, m_RC))
             {
                 glFinish();
+                if (m_API) m_API->ReleaseSamplerResources();
                 if (m_VAO && m_GL.DeleteVertexArrays) m_GL.DeleteVertexArrays(1, &m_VAO);
                 if (m_FBO && m_GL.DeleteFramebuffers) m_GL.DeleteFramebuffers(1, &m_FBO);
             }
+            m_API.reset();
             wglMakeCurrent(nullptr, nullptr);
             wglDeleteContext(m_RC);
         }

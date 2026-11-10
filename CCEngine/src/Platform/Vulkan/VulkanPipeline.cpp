@@ -5,6 +5,28 @@
 
 namespace CCEngine
 {
+    VkSampler VulkanContext::ResolveSampler(const SamplerDescription& description)
+    {
+        description.ValidateDeviceLimit(m_SharedDevice->MaxSamplerAnisotropy());
+        const auto key = description.Key();
+        const auto found = m_MaterialSamplers.find(key);
+        if (found != m_MaterialSamplers.end()) return found->second;
+        const VkSamplerAddressMode modes[] = { VK_SAMPLER_ADDRESS_MODE_REPEAT, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT };
+        VkSamplerCreateInfo info{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+        info.addressModeU = modes[uint32_t(description.U)]; info.addressModeV = modes[uint32_t(description.V)];
+        info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        info.minFilter = description.Min == SamplerFilter::Linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+        info.magFilter = description.Mag == SamplerFilter::Linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+        info.mipmapMode = description.Mip == SamplerMipFilter::Linear ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        info.maxLod = description.Mip == SamplerMipFilter::Disabled ? 0.0f : VK_LOD_CLAMP_NONE;
+        info.anisotropyEnable = description.Anisotropy > 1;
+        info.maxAnisotropy = float(description.Anisotropy);
+        VkSampler sampler = VK_NULL_HANDLE;
+        CheckVulkan(vkCreateSampler(m_Device, &info, nullptr, &sampler), "Create material sampler");
+        try { m_MaterialSamplers.emplace(key, sampler); }
+        catch (...) { vkDestroySampler(m_Device, sampler, nullptr); throw; }
+        return sampler;
+    }
     VkDescriptorSet VulkanContext::AllocateSet()
     {
         VkDescriptorSetAllocateInfo allocation{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
@@ -22,7 +44,7 @@ namespace CCEngine
         VkDescriptorPoolSize sizes[] = {
             { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 8 * draws },
             { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, m_TextureSlots * draws },
-            { VK_DESCRIPTOR_TYPE_SAMPLER, 2 * draws }
+            { VK_DESCRIPTOR_TYPE_SAMPLER, 6 * draws }
         };
         VkDescriptorPoolCreateInfo info{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
         info.maxSets = draws; info.poolSizeCount = 3; info.pPoolSizes = sizes;
@@ -50,7 +72,7 @@ namespace CCEngine
             throw std::invalid_argument("Invalid Vulkan vertex stride");
         std::ostringstream key;
         key << m_Target->ID << '/' << m_Shader->ID << '/' << int(state.Blend) << '/' << int(state.Cull)
-            << '/' << state.DepthTest << '/' << stride;
+            << '/' << state.DepthTest << '/' << state.DepthWrite << '/' << stride;
         std::vector<VkVertexInputAttributeDescription> attributes;
         for (const auto& element : ResolveVertexInputs(m_VertexLayout, m_ShaderInputs))
         {
@@ -124,7 +146,7 @@ namespace CCEngine
         }
         const auto set = AllocateSet();
         VkDescriptorBufferInfo buffers[8]{};
-        VkWriteDescriptorSet writes[42]{};
+        VkWriteDescriptorSet writes[46]{};
         for (uint32_t i = 0; i < 8; ++i)
         {
             const auto& buffer = m_Uniforms[i] ? m_Uniforms[i] : m_EmptyUniform;
@@ -140,15 +162,16 @@ namespace CCEngine
             write.dstSet = set; write.dstBinding = 8 + i; write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
             write.descriptorCount = 1; write.pImageInfo = &images[i];
         }
-        VkDescriptorImageInfo samplers[2]{};
-        samplers[0].sampler = m_LinearSampler; samplers[1].sampler = m_Sampler;
-        for (uint32_t i = 0; i < 2; ++i)
+        VkDescriptorImageInfo samplers[6]{};
+        samplers[0].sampler = ResolveSampler(state.CommonSampler); samplers[1].sampler = m_Sampler;
+        for (uint32_t i = 0; i < 4; ++i) samplers[2 + i].sampler = ResolveSampler(state.MaterialSamplers[i]);
+        for (uint32_t i = 0; i < 6; ++i)
         {
             auto& write = writes[40 + i]; write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             write.dstSet = set; write.dstBinding = 40 + i; write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
             write.descriptorCount = 1; write.pImageInfo = &samplers[i];
         }
-        vkUpdateDescriptorSets(m_Device, 42, writes, 0, nullptr);
+        vkUpdateDescriptorSets(m_Device, 46, writes, 0, nullptr);
         const VkDeviceSize offset = 0;
         vkCmdBindVertexBuffers(command, 0, 1, &m_Vertex->Buffer, &offset);
         vkCmdBindIndexBuffer(command, m_Index->Buffer, 0, VK_INDEX_TYPE_UINT32);

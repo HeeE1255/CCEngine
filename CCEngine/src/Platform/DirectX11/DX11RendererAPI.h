@@ -3,6 +3,7 @@
 #include "DX11Buffer.h"
 #include <d3d11.h>
 #include <wrl/client.h>
+#include <map>
 
 
 namespace CCEngine
@@ -11,6 +12,7 @@ namespace CCEngine
     class CC_API DX11RendererAPI : public RendererAPI
     {
     public:
+        uint32_t GetMaxSamplerAnisotropy() const override { return 16; }
         explicit DX11RendererAPI(DX11Context& context);
         virtual ~DX11RendererAPI();
 
@@ -21,6 +23,7 @@ namespace CCEngine
         virtual void SetViewport(uint32_t x, uint32_t y, uint32_t width, uint32_t height) override;
         virtual void ResizeContext(uint32_t width, uint32_t height) override;
         virtual void SetDepthTest(bool enable) override;
+        virtual void SetDepthWrite(bool enable) override;
         virtual bool IsYAxisFlipped() const override { return false; }
 
         virtual void SetScissor(uint32_t x, uint32_t y, uint32_t width, uint32_t height) override;
@@ -29,10 +32,14 @@ namespace CCEngine
         virtual void SetCullMode(CullMode mode) override;
         virtual void BindTexture(uint32_t slot, RendererHandle rendererID) override;
         virtual void UnbindTextures(uint32_t startSlot, uint32_t count) override;
+        void SetCommonSampler(const SamplerDescription* description) override;
+        void SetMaterialSampler(uint32_t slot, const SamplerDescription* description) override;
         
     private:
         void ApplyRasterizerState();
         DX11Context& m_Context;
+        std::map<uint32_t, Microsoft::WRL::ComPtr<ID3D11SamplerState>> m_Samplers;
+        ID3D11SamplerState* ResolveSampler(const SamplerDescription* description);
 
         float m_ClearColor[4] = { 0.1f, 0.1f, 0.1f, 1.0f };
 
@@ -41,8 +48,13 @@ namespace CCEngine
         Microsoft::WRL::ComPtr<ID3D11BlendState> m_MRTPickingBlendState;
         Microsoft::WRL::ComPtr<ID3D11RasterizerState> m_RasterizerStates[2][2];
         Microsoft::WRL::ComPtr<ID3D11DepthStencilState> m_DepthEnabled;
+        Microsoft::WRL::ComPtr<ID3D11DepthStencilState> m_DepthReadOnly;
         Microsoft::WRL::ComPtr<ID3D11DepthStencilState> m_DepthDisabled;
         CullMode m_CullMode = CullMode::Back;
         bool m_ScissorEnabled = false;
+        bool m_DepthTestEnabled = true;
+        bool m_DepthWriteEnabled = true;
+
+        void ApplyDepthState();
     };
 }

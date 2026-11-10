@@ -4,11 +4,14 @@
 #include "Renderer/Shader.h"
 #include "Scene/Components.h" // MeshComponent::MeshType 사용을 위해 추가
 #include <memory>
+#include <functional>
 #include <unordered_map>      // 맵 사용을 위해 추가
 
 namespace CCEngine
 {
     struct MaterialAsset;
+    class Framebuffer;
+    class Scene;
 
     struct LightInfo
     {
@@ -34,6 +37,16 @@ namespace CCEngine
         static void BeginScene(const PerspectiveCamera& camera, const SceneLightData& lightData);
         static void EndScene();
 
+        // destination이 없으면 Player 백버퍼로 출력한다. Editor Game View도 같은 경로를 쓴다.
+        static void RenderCamera(Scene& scene, const PerspectiveCamera& camera, const CameraComponent& settings,
+            uint32_t width, uint32_t height, Framebuffer* destination = nullptr,
+            const std::function<void()>& renderOverlay = {});
+        static bool IsHDROutput();
+        static bool ReloadMaterialTexture(const std::string& path);
+        static bool PrepareReimportedMaterialResources(const std::vector<MaterialAsset>& materials,
+            const std::vector<TextureReloadRequest>& directTextures = {},
+            std::vector<std::shared_ptr<Texture2D>>* preparedDirectTextures = nullptr);
+
         // 기본 메시 그리기 (MeshComponent::MeshType이 Custom이 아닌 경우)
         static void DrawMesh(const DirectX::XMMATRIX& transform, const std::shared_ptr<Mesh>& mesh, const std::shared_ptr<Texture2D>& texture, const DirectX::XMFLOAT4& color, int entityID = -1);
         static void DrawMesh(const DirectX::XMMATRIX& transform, const std::shared_ptr<Mesh>& mesh, const std::shared_ptr<Texture2D>& texture, const DirectX::XMFLOAT4& color, const MaterialAsset* material, int entityID = -1, bool forceErrorShader = false);
@@ -44,7 +57,8 @@ namespace CCEngine
         static void DrawSkinnedMesh(const DirectX::XMMATRIX& transform, const std::shared_ptr<Mesh>& mesh, const std::shared_ptr<Texture2D>& texture, const DirectX::XMFLOAT4& color, int entityID, const std::vector<DirectX::XMMATRIX>& boneMatrices);
         static void DrawSkinnedMesh(const DirectX::XMMATRIX& transform, const std::shared_ptr<Mesh>& mesh, const std::shared_ptr<Texture2D>& texture, const DirectX::XMFLOAT4& color, const MaterialAsset* material, int entityID, const std::vector<DirectX::XMMATRIX>& boneMatrices, bool forceErrorShader = false);
     private:
-        static std::shared_ptr<Texture2D> GetCachedMaterialTexture(const std::string& path);
+        static std::shared_ptr<Texture2D> GetCachedMaterialTexture(const std::string& path, TextureColorSpace colorSpace = TextureColorSpace::Linear,
+            bool generateMips = false, TextureMipContent content = TextureMipContent::Color);
         static void BindMaterialProperties(const MaterialAsset* material, const std::shared_ptr<Texture2D>& fallbackAlbedo, const Shader& shader);
 
         struct RenderData
@@ -57,7 +71,20 @@ namespace CCEngine
             std::shared_ptr<ConstantBuffer> BoneConstantBuffer; // 뼈대 애니메이션용 상수 버퍼
             std::shared_ptr<ConstantBuffer> SceneConstantBuffer; // (조명) 버퍼
             std::shared_ptr<ConstantBuffer> MaterialPropertyConstantBuffer; // 커스텀 Material 값용. BoneBuffer와 겹치지 않도록 b4를 쓴다.
-            std::unordered_map<std::string, std::shared_ptr<Texture2D>> MaterialPropertyTextureCache;
+            std::shared_ptr<ConstantBuffer> MaterialUVConstantBuffer;
+            struct CachedTexture
+            {
+                std::string Path;
+                TextureCreateOptions Options;
+                std::shared_ptr<Texture2D> Texture;
+            };
+            std::unordered_map<std::string, CachedTexture> MaterialPropertyTextureCache;
+            std::unique_ptr<Framebuffer> HDRTarget;
+            std::shared_ptr<Shader> ToneMapShader;
+            std::shared_ptr<VertexBuffer> ScreenVertices;
+            std::shared_ptr<IndexBuffer> ScreenIndices;
+            std::shared_ptr<ConstantBuffer> ToneMapConstants;
+            bool HDROutput = false;
         };
 
         static RenderData* s_Data;

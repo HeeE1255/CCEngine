@@ -2,6 +2,7 @@
 #if defined(CC_ENABLE_VULKAN_RHI)
 #include "stb_image.h"
 #include <stdexcept>
+#include "Renderer/TextureMipChain.h"
 namespace CCEngine
 {
     namespace
@@ -13,7 +14,7 @@ namespace CCEngine
             return static_cast<uint32_t>(bytes);
         }
     }
-    VulkanTexture2D::VulkanTexture2D(const std::string& path) : m_Device(VulkanContext::Current().SharedDevice())
+    VulkanTexture2D::VulkanTexture2D(const std::string& path, TextureColorSpace colorSpace) : Texture2D(colorSpace, path), m_Device(VulkanContext::Current().SharedDevice())
     {
         int width = 0, height = 0, channels = 0;
         std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> pixels(stbi_load(path.c_str(), &width, &height, &channels, 4), stbi_image_free);
@@ -21,10 +22,10 @@ namespace CCEngine
         m_Extent = { static_cast<uint32_t>(width), static_cast<uint32_t>(height) };
         Replace(pixels.get(), PixelBytes(m_Extent));
     }
-    VulkanTexture2D::VulkanTexture2D(uint32_t width, uint32_t height)
-        : VulkanTexture2D(VulkanContext::Current(), width, height) {}
-    VulkanTexture2D::VulkanTexture2D(VulkanContext& context, uint32_t width, uint32_t height, const void* pixels)
-        : m_Device(context.SharedDevice()), m_Extent{ width, height }
+    VulkanTexture2D::VulkanTexture2D(uint32_t width, uint32_t height, TextureColorSpace colorSpace)
+        : VulkanTexture2D(VulkanContext::Current(), width, height, nullptr, colorSpace) {}
+    VulkanTexture2D::VulkanTexture2D(VulkanContext& context, uint32_t width, uint32_t height, const void* pixels, TextureColorSpace colorSpace)
+        : Texture2D(colorSpace), m_Device(context.SharedDevice()), m_Extent{ width, height }
     {
         const auto bytes = PixelBytes(m_Extent);
         if (pixels) Replace(pixels, bytes);
@@ -36,8 +37,10 @@ namespace CCEngine
     }
     void VulkanTexture2D::Replace(const void* pixels, uint32_t bytes)
     {
+        if (UpdateMipData(m_Extent.width, m_Extent.height, pixels, bytes)) return;
         if (!pixels || bytes != PixelBytes(m_Extent)) throw std::invalid_argument("Texture data must cover the complete RGBA8 image");
-        auto replacement = std::make_shared<VulkanImageAllocation>(Context(), m_Extent, VK_FORMAT_R8G8B8A8_UNORM,
+        auto replacement = std::make_shared<VulkanImageAllocation>(Context(), m_Extent,
+            m_ColorSpace == TextureColorSpace::SRGB ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM,
             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
         Context().Upload(*replacement, pixels, bytes);
         VkDescriptorImageInfo info{ Context().Sampler(), replacement->View, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
@@ -47,5 +50,17 @@ namespace CCEngine
         m_Image = std::move(replacement);
     }
     void VulkanTexture2D::SetData(void* data, uint32_t size) { Replace(data, size); }
+    void VulkanTexture2D::UploadMipChain(const TextureMipChain& chain)
+    {
+        auto replacement = std::make_shared<VulkanImageAllocation>(Context(), m_Extent,
+            m_ColorSpace == TextureColorSpace::SRGB ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM,
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+            VK_IMAGE_ASPECT_COLOR_BIT, VK_NULL_HANDLE, static_cast<uint32_t>(chain.Levels.size()));
+        Context().Upload(*replacement, chain);
+        VkDescriptorImageInfo info{ Context().Sampler(), replacement->View, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        if (m_Handle) m_Device->UpdateTexture(m_Handle, info);
+        else m_Handle = m_Device->RegisterTexture(info);
+        m_Image = std::move(replacement);
+    }
 }
 #endif

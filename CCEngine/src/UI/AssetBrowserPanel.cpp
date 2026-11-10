@@ -8,6 +8,7 @@
 #include "Core/ConsoleLog.h"
 #include "Editor/AssetUndoManager.h"
 #include "Renderer/MaterialAsset.h"
+#include "Renderer/ModelImporter.h"
 #include "Renderer/MeshFactory.h"
 #include "Renderer/MaterialPreviewRenderer.h"
 #include "Renderer/PerspectiveCamera.h"
@@ -2437,14 +2438,27 @@ namespace CCEngine
             return true;
         }
 
-        bool AssetBrowserPanel::ReimportSelectedAssets()
+        bool AssetBrowserPanel::ReimportSelectedAssets(bool adoptLegacyBaseline)
         {
             std::vector<AssetEntry> selected = GetSelectedEntries();
             if (selected.empty())
                 return false;
 
+            if (adoptLegacyBaseline)
+            {
+                if (selected.size() != 1 || AssetDatabase::GetAssetKind(selected.front().Path) != AssetKind::Model)
+                    return false;
+                if (MessageBoxW(GetActiveWindow(),
+                    L"Register the current source as the baseline for legacy materials?\n\n"
+                    L"Existing material values are preserved. Only matching unique names at the original indexed paths are accepted.\n"
+                    L"Older source values cannot be recovered. Ambiguous materials are skipped; see Console for details.",
+                    L"Adopt Material Baselines", MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK)
+                    return false;
+            }
+
             bool reimportedAny = false;
             bool requestedScriptCompile = false;
+            bool materialResourcesReady = true;
             for (const AssetEntry& entry : selected)
             {
                 if (entry.Type == AssetType::Folder || IsVirtualSubAsset(entry))
@@ -2458,6 +2472,28 @@ namespace CCEngine
                     continue;
                 }
 
+                if (result.Type == AssetKind::Model)
+                {
+                    if (m_CanReimportMaterials && !m_CanReimportMaterials())
+                    {
+                        ConsoleLog::Warning("Material edits are pending; retry reimport after the Inspector saves.");
+                        continue;
+                    }
+                    std::vector<std::string> refreshed;
+                    if (!ModelImporter::ReimportMaterials(entry.Path.string(), adoptLegacyBaseline, &refreshed))
+                        ConsoleLog::Warning("Model material reimport incomplete; inspect material conflict diagnostics: " + entry.Path.string());
+                    if (!adoptLegacyBaseline && !refreshed.empty() && m_OnMaterialsReimported)
+                    {
+                        if (!m_OnMaterialsReimported(refreshed))
+                        {
+                            materialResourcesReady = false;
+                            ConsoleLog::Warning("Material files saved, but GPU preparation failed. Previous scene resources retained; fix textures and retry Reimport.");
+                        }
+                    }
+                }
+                if (result.Type == AssetKind::Texture && m_OnTexturesReimported &&
+                    !m_OnTexturesReimported({ entry.Path }))
+                    materialResourcesReady = false;
                 reimportedAny = true;
                 if (result.Type == AssetKind::Script)
                     requestedScriptCompile = true;
@@ -2473,6 +2509,8 @@ namespace CCEngine
                 ScriptCompiler::RequestCompile();
             }
 
+            // 실패한 갱신을 성공으로 알리거나 강제 프리뷰 재생성으로 이어가지 않는다.
+            if (!materialResourcesReady) return false;
             m_TexturePreviewCache.clear();
             m_TexturePreviewOrder.clear();
             InvalidateMaterialPreviewCache(true);
@@ -4093,6 +4131,7 @@ namespace CCEngine
 
         void AssetBrowserPanel::ApplyMaterialPreviewOverride(const std::filesystem::path& materialPath, const MaterialAsset& material)
         {
+            if (m_BlockedMaterialRefreshes.count(GetTreeKey(materialPath))) return;
             if (materialPath.empty())
                 return;
 
@@ -4116,6 +4155,7 @@ namespace CCEngine
 
         void AssetBrowserPanel::ApplyMaterialPreviewCapture(const std::filesystem::path& materialPath, uint32_t width, uint32_t height, const std::vector<uint32_t>& pixels)
         {
+            if (m_BlockedMaterialRefreshes.count(GetTreeKey(materialPath))) return;
             if (materialPath.empty() || width == 0 || height == 0 || pixels.empty() || !HasVisibleMaterialPreviewPixels(pixels))
                 return;
 
@@ -4189,6 +4229,7 @@ namespace CCEngine
 
         void AssetBrowserPanel::ApplyMaterialPreviewTexture(const std::filesystem::path& materialPath, RendererHandle previewTexture)
         {
+            if (m_BlockedMaterialRefreshes.count(GetTreeKey(materialPath))) return;
             if (materialPath.empty() || !previewTexture)
                 return;
 
@@ -4562,6 +4603,13 @@ namespace CCEngine
             if (!isMaterialEntry && !isShaderEntry)
                 return nullptr;
 
+            const auto heldKey = GetTreeKey(entry.Path);
+            if (m_BlockedMaterialRefreshes.count(heldKey))
+            {
+                const auto held = m_MaterialPreviewCache.find(heldKey);
+                return held != m_MaterialPreviewCache.end() && held->second.Valid ? &held->second.AlbedoColor : nullptr;
+            }
+
             std::error_code ec;
             std::filesystem::file_time_type writeTime = std::filesystem::last_write_time(entry.Path, ec);
             if (ec)
@@ -4841,6 +4889,7 @@ namespace CCEngine
 
         void AssetBrowserPanel::RenderMaterialPreviewThumbnail(MaterialPreviewCacheEntry& preview)
         {
+            if (m_BlockedMaterialRefreshes.count(GetTreeKey(preview.SourcePath))) return;
             if (!preview.Valid)
                 return;
 
@@ -4929,10 +4978,22 @@ namespace CCEngine
             preview.CaptureFailed = !preview.Rendered;
         }
 
+        void AssetBrowserPanel::SetMaterialRefreshBlocked(const std::vector<std::string>& paths, bool blocked)
+        {
+            for (const auto& path : paths)
+            {
+                const auto key = GetTreeKey(path);
+                if (blocked) m_BlockedMaterialRefreshes.insert(key);
+                else m_BlockedMaterialRefreshes.erase(key);
+            }
+        }
+
         void AssetBrowserPanel::InvalidateMaterialPreviewCache(bool discardCapturedPixels)
         {
             for (auto it = m_MaterialPreviewCache.begin(); it != m_MaterialPreviewCache.end(); )
             {
+                // 실패한 재질의 마지막 정상 썸네일은 파일 시각 변경이나 전체 새로고침으로 지우지 않는다.
+                if (m_BlockedMaterialRefreshes.count(it->first)) { ++it; continue; }
                 MaterialPreviewCacheEntry& preview = it->second;
 
                 std::error_code ec;
@@ -5107,6 +5168,7 @@ namespace CCEngine
             int rendered = 0;
             for (auto& [key, preview] : m_MaterialPreviewCache)
             {
+                if (m_BlockedMaterialRefreshes.count(key)) continue;
                 if (!preview.Valid || !preview.Dirty)
                     continue;
 
@@ -6247,6 +6309,63 @@ namespace CCEngine
                         }
                         else if (command == "Reimport")
                             ReimportSelectedAssets();
+                        else if (command == "Adopt Baseline")
+                            ReimportSelectedAssets(true);
+                        else if (command == "Audit Extracted Images")
+                        {
+                            const auto selected = GetSelectedEntries();
+                            if (selected.size() == 1)
+                            {
+                                const auto report = ModelImporter::AuditExtractedImages(selected.front().Path, m_RootDirectory);
+                                for (const auto& line : report) ConsoleLog::Info(line);
+                                MessageBoxW(GetActiveWindow(),
+                                    L"Read-only image audit finished. See Console for protected files and review candidates.\n\n"
+                                    L"No files were deleted or moved. Review candidates are NOT approved for deletion; live, Undo, script and binary model references require verification.",
+                                    L"Extracted Image Audit", MB_OK | MB_ICONINFORMATION);
+                            }
+                        }
+                        else if (command == "Link Material")
+                        {
+                            const auto selected = GetSelectedEntries();
+                            if (selected.size() == 1 && m_OnMaterialBindingRequested)
+                                m_OnMaterialBindingRequested(selected.front().Path.string());
+                        }
+                        else if (command == "Auto Binding")
+                        {
+                            const auto selected = GetSelectedEntries();
+                            if (selected.size() == 1 && m_AssetUndoManager)
+                            {
+                                try
+                                {
+                                    const auto& path = selected.front().Path;
+                                    if (std::filesystem::file_size(path) > 4u * 1024u * 1024u)
+                                        throw std::runtime_error("Material exceeds editable history limit (4 MiB)");
+                                    std::ifstream input(path, std::ios::binary);
+                                    if (!input) throw std::runtime_error("Cannot read material for Auto Binding");
+                                    std::string before((std::istreambuf_iterator<char>(input)), {});
+                                    if (input.bad()) throw std::runtime_error("Cannot read complete material for Auto Binding");
+                                    // Windows에서는 열린 입력 스트림이 파일 교체를 막을 수 있다.
+                                    // 확인창과 원자적 교체 전에 읽기 핸들을 해제한다.
+                                    input.close();
+                                    auto root = nlohmann::json::parse(before);
+                                    auto& data = root.contains("Material") ? root["Material"] : root;
+                                    if (data.contains("ImportRecord") && data["ImportRecord"].value("ExplicitSlot", false) &&
+                                        MessageBoxW(GetActiveWindow(), L"Return this material to automatic name matching?\nMaterial values and import baseline are preserved. Duplicate names may remain unresolved.",
+                                            L"Auto Binding", MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) == IDOK)
+                                    {
+                                        data["ImportRecord"].erase("ExplicitSlot");
+                                        if (m_AssetUndoManager->EditTextFile(path, before, root.dump(4), "Auto Material Binding"))
+                                        {
+                                            Refresh(true);
+                                            NotifyAssetDatabaseChanged();
+                                            if (m_OnAssetHistoryChanged) m_OnAssetHistoryChanged();
+                                        }
+                                        else ConsoleLog::Error("Auto Binding failed; material preserved: " + path.string());
+                                    }
+                                }
+                                catch (const std::exception& error) { ConsoleLog::Error(error.what()); }
+                            }
+                        }
                         else if (command == "Show in Folder")
                             ShowSelectedEntryInFolder();
                         else if (command == "Show in Explorer")
@@ -6346,7 +6465,12 @@ namespace CCEngine
                         bool ctrl = IsKeyHeld(VK_CONTROL);
                         bool shift = IsKeyHeld(VK_SHIFT);
 
-                        if (shift)
+                        const bool picking = m_PickerState.IsActive();
+                        const AssetEntry clickedEntry = m_ViewEntries[index];
+
+                        if (picking && clickedEntry.Type != AssetType::Folder)
+                            SelectSingle(index);
+                        else if (shift)
                             SelectRange(index);
                         else if (ctrl)
                             ToggleSelection(index);
@@ -6355,9 +6479,21 @@ namespace CCEngine
                         else
                             m_SelectedIndex = index;
 
+                        // 선택 콜백이 picker를 닫거나 목록을 재구성할 수 있다.
+                        // 콜백 이전 index로 더블클릭/드래그 처리를 계속하면 해제된 목록에 접근한다.
+                        if ((picking && clickedEntry.Type != AssetType::Folder) || index >= static_cast<int>(m_ViewEntries.size()) ||
+                            m_ViewEntries[index].Path != clickedEntry.Path)
+                        {
+                            m_IsMouseDownOnEntry = false;
+                            m_DragEntryIndex = -1;
+                            m_LastClickedIndex = -1;
+                            e.Handled = true;
+                            return true;
+                        }
+
                         if (isDoubleClick && !ctrl && !shift)
                         {
-                            ActivateEntry(m_ViewEntries[index]);
+                            ActivateEntry(clickedEntry);
                             m_IsMouseDownOnEntry = false;
                         }
                         else
@@ -6413,6 +6549,14 @@ namespace CCEngine
                                 m_ContextMenuItems.push_back("Rename");
                             }
                             m_ContextMenuItems.push_back("Reimport");
+                            if (GetSelectedEntries().size() == 1 && entry.Type == AssetType::Material && m_AssetUndoManager)
+                                m_ContextMenuItems.push_back("Auto Binding");
+                            if (GetSelectedEntries().size() == 1 && AssetDatabase::GetAssetKind(entry.Path) == AssetKind::Model)
+                                m_ContextMenuItems.push_back("Audit Extracted Images");
+                            if (GetSelectedEntries().size() == 1 && AssetDatabase::GetAssetKind(entry.Path) == AssetKind::Model)
+                                m_ContextMenuItems.push_back("Adopt Baseline");
+                            if (GetSelectedEntries().size() == 1 && AssetDatabase::GetAssetKind(entry.Path) == AssetKind::Model && m_OnMaterialBindingRequested)
+                                m_ContextMenuItems.push_back("Link Material");
                             m_ContextMenuItems.push_back("Delete");
                         }
                     }

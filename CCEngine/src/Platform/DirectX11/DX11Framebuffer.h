@@ -33,6 +33,7 @@ namespace CCEngine {
 
         // 특정 버퍼를 원하는 값으로 지우기 (주로 ID 버퍼를 -1로 지울 때 사용)
         virtual void ClearAttachment(uint32_t attachmentIndex, int value) override;
+        virtual bool CopyAttachmentTo(uint32_t attachmentIndex, Framebuffer& destination) override;
 
     private:
         FramebufferSpecification m_Specification;

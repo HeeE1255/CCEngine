@@ -15,6 +15,7 @@ namespace CCEngine
 
         // 씬을 텍스트 파일(JSON)로 저장
         bool Serialize(const std::string& filepath);
+        std::string SerializeToString() const;
 
         // JSON 에서 씬 복원
         bool Deserialize(const std::string& filepath);

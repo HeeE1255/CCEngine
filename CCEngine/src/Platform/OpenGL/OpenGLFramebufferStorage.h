@@ -20,6 +20,7 @@ namespace CCEngine
         int ReadPixel(uint32_t x, uint32_t y) override;
         bool ReadColorPixels(std::vector<uint32_t>& out) override;
         void ClearAttachment(uint32_t index, int value) override;
+        bool CopyAttachmentTo(uint32_t index, Framebuffer& destination) override;
     private:
         struct Storage;
         OpenGLContext& Context() const { return OpenGLContext::CurrentFor(m_Device); }

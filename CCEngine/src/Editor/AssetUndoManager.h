@@ -17,7 +17,8 @@ namespace CCEngine
             Rename,
             Move,
             Import,
-            RecycleDelete
+            RecycleDelete,
+            EditText
         };
 
         struct Item
@@ -27,6 +28,8 @@ namespace CCEngine
             std::filesystem::path BackupPath;
             std::filesystem::path BackupMetaPath;
             bool IsDirectory = false;
+            std::string BeforeText;
+            std::string AfterText;
         };
 
         struct Command
@@ -37,6 +40,7 @@ namespace CCEngine
         };
 
         void Push(const Command& command);
+        bool EditTextFile(const std::filesystem::path& path, const std::string& before, const std::string& after, const std::string& label);
         bool CanUndo() const { return !m_UndoStack.empty(); }
         bool CanRedo() const { return !m_RedoStack.empty(); }
         bool Undo(std::filesystem::path* preferredDirectory = nullptr);

@@ -4,6 +4,25 @@
 // 이 셰이더는 엔진의 기본 표시용이다.
 // 기존 씬의 색감이 바뀌지 않도록 PBR 계산은 넣지 않고, 가벼운 Lambert 조명만 사용한다.
 
+// @property Toggle LinearColorSpace = false
+
+// 색상 입력만 sRGB에서 선형으로 바꾼다. 알파, 노멀, 거칠기 등의 수치는 그대로 사용한다.
+float3 SRGBToLinear(float3 value)
+{
+    value = max(value, 0.0f);
+    return float3(value.r <= 0.04045f ? value.r / 12.92f : pow((value.r + 0.055f) / 1.055f, 2.4f),
+        value.g <= 0.04045f ? value.g / 12.92f : pow((value.g + 0.055f) / 1.055f, 2.4f),
+        value.b <= 0.04045f ? value.b / 12.92f : pow((value.b + 0.055f) / 1.055f, 2.4f));
+}
+
+float3 LinearToSRGB(float3 value)
+{
+    value = max(value, 0.0f);
+    return float3(value.r <= 0.0031308f ? value.r * 12.92f : 1.055f * pow(value.r, 1.0f / 2.4f) - 0.055f,
+        value.g <= 0.0031308f ? value.g * 12.92f : 1.055f * pow(value.g, 1.0f / 2.4f) - 0.055f,
+        value.b <= 0.0031308f ? value.b * 12.92f : 1.055f * pow(value.b, 1.0f / 2.4f) - 0.055f);
+}
+
 struct LightInfo
 {
     float3 Direction;
@@ -116,12 +135,20 @@ PS_INPUT VSMain(VS_INPUT input)
     return output;
 }
 
-PS_OUTPUT PSMain(PS_INPUT input) : SV_TARGET
+PS_OUTPUT PSMain(PS_INPUT input)
 {
     PS_OUTPUT output;
 
     float4 texColor = g_AlbedoMap.Sample(g_Sampler, input.TexCoord);
-    float4 baseColor = texColor * input.Color * g_AlbedoColor;
+    bool linearColor = ((uint)g_SurfaceValues.w & 2u) != 0u;
+    float4 tint = input.Color;
+    float4 materialTint = g_AlbedoColor;
+    if (linearColor)
+    {
+        tint.rgb = SRGBToLinear(tint.rgb);
+        materialTint.rgb = SRGBToLinear(materialTint.rgb);
+    }
+    float4 baseColor = texColor * tint * materialTint;
     float3 normal = normalize(input.Normal);
 
     float3 litColor = baseColor.rgb * 0.18f;
@@ -129,10 +156,14 @@ PS_OUTPUT PSMain(PS_INPUT input) : SV_TARGET
     {
         float3 lightDir = normalize(-g_Lights[i].Direction);
         float ndotl = saturate(dot(normal, lightDir));
-        litColor += baseColor.rgb * g_Lights[i].Color * g_Lights[i].Intensity * ndotl;
+        float3 lightColor = linearColor ? SRGBToLinear(g_Lights[i].Color) : g_Lights[i].Color;
+        litColor += baseColor.rgb * lightColor * g_Lights[i].Intensity * ndotl;
     }
 
-    output.Color = float4(saturate(litColor), baseColor.a);
+    // 현재 UNORM 타깃과 UI 합성은 표시 색을 받는다. HDR 출력 단계가 생기기 전까지 여기서 한 번만 인코딩한다.
+    bool hdrOutput = ((uint)g_SurfaceValues.w & 4u) != 0u;
+    // HDR 합성 중에는 선형 광량을 보존한다. 화면용 변환은 ToneMap 패스에서 한 번만 한다.
+    output.Color = float4(hdrOutput ? min(max(litColor, 0.0f), 65504.0f) : saturate(linearColor ? LinearToSRGB(litColor) : litColor), baseColor.a);
     output.EntityID = g_EntityID;
     return output;
 }

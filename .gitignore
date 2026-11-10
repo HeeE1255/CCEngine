@@ -65,6 +65,7 @@ mono_crash.*
 !/Sandbox/assets/shaders/
 /Sandbox/assets/shaders/*
 !/Sandbox/assets/shaders/Base3D.hlsl
+!/Sandbox/assets/shaders/ToneMap.hlsl
 !/Sandbox/assets/shaders/ErrorShader.hlsl
 !/Sandbox/assets/shaders/GizmoShader.hlsl
 !/Sandbox/assets/shaders/Renderer2D.hlsl

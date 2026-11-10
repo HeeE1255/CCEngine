@@ -19,7 +19,8 @@ namespace CCEngine
         const VkExtent2D extent{ width, height };
         const VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
             VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        auto color = std::make_shared<VulkanImageAllocation>(Context(), extent, VK_FORMAT_R8G8B8A8_UNORM, usage, VK_IMAGE_ASPECT_COLOR_BIT);
+        auto color = std::make_shared<VulkanImageAllocation>(Context(), extent,
+            m_Specification.ColorFormat == FramebufferColorFormat::RGBA16Float ? VK_FORMAT_R16G16B16A16_SFLOAT : VK_FORMAT_R8G8B8A8_UNORM, usage, VK_IMAGE_ASPECT_COLOR_BIT);
         auto id = std::make_shared<VulkanImageAllocation>(Context(), extent, VK_FORMAT_R32_SINT, usage, VK_IMAGE_ASPECT_COLOR_BIT);
         auto depth = std::make_shared<VulkanImageAllocation>(Context(), extent, VK_FORMAT_D32_SFLOAT,
             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -77,7 +78,7 @@ namespace CCEngine
     }
     bool VulkanFramebuffer::ReadColorPixels(std::vector<uint32_t>& pixels)
     {
-        pixels.clear(); if (!m_Target) return false;
+        pixels.clear(); if (!m_Target || m_Specification.ColorFormat != FramebufferColorFormat::RGBA8) return false;
         pixels.resize(size_t(m_Specification.Width) * m_Specification.Height);
         Context().ReadImage(*m_Target->Colors[0], 0, 0, m_Specification.Width, m_Specification.Height, pixels.data());
         return true;
@@ -95,6 +96,31 @@ namespace CCEngine
             vkCmdClearColorImage(command, image.Image, image.Layout, &clear, 1, &range);
             Context().Transition(command, image, previous);
         });
+    }
+    bool VulkanFramebuffer::CopyAttachmentTo(uint32_t index, Framebuffer& destination)
+    {
+        auto* target = dynamic_cast<VulkanFramebuffer*>(&destination);
+        if (!target || index != 1 || !m_Target || !target->m_Target || m_Device != target->m_Device ||
+            m_Specification.Width != target->m_Specification.Width ||
+            m_Specification.Height != target->m_Specification.Height)
+            return false;
+        auto& source = *m_Target->Colors[1];
+        auto& output = *target->m_Target->Colors[1];
+        Context().Execute([&](VkCommandBuffer command)
+        {
+            const VkImageLayout sourceLayout = source.Layout;
+            const VkImageLayout outputLayout = output.Layout;
+            Context().Transition(command, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            Context().Transition(command, output, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            VkImageCopy region{};
+            region.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+            region.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+            region.extent = { m_Specification.Width, m_Specification.Height, 1 };
+            vkCmdCopyImage(command, source.Image, source.Layout, output.Image, output.Layout, 1, &region);
+            Context().Transition(command, source, sourceLayout);
+            Context().Transition(command, output, outputLayout);
+        });
+        return true;
     }
 }
 #endif

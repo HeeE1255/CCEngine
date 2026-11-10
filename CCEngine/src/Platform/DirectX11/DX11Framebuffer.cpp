@@ -50,7 +50,8 @@ namespace CCEngine {
         textureDesc.Height = m_Specification.Height;
         textureDesc.MipLevels = 1;
         textureDesc.ArraySize = 1;
-        textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        textureDesc.Format = m_Specification.ColorFormat == FramebufferColorFormat::RGBA16Float
+            ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_R8G8B8A8_UNORM;
         textureDesc.SampleDesc.Count = 1;
         textureDesc.Usage = D3D11_USAGE_DEFAULT;
         textureDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
@@ -185,6 +186,8 @@ namespace CCEngine {
     bool DX11Framebuffer::ReadColorPixels(std::vector<uint32_t>& outPixels)
     {
         outPixels.clear();
+        // 이 API는 RGBA8 캡처 전용이다. HDR은 최종 출력 패스를 거친 타깃에서 읽는다.
+        if (m_Specification.ColorFormat != FramebufferColorFormat::RGBA8) return false;
         if (!m_RenderTargetTexture || m_Specification.Width == 0 || m_Specification.Height == 0)
             return false;
 
@@ -236,5 +239,16 @@ namespace CCEngine {
             float clearColor[4] = { (float)value, 0.0f, 0.0f, 0.0f };
             context->ClearRenderTargetView(m_IDView, clearColor);
         }
+    }
+
+    bool DX11Framebuffer::CopyAttachmentTo(uint32_t attachmentIndex, Framebuffer& destination)
+    {
+        auto* target = dynamic_cast<DX11Framebuffer*>(&destination);
+        if (!target || attachmentIndex != 1 || !m_IDTexture || !target->m_IDTexture ||
+            m_Specification.Width != target->m_Specification.Width ||
+            m_Specification.Height != target->m_Specification.Height)
+            return false;
+        DX11Context::Get()->GetDeviceContext()->CopyResource(target->m_IDTexture, m_IDTexture);
+        return true;
     }
 }

@@ -20,6 +20,7 @@ namespace CCEngine
         int ReadPixel(uint32_t x, uint32_t y) override;
         bool ReadColorPixels(std::vector<uint32_t>& pixels) override;
         void ClearAttachment(uint32_t index, int value) override;
+        bool CopyAttachmentTo(uint32_t index, Framebuffer& destination) override;
     private:
         std::shared_ptr<VulkanDevice> m_Device;
         VulkanContext& Context() const { return VulkanContext::CurrentFor(m_Device); }

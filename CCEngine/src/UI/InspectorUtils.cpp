@@ -4,6 +4,7 @@
 #include "Animation/AnimatorControllerAsset.h"
 #include "Animation/AvatarAsset.h"
 #include "Core/AssetDatabase.h"
+#include "Core/ConsoleLog.h"
 #include "Scripting/ScriptMetadata.h"
 #include "Utils/PlatformUtils.h"
 #include "UI/Button.h"
@@ -11,6 +12,7 @@
 #include "UI/ScriptFieldWidget.h"
 #include "UI/TextInput.h"
 #include "Renderer/ShaderProperty.h"
+#include "Renderer/ShaderCompiler.h"
 #include "Renderer/UIRenderer.h"
 #include <algorithm>
 #include <iostream>
@@ -1002,6 +1004,42 @@ namespace CCEngine {
                         shaderHeader->SetHoverColor({ 0.13f, 0.13f, 0.14f, 1.0f });
                         item->AddChild(shaderHeader);
 
+                        auto surfaceModeButton = new UI::Button("AppliedMaterialSurfaceMode",
+                            mesh.Material->IsTransparent() ? "Surface Type: Transparent" : "Surface Type: Opaque");
+                        surfaceModeButton->SetOnClick([entity, surfaceModeButton]() mutable
+                            {
+                                auto& selectedMesh = entity.GetComponent<MeshComponent>();
+                                if (!selectedMesh.Material)
+                                    return;
+                                selectedMesh.Material->SurfaceMode = selectedMesh.Material->IsTransparent()
+                                    ? MaterialSurfaceMode::Opaque
+                                    : MaterialSurfaceMode::Transparent;
+                                surfaceModeButton->SetText(selectedMesh.Material->IsTransparent()
+                                    ? "Surface Type: Transparent"
+                                    : "Surface Type: Opaque");
+                                SaveMaterialFromMesh(selectedMesh);
+                            });
+                        item->AddChild(surfaceModeButton);
+
+                        if (hasCustomShader)
+                        {
+                            const std::filesystem::path shaderPath = mesh.Material->ShaderPath;
+                            const ShaderHDRCompatibilityReport hdr = ShaderCompiler::AnalyzeHDRCompatibility(shaderPath);
+                            if (hdr.Status == ShaderHDRCompatibility::NeedsMigration ||
+                                hdr.Status == ShaderHDRCompatibility::Unreadable)
+                            {
+                                auto hdrWarning = new UI::Button("AppliedMaterialHDRWarning", hdr.Summary);
+                                hdrWarning->SetNormalColor({ 0.30f, 0.22f, 0.08f, 1.0f });
+                                hdrWarning->SetHoverColor({ 0.38f, 0.28f, 0.10f, 1.0f });
+                                hdrWarning->SetOnClick([shaderPath, hdr]()
+                                    {
+                                        ConsoleLog::Warning(shaderPath.filename().string() + ": " +
+                                            (hdr.Guidance.empty() ? hdr.Summary : hdr.Guidance));
+                                    });
+                                item->AddChild(hdrWarning);
+                            }
+                        }
+
                         const bool showAlbedoColor = !hasCustomShader || HasShaderProperty(materialDefinitions, "AlbedoColor", ShaderPropertyType::Color);
                         const bool showAlbedoTexture = !hasCustomShader || HasShaderProperty(materialDefinitions, "AlbedoTexture", ShaderPropertyType::Texture2D);
                         const bool showNormalTexture = HasShaderProperty(materialDefinitions, "NormalTexture", ShaderPropertyType::Texture2D);
@@ -1299,6 +1337,31 @@ namespace CCEngine {
                             btnPrimary->SetText(selectedCamera.Primary ? "Game View Camera: On" : "Game View Camera: Off");
                         });
                     item->AddChild(btnPrimary);
+                    auto hdr = new InspectorFieldRow("CameraHDR", "HDR", "", InspectorFieldRow::Kind::Toggle);
+                    hdr->SetAnchorMin(0, 0); hdr->SetAnchorMax(1, 0);
+                    hdr->SetOffsetMin(15, 0); hdr->SetOffsetMax(-10, 22);
+                    hdr->SetChecked(camera.HDR);
+                    hdr->SetOnClick([entity](InspectorFieldRow* row) mutable {
+                        if (!entity || !entity.HasComponent<CameraComponent>()) return;
+                        auto& value = entity.GetComponent<CameraComponent>().HDR;
+                        value = !value; row->SetChecked(value);
+                    });
+                    item->AddChild(hdr);
+                    AddDragFloat(item, "CameraExposure", "Exposure EV",
+                        [entity]() mutable { return entity.GetComponent<CameraComponent>().ExposureEV; },
+                        [entity](float value) mutable {
+                            entity.GetComponent<CameraComponent>().ExposureEV = std::isfinite(value) ? std::clamp(value, -16.0f, 16.0f) : 0.0f;
+                        });
+                    auto tone = new InspectorFieldRow("CameraToneMap", "Reinhard", "", InspectorFieldRow::Kind::Toggle);
+                    tone->SetAnchorMin(0, 0); tone->SetAnchorMax(1, 0);
+                    tone->SetOffsetMin(15, 0); tone->SetOffsetMax(-10, 22);
+                    tone->SetChecked(camera.ToneMapping == 1);
+                    tone->SetOnClick([entity](InspectorFieldRow* row) mutable {
+                        if (!entity || !entity.HasComponent<CameraComponent>()) return;
+                        auto& value = entity.GetComponent<CameraComponent>().ToneMapping;
+                        value = value == 1 ? 0 : 1; row->SetChecked(value == 1);
+                    });
+                    item->AddChild(tone);
                     AddRemoveComponentButton<CameraComponent>(parent, item, entity, "Camera");
                 });
 

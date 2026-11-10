@@ -46,12 +46,18 @@ namespace CCEngine
 
             void SetOnPrefabSelected(std::function<void(const std::string&)> callback) { m_OnPrefabSelected = callback; }
             void SetOnModelSelected(std::function<void(const std::string&)> callback) { m_OnModelSelected = callback; }
+            void SetOnMaterialBindingRequested(std::function<void(const std::string&)> callback) { m_OnMaterialBindingRequested = std::move(callback); }
             void SetOnSceneSelected(std::function<void(const std::string&)> callback) { m_OnSceneSelected = callback; }
             void SetOnAssetSelected(std::function<void(const std::string&, const std::string&)> callback) { m_OnAssetSelected = std::move(callback); }
             void SetOnCodeAssetOpened(std::function<void(const std::string&)> callback) { m_OnCodeAssetOpened = std::move(callback); }
             void SetOnAnimatorControllerOpened(std::function<void(const std::string&)> callback) { m_OnAnimatorControllerOpened = std::move(callback); }
             void SetOnAssetDropped(std::function<void(const std::string&, const std::string&, float, float)> callback) { m_OnAssetDropped = callback; }
             void SetOnAssetDatabaseChanged(std::function<void()> callback) { m_OnAssetDatabaseChanged = std::move(callback); }
+            void SetOnMaterialsReimported(std::function<bool(const std::vector<std::string>&)> callback) { m_OnMaterialsReimported = std::move(callback); }
+            void SetCanReimportMaterials(std::function<bool()> callback) { m_CanReimportMaterials = std::move(callback); }
+            void RefreshReimportPreviews() { InvalidateMaterialPreviewCache(true); }
+            void SetMaterialRefreshBlocked(const std::vector<std::string>& paths, bool blocked);
+            void SetOnTexturesReimported(std::function<bool(const std::vector<std::filesystem::path>&)> callback) { m_OnTexturesReimported = std::move(callback); }
             void SetOnAssetHistoryChanged(std::function<void()> callback) { m_OnAssetHistoryChanged = std::move(callback); }
             void SetAssetUndoManager(AssetUndoManager* manager) { m_AssetUndoManager = manager; }
             void SetExternalWatcherActive(bool active) { m_ExternalWatcherActive = active; }
@@ -76,6 +82,7 @@ namespace CCEngine
             virtual bool WantsMouseCapture() const override { return WindowPanel::WantsMouseCapture() || m_IsDraggingScrollbar || m_IsDraggingTreeScrollbar || m_IsDraggingSplitter || m_IsDraggingAsset || m_IsDraggingSelectionBox || m_IsMouseDownOnEmptyContent; }
 
         private:
+            std::function<void(const std::string&)> m_OnMaterialBindingRequested;
             enum class AssetType
             {
                 Unknown = 0,
@@ -153,7 +160,7 @@ namespace CCEngine
             bool DeleteSelectedAsset();
             bool RequestDeleteSelectedAsset();
             bool RecycleSelectedAsset();
-            bool ReimportSelectedAssets();
+            bool ReimportSelectedAssets(bool adoptLegacyBaseline = false);
             bool RefreshCurrentFolder(bool forceReimport);
             bool CreateFolderInCurrentDirectory();
             bool CreateMaterialInCurrentDirectory();
@@ -413,6 +420,10 @@ namespace CCEngine
             std::function<void(const std::string&)> m_OnAnimatorControllerOpened = nullptr;
             std::function<void(const std::string&, const std::string&, float, float)> m_OnAssetDropped = nullptr;
             std::function<void()> m_OnAssetDatabaseChanged = nullptr;
+            std::function<bool(const std::vector<std::string>&)> m_OnMaterialsReimported;
+            std::function<bool(const std::vector<std::filesystem::path>&)> m_OnTexturesReimported;
+            std::unordered_set<std::string> m_BlockedMaterialRefreshes;
+            std::function<bool()> m_CanReimportMaterials;
             std::function<void()> m_OnAssetHistoryChanged = nullptr;
 
             AssetUndoManager* m_AssetUndoManager = nullptr;

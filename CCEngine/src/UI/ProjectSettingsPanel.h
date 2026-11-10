@@ -15,7 +15,9 @@ namespace CCEngine::UI
         ProjectSettingsPanel(const std::string& name = "ProjectSettingsPanel");
 
         void SetSettings(ProjectSettings* settings) { m_Settings = settings; }
-        void SetCallbacks(std::function<void()> setStartScene, std::function<void()> openStartScene, std::function<void()> saveSettings, std::function<void()> applyResolution);
+        void SetCallbacks(std::function<void()> setStartScene, std::function<void()> openStartScene,
+            std::function<void()> saveSettings, std::function<void()> applyResolution,
+            std::function<void()> restartEditor);
         void SetKeyBindingPickerCallback(std::function<void(KeyBindingInput*)> callback);
 
         void OnRender() override;
@@ -53,6 +55,7 @@ namespace CCEngine::UI
         Button* m_BtnBrowseVisualStudio = nullptr;
         Button* m_BtnSaveSettings = nullptr;
         Button* m_BtnApplyResolution = nullptr;
+        Button* m_BtnRestartEditor = nullptr;
         Button* m_GraphicsAPIButtons[4] = {};
     };
 }

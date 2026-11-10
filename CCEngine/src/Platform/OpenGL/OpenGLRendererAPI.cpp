@@ -35,6 +35,7 @@ namespace CCEngine
     struct OpenGLRendererAPI::Functions
     {
         void (APIENTRY* GetIntegerv)(GLenum, GLint*);
+        const GLubyte* (APIENTRY* GetStringi)(GLenum, GLuint);
         void (APIENTRY* GetBooleanv)(GLenum, GLboolean*);
         void (APIENTRY* GetBooleani_v)(GLenum, GLuint, GLboolean*);
         GLboolean (APIENTRY* IsEnabled)(GLenum);
@@ -55,17 +56,23 @@ namespace CCEngine
         void (APIENTRY* FrontFace)(GLenum);
         void (APIENTRY* BindTextureUnit)(GLuint, GLuint);
         void (APIENTRY* ClipControl)(GLenum, GLenum);
+        void (APIENTRY* CreateSamplers)(GLsizei, GLuint*);
+        void (APIENTRY* DeleteSamplers)(GLsizei, const GLuint*);
+        void (APIENTRY* SamplerParameteri)(GLuint, GLenum, GLint);
+        void (APIENTRY* BindSampler)(GLuint, GLuint);
 
         explicit Functions(ProcAddress loader)
         {
 #define CC_GL_LOAD(name) name = Load<decltype(name)>(loader, "gl" #name)
             CC_GL_LOAD(GetIntegerv); CC_GL_LOAD(GetBooleanv); CC_GL_LOAD(GetBooleani_v);
+            CC_GL_LOAD(GetStringi);
             CC_GL_LOAD(IsEnabled); CC_GL_LOAD(Enable); CC_GL_LOAD(Disable);
             CC_GL_LOAD(Enablei); CC_GL_LOAD(Disablei); CC_GL_LOAD(DepthMask); CC_GL_LOAD(DepthFunc);
             CC_GL_LOAD(ColorMaski); CC_GL_LOAD(ClearBufferfv); CC_GL_LOAD(DrawElements);
             CC_GL_LOAD(Viewport); CC_GL_LOAD(Scissor); CC_GL_LOAD(BlendFuncSeparatei);
             CC_GL_LOAD(BlendEquationSeparatei); CC_GL_LOAD(CullFace); CC_GL_LOAD(FrontFace);
             CC_GL_LOAD(BindTextureUnit); CC_GL_LOAD(ClipControl);
+            CC_GL_LOAD(CreateSamplers); CC_GL_LOAD(DeleteSamplers); CC_GL_LOAD(SamplerParameteri); CC_GL_LOAD(BindSampler);
 #undef CC_GL_LOAD
         }
     };
@@ -84,6 +91,24 @@ namespace CCEngine
             throw std::runtime_error("OpenGL context limits are unavailable");
         m_TextureSlots = static_cast<uint32_t>(slots);
         m_ColorTargets = static_cast<uint32_t>(targets);
+        bool anisotropy = major > 4 || (major == 4 && minor >= 6);
+        GLint extensionCount = 0;
+        m_GL->GetIntegerv(0x821D /* GL_NUM_EXTENSIONS */, &extensionCount);
+        for (GLint i = 0; i < extensionCount && !anisotropy; ++i)
+        {
+            const auto* name = m_GL->GetStringi(GL_EXTENSIONS, static_cast<GLuint>(i));
+            if (name)
+            {
+                const std::string extension(reinterpret_cast<const char*>(name));
+                anisotropy = extension == "GL_EXT_texture_filter_anisotropic" || extension == "GL_ARB_texture_filter_anisotropic";
+            }
+        }
+        if (anisotropy)
+        {
+            GLfloat limit = 1.0f;
+            glGetFloatv(0x84FF /* GL_MAX_TEXTURE_MAX_ANISOTROPY */, &limit);
+            if (limit >= 1.0f) m_MaxSamplerAnisotropy = static_cast<uint32_t>((std::min)(16.0f, limit));
+        }
         // 엔진 투영 행렬의 깊이 범위는 0~1이다. UV 반전과 깊이 범위 변환은 별개다.
         m_GL->ClipControl(0x8CA1 /* GL_LOWER_LEFT */, 0x935F /* GL_ZERO_TO_ONE */);
         SetDepthTest(true);
@@ -92,6 +117,59 @@ namespace CCEngine
         SetScissorEnable(false);
     }
     OpenGLRendererAPI::~OpenGLRendererAPI() = default;
+
+    void OpenGLRendererAPI::ReleaseSamplerResources() noexcept
+    {
+        for (const auto& entry : m_Samplers) m_GL->DeleteSamplers(1, &entry.second);
+        m_Samplers.clear();
+    }
+
+    uint32_t OpenGLRendererAPI::ResolveSampler(const SamplerDescription* description)
+    {
+        GLuint sampler = 0;
+        if (description)
+        {
+            description->ValidateDeviceLimit(m_MaxSamplerAnisotropy);
+            const auto key = description->Key();
+            auto found = m_Samplers.find(key);
+            if (found == m_Samplers.end())
+            {
+                m_GL->CreateSamplers(1, &sampler);
+                if (!sampler) throw std::runtime_error("Create GL material sampler failed");
+                const GLint modes[] = { GL_REPEAT, 0x812F /* CLAMP_TO_EDGE */, 0x8370 /* MIRRORED_REPEAT */ };
+                m_GL->SamplerParameteri(sampler, GL_TEXTURE_WRAP_S, modes[uint32_t(description->U)]);
+                m_GL->SamplerParameteri(sampler, GL_TEXTURE_WRAP_T, modes[uint32_t(description->V)]);
+                GLint minFilter = description->Min == SamplerFilter::Linear ? GL_LINEAR : GL_NEAREST;
+                if (description->Mip == SamplerMipFilter::Nearest)
+                    minFilter = description->Min == SamplerFilter::Linear ? GL_LINEAR_MIPMAP_NEAREST : GL_NEAREST_MIPMAP_NEAREST;
+                else if (description->Mip == SamplerMipFilter::Linear)
+                    minFilter = description->Min == SamplerFilter::Linear ? GL_LINEAR_MIPMAP_LINEAR : GL_NEAREST_MIPMAP_LINEAR;
+                m_GL->SamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, minFilter);
+                m_GL->SamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, description->Mag == SamplerFilter::Linear ? GL_LINEAR : GL_NEAREST);
+                m_GL->SamplerParameteri(sampler, 0x813B /* GL_TEXTURE_MAX_LOD */, description->Mip == SamplerMipFilter::Disabled ? 0 : 1000);
+                if (m_MaxSamplerAnisotropy > 1)
+                    m_GL->SamplerParameteri(sampler, 0x84FE /* GL_TEXTURE_MAX_ANISOTROPY */, description->Anisotropy);
+                if (glGetError() != GL_NO_ERROR)
+                {
+                    m_GL->DeleteSamplers(1, &sampler);
+                    throw std::runtime_error("Configure GL material sampler failed");
+                }
+                try { found = m_Samplers.emplace(key, sampler).first; }
+                catch (...) { m_GL->DeleteSamplers(1, &sampler); throw; }
+            }
+            sampler = found->second;
+        }
+        return sampler;
+    }
+    void OpenGLRendererAPI::SetCommonSampler(const SamplerDescription* description)
+    {
+        m_CommonSampler = ResolveSampler(description);
+    }
+    void OpenGLRendererAPI::SetMaterialSampler(uint32_t slot, const SamplerDescription* description)
+    {
+        if (slot >= 4) throw std::out_of_range("Material sampler slot");
+        m_MaterialSamplers[slot] = ResolveSampler(description);
+    }
 
     void OpenGLRendererAPI::SetRenderTargetSize(uint32_t width, uint32_t height)
     {
@@ -135,6 +213,17 @@ namespace CCEngine
         RequireTarget();
         if (count)
         {
+            // s0는 각 texture unit의 결합 sampler로 변환된다. 실제 draw 직전에만 바인딩해
+            // 패스 기본값 설정 직후 재질 설정이 덮이는 경우의 중복 GL 호출을 피한다.
+            for (uint32_t slot = 0; slot < std::min(m_TextureSlots, 32u); ++slot)
+            {
+                const auto sampler = slot < 4 && m_MaterialSamplers[slot] ? m_MaterialSamplers[slot] : m_CommonSampler;
+                if (m_AppliedSamplers[slot] != sampler)
+                {
+                    m_GL->BindSampler(slot, sampler);
+                    m_AppliedSamplers[slot] = sampler;
+                }
+            }
             static_cast<OpenGLContext&>(m_Context).ApplyVertexLayout();
             static_cast<OpenGLContext&>(m_Context).ApplyUniformLayouts();
             m_GL->DrawElements(GL_TRIANGLES, Dimension(count), GL_UNSIGNED_INT, nullptr);
@@ -155,8 +244,11 @@ namespace CCEngine
     void OpenGLRendererAPI::SetDepthTest(bool enable)
     {
         if (enable) m_GL->Enable(GL_DEPTH_TEST); else m_GL->Disable(GL_DEPTH_TEST);
-        m_GL->DepthMask(enable ? GL_TRUE : GL_FALSE);
         m_GL->DepthFunc(GL_LESS);
+    }
+    void OpenGLRendererAPI::SetDepthWrite(bool enable)
+    {
+        m_GL->DepthMask(enable ? GL_TRUE : GL_FALSE);
     }
     void OpenGLRendererAPI::SetScissor(uint32_t x, uint32_t y, uint32_t width, uint32_t height)
     {

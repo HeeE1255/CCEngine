@@ -14,6 +14,7 @@
 #include <cctype>
 #include <fstream>
 #include <iomanip>
+#include <regex>
 #include <sstream>
 #include <unordered_map>
 #include <vector>
@@ -28,6 +29,43 @@ namespace CCEngine
             std::transform(extension.begin(), extension.end(), extension.begin(),
                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             return extension;
+        }
+
+        std::string StripHlslComments(const std::string& source)
+        {
+            enum class State { Code, LineComment, BlockComment, String };
+            State state = State::Code;
+            std::string result;
+            result.reserve(source.size());
+            for (size_t i = 0; i < source.size(); ++i)
+            {
+                const char current = source[i];
+                const char next = i + 1 < source.size() ? source[i + 1] : '\0';
+                if (state == State::Code && current == '/' && next == '/')
+                {
+                    state = State::LineComment; ++i; result += "  "; continue;
+                }
+                if (state == State::Code && current == '/' && next == '*')
+                {
+                    state = State::BlockComment; ++i; result += "  "; continue;
+                }
+                if (state == State::LineComment)
+                {
+                    if (current == '\n') { state = State::Code; result += '\n'; }
+                    else result += ' ';
+                    continue;
+                }
+                if (state == State::BlockComment)
+                {
+                    if (current == '*' && next == '/') { state = State::Code; ++i; result += "  "; }
+                    else result += current == '\n' ? '\n' : ' ';
+                    continue;
+                }
+                if (current == '"' && (i == 0 || source[i - 1] != '\\'))
+                    state = state == State::String ? State::Code : State::String;
+                result += current;
+            }
+            return result;
         }
 
         std::string MakeStablePathHash(const std::filesystem::path& path)
@@ -202,6 +240,22 @@ namespace CCEngine
             }
 
             const ReflectedResourceBinding* materialBuffer = FindResource(resources, "MaterialPropertyBuffer", D3D_SIT_CBUFFER);
+            if (ShaderPropertyParser::LoadDeclarationSource(sourcePath).find("// @material-samplers s2-s5 v1") != std::string::npos)
+            {
+                const char* names[] = { "AlbedoSampler", "NormalSampler", "MetallicSampler", "RoughnessSampler" };
+                for (uint32_t slot = 0; slot < 4; ++slot)
+                {
+                    const auto* sampler = FindResource(resources, names[slot], D3D_SIT_SAMPLER);
+                    if (!sampler || sampler->BindPoint != slot + 2 || sampler->BindCount != 1)
+                        result.ReflectionErrors.push_back(std::string("Invalid material sampler binding: ") + names[slot]);
+                }
+            }
+            if (ShaderPropertyParser::LoadDeclarationSource(sourcePath).find("// @material-uv-buffer b6 v1") != std::string::npos)
+            {
+                const auto* uvBuffer = FindResource(resources, "MaterialUVBuffer", D3D_SIT_CBUFFER);
+                if (!uvBuffer || uvBuffer->BindPoint != 6 || uvBuffer->BindCount != 1)
+                    result.ReflectionErrors.push_back("Material UV contract requires MaterialUVBuffer at b6.");
+            }
             if (!materialBuffer)
             {
                 result.ReflectionErrors.push_back("Shader has @property declarations but no MaterialPropertyBuffer cbuffer.");
@@ -252,6 +306,10 @@ namespace CCEngine
                 result.ReflectionErrors.push_back("Too many Float properties. Renderer currently supports 16 custom float values.");
             if (toggleCount > 16)
                 result.ReflectionErrors.push_back("Too many Toggle properties. Renderer currently supports 16 toggle values.");
+
+            const ShaderHDRCompatibilityReport hdr = ShaderCompiler::AnalyzeHDRCompatibility(sourcePath);
+            if (hdr.Status == ShaderHDRCompatibility::NeedsMigration)
+                result.ReflectionWarnings.push_back(hdr.Summary + ". " + hdr.Guidance);
 
             // 여기서 검사하는 기준은 사람이 쓴 HLSL과 엔진이 실제로 바인딩하는 슬롯의 약속이다.
             // 나중에 Visual Shader가 HLSL을 생성해도 같은 검증을 통과해야 안전하게 Material UI와 연결된다.
@@ -328,6 +386,54 @@ namespace CCEngine
     bool ShaderCompiler::IsHlslSource(const std::filesystem::path& path)
     {
         return ToLowerExtension(path) == ".hlsl";
+    }
+
+    ShaderHDRCompatibilityReport ShaderCompiler::AnalyzeHDRCompatibility(const std::filesystem::path& sourcePath)
+    {
+        ShaderHDRCompatibilityReport report;
+        if (!IsHlslSource(sourcePath))
+        {
+            report.Summary = "HDR contract check applies to HLSL material shaders.";
+            return report;
+        }
+
+        std::ifstream file(sourcePath, std::ios::binary);
+        if (!file)
+        {
+            report.Status = ShaderHDRCompatibility::Unreadable;
+            report.Summary = "HDR contract could not be checked because the shader source is unreadable.";
+            return report;
+        }
+        std::ostringstream stream;
+        stream << file.rdbuf();
+        const std::string source = stream.str();
+        const std::string code = StripHlslComments(source);
+        const bool materialShader = code.find("MaterialPropertyBuffer") != std::string::npos ||
+            source.find("@property") != std::string::npos;
+        if (!materialShader)
+        {
+            report.Summary = "HDR contract is not required for this non-material shader.";
+            return report;
+        }
+
+        // 변수 이름 앞에 g_ 같은 접두사가 붙어도 SurfaceValues.w의 HDR 비트 사용을 찾는다.
+        // saturate 자체는 조명 계산에도 정상적으로 쓰이므로 문자열 존재만으로 오탐하지 않는다.
+        const std::regex surfaceBuffer(R"(SurfaceValues\s*;)", std::regex::icase);
+        const std::regex hdrBranch(R"(SurfaceValues\s*\.\s*w[\s\S]{0,96}&\s*(4|6|0x0*4|0x0*6)u?)", std::regex::icase);
+        if (std::regex_search(code, surfaceBuffer) && std::regex_search(code, hdrBranch))
+        {
+            report.Status = ShaderHDRCompatibility::Compatible;
+            report.Summary = "HDR contract: Compatible";
+            return report;
+        }
+
+        report.Status = ShaderHDRCompatibility::NeedsMigration;
+        report.Summary = "HDR contract: Needs migration";
+        report.Guidance =
+            "Read SurfaceValues.w bit 2 (value 4) in PSMain. When set, return unclamped linear RGB "
+            "within the FP16 range; do not apply sRGB encoding or final saturate. Keep alpha unchanged. "
+            "For SDR, preserve the existing output path.";
+        return report;
     }
 
     ShaderCacheStatus ShaderCompiler::GetHlslCacheStatus(const std::filesystem::path& sourcePath)

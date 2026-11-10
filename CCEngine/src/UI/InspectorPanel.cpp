@@ -52,6 +52,26 @@ namespace CCEngine
     {
         namespace
         {
+            class MaterialOverrideToggle : public Button
+            {
+            public:
+                MaterialOverrideToggle(const std::string& name, std::string label, std::function<bool()> getter)
+                    : Button(name, ""), m_Label(std::move(label)), m_Getter(std::move(getter)) {}
+                void OnRender() override
+                {
+                    if (!m_IsVisible) return;
+                    Button::OnRender();
+                    const auto p = m_CalculatedPos;
+                    UIRenderer::DrawRect({ p.x + 5, p.y + 5 }, { 14, 14 }, { 0.65f, 0.65f, 0.68f, 1 });
+                    if (m_Getter())
+                        UIRenderer::DrawString("v", p.x + 7, p.y + 18, { 0.5f, 0.8f, 1, 1 });
+                    UIRenderer::DrawString(m_Label, p.x + 26, p.y + 18, { 0.8f, 0.8f, 0.82f, 1 });
+                }
+            private:
+                std::string m_Label;
+                std::function<bool()> m_Getter;
+            };
+
             std::mutex s_MaterialPreviewDebugDumpMutex;
             std::unordered_set<std::string> s_MaterialPreviewDebugDumpedLabels;
 
@@ -345,6 +365,8 @@ namespace CCEngine
 
             bool IsSurfaceBackedShaderProperty(const ShaderPropertyDefinition& definition)
             {
+                if (definition.Name == "LinearColorSpace" && definition.Type == ShaderPropertyType::Toggle)
+                    return true;
                 if (definition.Name == "AlbedoColor" && definition.Type == ShaderPropertyType::Color)
                     return true;
                 if ((definition.Name == "Roughness" || definition.Name == "Metallic") && definition.Type == ShaderPropertyType::Float)
@@ -573,6 +595,19 @@ namespace CCEngine
             RebuildInspector();
         }
 
+        void InspectorPanel::NotifyMaterialReimported(const std::filesystem::path& path)
+        {
+            std::error_code error;
+            if (m_SelectedAssetType != "material" || m_MaterialSavePending ||
+                !std::filesystem::equivalent(m_SelectedAssetPath, path, error)) return;
+            // 이전 기준의 Undo가 재임포트 결과를 통째로 덮지 않도록 새 기준에서 시작한다.
+            m_MaterialUndoStack.clear();
+            m_MaterialRedoStack.clear();
+            m_HasMaterialUndoBaseline = false;
+            m_MaterialPreviewDirty = true;
+            m_NeedsRebuild = true;
+        }
+
         bool InspectorPanel::ClearSelectedAssetIfMissing()
         {
             if (m_SelectedAssetPath.empty())
@@ -783,6 +818,20 @@ namespace CCEngine
             surfaceItem->SetAnchorMax(1.0f, 0.0f);
             AddChild(surfaceItem);
 
+            auto surfaceModeButton = new UI::Button("MaterialSurfaceMode",
+                m_SelectedMaterial.IsTransparent() ? "Surface Type: Transparent" : "Surface Type: Opaque");
+            surfaceModeButton->SetOnClick([this, surfaceModeButton]()
+                {
+                    m_SelectedMaterial.SurfaceMode = m_SelectedMaterial.IsTransparent()
+                        ? MaterialSurfaceMode::Opaque
+                        : MaterialSurfaceMode::Transparent;
+                    surfaceModeButton->SetText(m_SelectedMaterial.IsTransparent()
+                        ? "Surface Type: Transparent"
+                        : "Surface Type: Opaque");
+                    MarkSelectedMaterialDirty();
+                });
+            surfaceItem->AddChild(surfaceModeButton);
+
             // Material 에셋을 직접 편집한다. MeshComponent 값과 섞지 않아야 같은 재질을 쓰는 오브젝트들이 한 기준을 공유한다.
             const bool showAlbedoColor = !hasCustomShader || HasShaderProperty(shaderProperties, "AlbedoColor", ShaderPropertyType::Color);
             const bool showAlbedoTexture = !hasCustomShader || HasShaderProperty(shaderProperties, "AlbedoTexture", ShaderPropertyType::Texture2D);
@@ -790,6 +839,22 @@ namespace CCEngine
             const bool showRoughness = !hasCustomShader || HasShaderProperty(shaderProperties, "Roughness", ShaderPropertyType::Float);
             const bool showMetallic = !hasCustomShader || HasShaderProperty(shaderProperties, "Metallic", ShaderPropertyType::Float);
 
+                // 사용자 셰이더는 이 속성을 선언했을 때만 동일한 입력/출력 계약을 사용한다.
+                if (!hasCustomShader || HasShaderProperty(shaderProperties, "LinearColorSpace", ShaderPropertyType::Toggle))
+                {
+                    auto& option = m_SelectedMaterial.ShaderProperties["LinearColorSpace"];
+                    option.Type = ShaderPropertyType::Toggle;
+                    auto* toggle = new UI::Button("MaterialLinearColor", option.BoolValue ? "[x] Linear Color Space" : "[ ] Linear Color Space");
+                    toggle->SetOnClick([this, toggle]()
+                    {
+                        auto& value = m_SelectedMaterial.ShaderProperties["LinearColorSpace"];
+                        value.Type = ShaderPropertyType::Toggle;
+                        value.BoolValue = !value.BoolValue;
+                        toggle->SetText(value.BoolValue ? "[x] Linear Color Space" : "[ ] Linear Color Space");
+                        MarkSelectedMaterialDirty();
+                    });
+                    surfaceItem->AddChild(toggle);
+                }
             if (showAlbedoColor)
             {
                 InspectorUtils::AddColor4(surfaceItem, "MaterialAssetAlbedo", "Albedo",
@@ -974,6 +1039,8 @@ namespace CCEngine
                 }
             }
 
+            BuildMaterialSamplingInspector();
+
             auto previewLabel = new UI::Button("MaterialPreviewLabel", "Preview");
             previewLabel->SetNormalColor({ 0.12f, 0.12f, 0.13f, 1.0f });
             previewLabel->SetHoverColor({ 0.12f, 0.12f, 0.13f, 1.0f });
@@ -988,6 +1055,160 @@ namespace CCEngine
 
             auto& window = CCEngine::Application::Get()->GetWindow();
             UpdateLayout({ 0.0f, 0.0f }, { (float)window.GetWidth(), (float)window.GetHeight() });
+        }
+
+        void InspectorPanel::BuildMaterialSamplingInspector()
+        {
+            const auto source = ShaderPropertyParser::LoadDeclarationSource(m_SelectedMaterial.ShaderPath);
+            const bool uvSupported = source.find("// @material-uv-buffer b6 v1") != std::string::npos;
+            const bool samplerSupported = source.find("// @material-samplers s2-s5 v1") != std::string::npos;
+            if (!uvSupported && !samplerSupported)
+                return;
+
+            auto* item = new InspectorItem("MaterialSampling", "Texture Sampling");
+            item->SetAnchorMin(0, 0);
+            item->SetAnchorMax(1, 0);
+            AddChild(item);
+            auto choice = [this, item](const std::string& id, const std::string& label,
+                std::vector<std::string> values, int selected, std::function<void(int)> set)
+            {
+                auto* button = new Button(id, label + ": " + values.at(selected) + "  v");
+                button->SetOnClick([this, id]() {
+                    m_MaterialSamplingMenu = m_MaterialSamplingMenu == id ? "" : id;
+                    m_NeedsRebuild = true;
+                });
+                item->AddChild(button);
+                if (m_MaterialSamplingMenu != id)
+                    return;
+                for (int i = 0; i < static_cast<int>(values.size()); ++i)
+                {
+                    auto* option = new Button(id + std::to_string(i), values[i]);
+                    if (i == selected)
+                        option->SetNormalColor({ 0.20f, 0.36f, 0.54f, 1.0f });
+                    option->SetOnClick([this, set, i]() {
+                        set(i);
+                        m_MaterialSamplingMenu.clear();
+                        m_NeedsRebuild = true;
+                    });
+                    item->AddChild(option);
+                }
+            };
+            choice("SamplingSlot", "Slot", { "Albedo", "Normal", "Metallic", "Roughness" },
+                m_MaterialSamplingSlot, [this](int value) { m_MaterialSamplingSlot = value; });
+            const int slot = m_MaterialSamplingSlot;
+            if (uvSupported)
+            {
+                const char* labels[] = { "Offset U", "Offset V", "Scale U", "Scale V", "Rotation (deg)" };
+                for (int field = 0; field < 5; ++field)
+                {
+                    InspectorUtils::AddDragFloat(item, "SamplingUV" + std::to_string(field), labels[field],
+                        [this, slot, field]() {
+                            const auto& uv = m_SelectedMaterial.UVTransforms[slot];
+                            const float values[] = { uv.Offset.x, uv.Offset.y, uv.Scale.x, uv.Scale.y,
+                                DirectX::XMConvertToDegrees(uv.Rotation) };
+                            return values[field];
+                        }, [this, slot, field](float value) {
+                            if (!std::isfinite(value)) return;
+                            auto uv = m_SelectedMaterial.UVTransforms[slot];
+                            // 화면은 도 단위, 파일과 렌더러는 라디안이다. 임포트의 중심/연산 순서는 바꾸지 않는다.
+                            switch (field) {
+                            case 0: uv.Offset.x = value; break;
+                            case 1: uv.Offset.y = value; break;
+                            case 2: uv.Scale.x = value; break;
+                            case 3: uv.Scale.y = value; break;
+                            case 4: uv.Rotation = DirectX::XMConvertToRadians(value); break;
+                            }
+                            DirectX::XMFLOAT4 u, v;
+                            if (!uv.GetRows(u, v)) return;
+                            m_SelectedMaterial.UVTransforms[slot] = uv;
+                            MarkSelectedMaterialDirty();
+                        });
+                }
+                auto* reset = new Button("ResetSamplingUV", "Reset UV");
+                reset->SetOnClick([this, slot]() {
+                    m_SelectedMaterial.UVTransforms[slot] = {};
+                    MarkSelectedMaterialDirty();
+                });
+                item->AddChild(reset);
+            }
+            if (!samplerSupported)
+                return;
+
+            auto addSampler = [this, item, &choice](int index, const std::string& prefix) {
+                auto getOverride = [this, index]() -> std::optional<SamplerDescription>& {
+                    return index < 0 ? m_SelectedMaterial.CommonSampler : m_SelectedMaterial.MaterialSamplers[index];
+                };
+                auto* enabled = new MaterialOverrideToggle(prefix + "Enabled",
+                    index < 0 ? "Common Override" : "Slot Override",
+                    [getOverride]() { return getOverride().has_value(); });
+                enabled->SetOnClick([this, index, getOverride]() {
+                        // 상속값을 복사한 뒤 override를 켜야 체크 순간 샘플링이 바뀌지 않는다.
+                        if (!getOverride())
+                            getOverride() = index < 0 ? SamplerDescription{} :
+                                m_SelectedMaterial.CommonSampler.value_or(SamplerDescription{});
+                        else getOverride().reset();
+                        MarkSelectedMaterialDirty();
+                        m_NeedsRebuild = true;
+                    });
+                enabled->SetAnchorMin(0, 0); enabled->SetAnchorMax(1, 0);
+                enabled->SetOffsetMin(15, 0); enabled->SetOffsetMax(-10, 24);
+                item->AddChild(enabled);
+                if (!getOverride()) return;
+                const auto sampler = *getOverride();
+                const int values[] = { int(sampler.U), int(sampler.V), int(sampler.Min), int(sampler.Mag), int(sampler.Mip) };
+                const char* labels[] = { "Wrap U", "Wrap V", "Min Filter", "Mag Filter", "Mip Filter" };
+                for (int f = 0; f < 5; ++f)
+                    choice(prefix + std::to_string(f), labels[f], f < 2 ?
+                        std::vector<std::string>{ "Repeat", "Clamp", "Mirror" } : f == 4 ?
+                        std::vector<std::string>{ "Off", "Nearest", "Linear" } :
+                        std::vector<std::string>{ "Nearest", "Linear" }, values[f],
+                        [this, getOverride, f](int value) {
+                            if (!getOverride()) return;
+                            auto& s = *getOverride();
+                            if (s.Anisotropy > 1 && ((f == 2 || f == 3) ? value == 0 : f == 4 && value != 2))
+                            {
+                                ConsoleLog::Warning("Anisotropic sampling requires Linear Min/Mag/Mip filters. Disable anisotropy before changing these filters.");
+                                return;
+                            }
+                            switch (f) {
+                            case 0: s.U = static_cast<SamplerAddress>(value); break;
+                            case 1: s.V = static_cast<SamplerAddress>(value); break;
+                            case 2: s.Min = static_cast<SamplerFilter>(value); break;
+                            case 3: s.Mag = static_cast<SamplerFilter>(value); break;
+                            case 4: s.Mip = static_cast<SamplerMipFilter>(value); break;
+                            }
+                            MarkSelectedMaterialDirty();
+                        });
+                const uint32_t limit = RenderCommand::GetMaxSamplerAnisotropy();
+                std::vector<int> levels{ 1 };
+                for (int level : { 2, 4, 8, 16 })
+                    if (static_cast<uint32_t>(level) <= limit) levels.push_back(level);
+                if (std::find(levels.begin(), levels.end(), int(sampler.Anisotropy)) == levels.end())
+                    levels.push_back(sampler.Anisotropy);
+                std::vector<std::string> names;
+                for (int level : levels)
+                    names.push_back(level == 1 ? "Off (1x)" : std::to_string(level) + "x" +
+                        (static_cast<uint32_t>(level) > limit ? " (unsupported)" : ""));
+                const int selected = static_cast<int>(std::find(levels.begin(), levels.end(), int(sampler.Anisotropy)) - levels.begin());
+                choice(prefix + "Anisotropy", "Anisotropy", names, selected,
+                    [this, getOverride, levels](int index) {
+                        if (!getOverride()) return;
+                        auto next = *getOverride();
+                        next.Anisotropy = static_cast<uint8_t>(levels.at(index));
+                        // 이방성 필터를 선택하면 필요한 선형 필터 조합도 함께 설정한다.
+                        if (next.Anisotropy > 1)
+                        {
+                            next.Min = next.Mag = SamplerFilter::Linear;
+                            next.Mip = SamplerMipFilter::Linear;
+                        }
+                        try { next.ValidateDeviceLimit(RenderCommand::GetMaxSamplerAnisotropy()); }
+                        catch (const std::exception& error) { ConsoleLog::Warning(error.what()); return; }
+                        getOverride() = next;
+                        MarkSelectedMaterialDirty();
+                    });
+            };
+            addSampler(-1, "CommonSampler");
+            addSampler(slot, "SlotSampler");
         }
 
         void InspectorPanel::BuildShaderInspector()
@@ -1107,6 +1328,29 @@ namespace CCEngine
                 isHlsl ? BuildShaderStatusText(m_SelectedAssetPath) : "Shader Status: legacy shader metadata");
             ApplyShaderStatusButtonStyle(compileStateButton, m_SelectedAssetPath);
             infoItem->AddChild(compileStateButton);
+
+            const ShaderHDRCompatibilityReport hdrReport = ShaderCompiler::AnalyzeHDRCompatibility(m_SelectedAssetPath);
+            auto hdrStatusButton = new UI::Button("ShaderHDRStatusText", hdrReport.Summary);
+            DirectX::XMFLOAT4 hdrColor = { 0.13f, 0.13f, 0.14f, 1.0f };
+            if (hdrReport.Status == ShaderHDRCompatibility::Compatible)
+                hdrColor = { 0.10f, 0.22f, 0.13f, 1.0f };
+            else if (hdrReport.Status == ShaderHDRCompatibility::NeedsMigration)
+                hdrColor = { 0.30f, 0.22f, 0.08f, 1.0f };
+            else if (hdrReport.Status == ShaderHDRCompatibility::Unreadable)
+                hdrColor = { 0.34f, 0.08f, 0.12f, 1.0f };
+            hdrStatusButton->SetNormalColor(hdrColor);
+            hdrStatusButton->SetHoverColor(ScaleColor(hdrColor, 1.18f));
+            infoItem->AddChild(hdrStatusButton);
+
+            if (hdrReport.Status == ShaderHDRCompatibility::NeedsMigration)
+            {
+                auto hdrGuideButton = new UI::Button("ShaderHDRMigrationGuide", "Show HDR Migration Steps");
+                hdrGuideButton->SetOnClick([path = m_SelectedAssetPath, hdrReport]()
+                    {
+                        ConsoleLog::Warning(path.filename().string() + ": " + hdrReport.Guidance);
+                    });
+                infoItem->AddChild(hdrGuideButton);
+            }
 
             auto compileButton = new UI::Button("ShaderCompileButton", "Compile Shader");
             compileButton->SetNormalColor({ 0.18f, 0.18f, 0.20f, 1.0f });
@@ -1747,13 +1991,27 @@ namespace CCEngine
 
             if (a.Name != b.Name || a.ShaderName != b.ShaderName || a.ShaderGuid != b.ShaderGuid || a.ShaderPath != b.ShaderPath)
                 return false;
-            if (!sameFloat4(a.AlbedoColor, b.AlbedoColor) || a.Roughness != b.Roughness || a.Metallic != b.Metallic)
+            if (!sameFloat4(a.AlbedoColor, b.AlbedoColor) || a.Roughness != b.Roughness ||
+                a.Metallic != b.Metallic || a.SurfaceMode != b.SurfaceMode)
                 return false;
             if (a.AlbedoTextureGuid != b.AlbedoTextureGuid || a.AlbedoTexturePath != b.AlbedoTexturePath ||
                 a.NormalTextureGuid != b.NormalTextureGuid || a.NormalTexturePath != b.NormalTexturePath)
                 return false;
             if (a.ShaderProperties.size() != b.ShaderProperties.size())
                 return false;
+            auto sameSampler = [](const auto& left, const auto& right) {
+                return left.has_value() == right.has_value() && (!left || left->Key() == right->Key());
+            };
+            if (!sameSampler(a.CommonSampler, b.CommonSampler)) return false;
+            for (size_t i = 0; i < a.UVTransforms.size(); ++i)
+            {
+                const auto& left = a.UVTransforms[i];
+                const auto& right = b.UVTransforms[i];
+                if (left.Offset.x != right.Offset.x || left.Offset.y != right.Offset.y ||
+                    left.Scale.x != right.Scale.x || left.Scale.y != right.Scale.y ||
+                    left.Rotation != right.Rotation || !sameSampler(a.MaterialSamplers[i], b.MaterialSamplers[i]))
+                    return false;
+            }
 
             for (const auto& [name, left] : a.ShaderProperties)
             {

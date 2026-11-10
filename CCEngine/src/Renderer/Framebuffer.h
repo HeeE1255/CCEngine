@@ -7,12 +7,14 @@
 
 namespace CCEngine {
 
+    enum class FramebufferColorFormat { RGBA8, RGBA16Float };
+
     // 프레임버퍼 생성 시 필요한 설정값 (해상도 등)
     struct FramebufferSpecification
     {
         uint32_t Width = 0;
         uint32_t Height = 0;
-        // 나중에 멀티샘플링(MSAA)이나 포맷 설정도 여기에 추가
+        FramebufferColorFormat ColorFormat = FramebufferColorFormat::RGBA8;
     };
 
     class CC_API Framebuffer
@@ -42,6 +44,10 @@ namespace CCEngine {
 
         // ID 버퍼를 깨끗하게 지우는 함수
         virtual void ClearAttachment(uint32_t attachmentIndex, int value) = 0;
+
+        // 후처리용 중간 타깃을 사용할 때도 최종 뷰의 피킹 정보가 유지되도록
+        // 같은 형식/크기의 첨부 이미지를 GPU에서 직접 복사한다.
+        virtual bool CopyAttachmentTo(uint32_t attachmentIndex, Framebuffer& destination) = 0;
 
         // 팩토리 함수 (플랫폼에 맞는 프레임버퍼 객체 생성)
         static Framebuffer* Create(const FramebufferSpecification& spec);

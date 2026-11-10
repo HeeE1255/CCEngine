@@ -37,6 +37,8 @@ namespace CCEngine
             bool IsInspectingAnimatorState() const { return m_HasSelectedAnimatorState || m_HasSelectedAnimatorTransition; }
             bool ClearSelectedAssetIfMissing();
             void RequestRebuild() { m_NeedsRebuild = true; }
+            bool HasPendingMaterialEdits() const { return m_MaterialSavePending; }
+            void NotifyMaterialReimported(const std::filesystem::path& path);
             void SetAssetChangedCallback(std::function<void(const std::filesystem::path&, const std::string&)> callback)
             {
                 m_OnAssetChanged = std::move(callback);
@@ -144,6 +146,7 @@ namespace CCEngine
             };
             void RebuildInspector();
             void BuildMaterialInspector();
+            void BuildMaterialSamplingInspector();
             void BuildShaderInspector();
             void BuildAvatarInspector();
             void BuildAnimatorStateInspector();
@@ -181,6 +184,8 @@ namespace CCEngine
             int m_SelectedAnimatorStateIndex = -1;
             int m_SelectedAnimatorTransitionIndex = -1;
             MaterialAsset m_SelectedMaterial;
+            int m_MaterialSamplingSlot = 0;
+            std::string m_MaterialSamplingMenu;
             Framebuffer* m_MaterialPreviewFramebuffer = nullptr;
             std::shared_ptr<Mesh> m_MaterialPreviewMesh;
             UI::ImageWidget* m_MaterialPreviewImage = nullptr;

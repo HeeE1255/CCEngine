@@ -108,7 +108,7 @@ def validate_reflection(reflection, stage, *, cpu_layout=True):
         if reflection.get(category):
             raise ValueError(f"Current RHI does not support {category}")
     seen = set()
-    for category, low, high in (("ubos", 0, 8), ("separate_images", 8, 40), ("separate_samplers", 40, 42)):
+    for category, low, high in (("ubos", 0, 8), ("separate_images", 8, 40), ("separate_samplers", 40, 46)):
         for resource in reflection.get(category, []):
             binding = resource.get("binding", -1)
             if resource.get("set", -1) != 0 or not low <= binding < high:
@@ -368,6 +368,13 @@ def validate_buffer_layouts(reflection, *, cpu_layout=True):
                                      for member in types[buffer["type"]]["members"]}
         if cpu_layout:
             validate_cpu_buffer(buffer, types)
+        if cpu_layout and buffer.get("name", "").removeprefix("type.") == "MaterialUVBuffer":
+            members = types[buffer["type"]]["members"]
+            if (buffer["binding"] != 6 or size != 128 or len(members) != 1 or
+                    members[0]["name"] != "g_MaterialUVRows" or members[0]["type"] != "vec4" or
+                    members[0]["offset"] != 0 or members[0].get("array") != [8] or
+                    members[0].get("array_stride") != 16):
+                raise ValueError("MaterialUVBuffer must match CPU layout: b6, float4[8], 128 bytes")
         if cpu_layout and buffer.get("name", "").removeprefix("type.") == "MaterialPropertyBuffer":
             # Renderer3D의 CPU 업로드 구조와 같은 순서/간격이어야 슬롯이 맞아도 값이 뒤섞이지 않는다.
             expected = [("AlbedoColor", 0, None), ("PropertyColors", 16, 8),
@@ -392,7 +399,7 @@ def compare_dxil_reflection(spirv, dxil):
     for category, shift in (("ubos", 0), ("separate_images", 8), ("separate_samplers", 40)):
         expected_slots.update((category, r["binding"] - shift) for r in spirv.get(category, []))
     actual_slots = set()
-    categories = {0: ("ubos", 8), 2: ("separate_images", 32), 3: ("separate_samplers", 2)}
+    categories = {0: ("ubos", 8), 2: ("separate_images", 32), 3: ("separate_samplers", 6)}
     for resource in dxil["resources"]:
         category, limit = categories.get(resource["type"], (None, 0))
         start, count = resource["binding"], resource["count"]
@@ -679,6 +686,52 @@ def describe_gl_layout_conflicts(reflection):
     return conflicts
 
 
+def validate_gl_sampler_pairs(source, reflection, declarations):
+    samplers = {item["binding"] for item in reflection.get("separate_samplers", [])}
+    if 41 in samplers:
+        raise ValueError("OpenGL package does not support reserved s1")
+    if not samplers - {40}:
+        return
+    if "// @material-samplers s2-s5 v1" not in declarations:
+        raise ValueError("Dedicated samplers require the material sampler contract")
+    data = source.read_bytes()
+    if len(data) < 20 or len(data) % 4:
+        raise ValueError("Invalid SPIR-V sampler input")
+    words = struct.unpack(f"<{len(data) // 4}I", data)
+    bindings, origins, pairs = {}, {}, []
+    offset = 5
+    while offset < len(words):
+        count, opcode = words[offset] >> 16, words[offset] & 0xffff
+        if not count or offset + count > len(words):
+            raise ValueError("Malformed SPIR-V sampler instruction")
+        args = words[offset + 1:offset + count]
+        if opcode == 71 and len(args) == 3 and args[1] == 33:  # OpDecorate Binding
+            bindings[args[0]] = args[2]
+        elif opcode in (61, 83) and len(args) >= 3:  # OpLoad, OpCopyObject
+            origins[args[1]] = args[2]
+        elif opcode == 86 and len(args) == 4:  # OpSampledImage
+            pairs.append((args[2], args[3]))
+        offset += count
+
+    def binding(value):
+        visited = set()
+        while value not in bindings:
+            if value in visited or value not in origins:
+                raise ValueError("OpenGL material sampler pair is not statically resolvable")
+            visited.add(value)
+            value = origins[value]
+        return bindings[value]
+
+    used = {}
+    for image, sampler in pairs:
+        image, sampler = binding(image), binding(sampler)
+        if sampler != 40 and not (8 <= image < 12 and sampler == image + 34):
+            raise ValueError("Material sampler s2..s5 must pair with texture t0..t3 respectively")
+        if image in used and used[image] != sampler:
+            raise ValueError("One OpenGL texture binding cannot use two different samplers")
+        used[image] = sampler
+
+
 def gl_intermediate(source, destination):
     data = source.read_bytes()
     if len(data) < 20 or len(data) % 4:
@@ -710,7 +763,7 @@ def compile_source(source, root, folder, args, dxc, cross):
         common += ["-D", define]
     result = {"source": source.relative_to(root).as_posix(), "sourceSha256": digest(source), "stages": {},
               "materialPropertySource": "\n".join(line for line in source.read_text(encoding="utf-8-sig").splitlines()
-                  if re.match(r"^\s*//\s*@property\b", line))}
+                  if re.match(r"^\s*//\s*(?:@property\b|@material-uv-buffer b6 v1\s*$|@material-samplers s2-s5 v1\s*$)", line))}
     spirv_stages, dxil_stages, gl_stages = {}, {}, {}
     for stage, profile, entry, suffix in (("vertex", "vs_6_0", args.vertex_entry, "vert"),
                                           ("pixel", "ps_6_0", args.pixel_entry, "frag")):
@@ -731,6 +784,12 @@ def compile_source(source, root, folder, args, dxc, cross):
         raw = run([cross, spirv, "--reflect"], folder / f"{stage}.reflection.log", args.timeout)
         reflection = json.loads(raw)
         validate_reflection(reflection, stage)
+        if stage == "pixel" and "// @material-samplers s2-s5 v1" in result["materialPropertySource"]:
+            expected = {("AlbedoSampler", 42), ("NormalSampler", 43),
+                        ("MetallicSampler", 44), ("RoughnessSampler", 45)}
+            actual = {(item["name"], item["binding"]) for item in reflection.get("separate_samplers", [])}
+            if actual != expected:
+                raise ValueError("Material sampler contract requires the four named s2..s5 samplers")
         validate_render_contract(reflection, stage)
         spirv_stages[stage] = reflection
         if "dx12" in args.target:
@@ -746,9 +805,8 @@ def compile_source(source, root, folder, args, dxc, cross):
         if "vulkan" in args.target:
             outputs["vulkan"] = {"file": spirv.name, "entry": "main", "environment": "vulkan1.1"}
         if "opengl" in args.target:
-            # 현재 GL 텍스처는 자체 filtering을 사용한다. s1/복수 sampler는 조용히 무시하지 않고 거절한다.
-            if any(item["binding"] != 40 for item in reflection.get("separate_samplers", [])):
-                raise ValueError("OpenGL package currently supports the common s0 sampler only")
+            # 결합 sampler의 binding은 texture unit을 따른다. 다른 쌍을 같은 unit에 덮지 않는다.
+            validate_gl_sampler_pairs(spirv, reflection, result["materialPropertySource"])
             # CPU/Vulkan 배치는 유지한다. GL 전용 std140 배치와의 차이는 업로드 복사표로 흡수한다.
             gl_spirv = folder / f"{stage}.gl-layout.spv"
             run(stage_args + spirv_args + ["-fvk-use-gl-layout", "-Fo", gl_spirv],
@@ -1131,7 +1189,7 @@ def compile_build_request(args, root, output, dxc, cross):
         shader["source"] = relative.as_posix()
         shader["directory"] = "bytecode"
         # 배포 manifest에는 개발 PC 절대 경로나 도구 위치를 넣지 않는다.
-        manifest = {"schema": 1, "success": True, "bindingContract": "cc-hlsl-rhi-v1",
+        manifest = {"schema": 1, "success": True, "bindingContract": "cc-hlsl-rhi-v2",
                     "reflectionContract": "cc-dxil-spirv-layout-v1" if target == "dx12" else None,
                     "targets": [target], "defines": defines, "shaders": [shader],
                     "tools": tool_hashes}
@@ -1239,7 +1297,7 @@ def main():
     # 이전 패키지를 덮어쓰지 않는다. 전체 성공 때만 current.json을 원자적으로 교체한다.
     job = output / ("run-" + uuid.uuid4().hex)
     job.mkdir()
-    manifest = {"schema": 1, "success": False, "bindingContract": "cc-hlsl-rhi-v1",
+    manifest = {"schema": 1, "success": False, "bindingContract": "cc-hlsl-rhi-v2",
                 "reflectionContract": "cc-dxil-spirv-layout-v1" if "dx12" in args.target else None,
                 "targets": args.target, "defines": args.define,
                 "sourceRoot": str(root), "includeDirectories": [str(path) for path in args.include],

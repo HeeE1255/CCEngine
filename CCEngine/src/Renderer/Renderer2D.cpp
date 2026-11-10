@@ -3,6 +3,7 @@
 #include "Renderer/Shader.h"
 #include "Renderer/RenderCommand.h"
 #include "Renderer/Texture.h"
+#include "Renderer/Renderer3D.h"
 #include "Utils/MathUtils.h"
 #include <vector>
 #include <stdexcept>
@@ -30,6 +31,7 @@ namespace CCEngine
         IndexBuffer* QuadIndexBuffer = nullptr;
         Shader* TextureShader = nullptr;
         ConstantBuffer* CameraConstantBuffer = nullptr;
+        ConstantBuffer* OutputConstantBuffer = nullptr;
 
         uint32_t QuadIndexCount = 0;
         QuadVertex* QuadVertexBufferBase = nullptr;
@@ -38,6 +40,7 @@ namespace CCEngine
         // 렌더러별 텍스처 핸들을 슬롯 단위로 보관합니다.
         RendererHandle TextureSlots[MaxTextureSlots];
         uint32_t TextureSlotIndex = 0;
+        uint32_t SRGBTextureMask = 0;
     };
 
     static Renderer2DData s_Data;
@@ -83,6 +86,7 @@ namespace CCEngine
         if (!s_Data.TextureShader || !s_Data.TextureShader->IsValid())
             throw std::runtime_error("Renderer2D shader initialization failed: assets/shaders/Renderer2D.hlsl");
         s_Data.CameraConstantBuffer = ConstantBuffer::Create(sizeof(DirectX::XMMATRIX));
+        s_Data.OutputConstantBuffer = ConstantBuffer::Create(16);
 
         for (uint32_t i = 0; i < s_Data.MaxTextureSlots; i++)
         {
@@ -94,6 +98,7 @@ namespace CCEngine
     {
         delete[] s_Data.QuadVertexBufferBase;
         delete s_Data.CameraConstantBuffer;
+        delete s_Data.OutputConstantBuffer;
         delete s_Data.TextureShader;
         delete s_Data.QuadIndexBuffer;
         delete s_Data.QuadVertexBuffer;
@@ -140,6 +145,7 @@ namespace CCEngine
         s_Data.QuadIndexCount = 0;
         s_Data.QuadVertexBufferPtr = s_Data.QuadVertexBufferBase;
         s_Data.TextureSlotIndex = 0;
+        s_Data.SRGBTextureMask = 0;
         for (uint32_t i = 0; i < Renderer2DData::MaxTextureSlots; ++i)
             s_Data.TextureSlots[i] = nullptr;
     }
@@ -160,6 +166,9 @@ namespace CCEngine
         }
 
         s_Data.TextureShader->Bind();
+        const float outputFlags[4] = { Renderer3D::IsHDROutput() ? 1.0f : 0.0f, static_cast<float>(s_Data.SRGBTextureMask), 0, 0 };
+        s_Data.OutputConstantBuffer->SetData(outputFlags, sizeof(outputFlags));
+        s_Data.OutputConstantBuffer->Bind(5);
         s_Data.TextureShader->BindLayout(s_Data.QuadVertexBuffer->GetLayout());
         s_Data.QuadVertexBuffer->Bind();
         s_Data.QuadIndexBuffer->Bind();
@@ -265,12 +274,18 @@ namespace CCEngine
     {
         RendererHandle srv = texture ? texture->GetRendererID() : nullptr;
         DrawQuad(transform, srv, tintColor, entityID);
+        if (texture && texture->GetColorSpace() == TextureColorSpace::SRGB)
+            for (uint32_t i = 0; i < s_Data.TextureSlotIndex; ++i)
+                if (s_Data.TextureSlots[i] == srv) s_Data.SRGBTextureMask |= 1u << i;
     }
 
     void Renderer2D::DrawQuad(const DirectX::XMMATRIX& transform, Texture2D* texture, const DirectX::XMFLOAT2* texCoords, const DirectX::XMFLOAT4& tintColor, int entityID)
     {
         RendererHandle srv = texture ? texture->GetRendererID() : nullptr;
         DrawQuad(transform, srv, texCoords, tintColor, entityID);
+        if (texture && texture->GetColorSpace() == TextureColorSpace::SRGB)
+            for (uint32_t i = 0; i < s_Data.TextureSlotIndex; ++i)
+                if (s_Data.TextureSlots[i] == srv) s_Data.SRGBTextureMask |= 1u << i;
     }
 
     // 위치와 크기를 받는 래퍼 함수들은 내부에서 변환 행렬을 구성합니다.

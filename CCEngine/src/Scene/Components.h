@@ -269,6 +269,9 @@ namespace CCEngine
         float FOV = 45.0f;
         float NearClip = 0.1f;
         float FarClip = 1000.0f;
+        bool HDR = false;
+        float ExposureEV = 0.0f;
+        int ToneMapping = 1; // 0: Clamp, 1: Reinhard. EV +1은 광량 두 배다.
 
         bool Primary = true; // 이 카메라가 현재 화면을 비추는 메인 카메라인가?
 

@@ -73,7 +73,7 @@ namespace CCEngine
         std::ifstream file(shaderPath);
         if (!file) throw std::runtime_error("Cannot read shader properties: " + shaderPath.string());
         std::string line, result;
-        const std::regex declaration(R"(^\s*//\s*@property\b.*$)");
+        const std::regex declaration(R"(^\s*//\s*(?:@property\b.*|@material-uv-buffer b6 v1\s*|@material-samplers s2-s5 v1\s*)$)");
         while (std::getline(file, line))
             if (std::regex_match(line, declaration)) result += line + "\n";
         if (file.bad()) throw std::runtime_error("Failed reading shader properties");
@@ -86,7 +86,7 @@ namespace CCEngine
         std::vector<ShaderPropertyDefinition> properties;
         std::set<std::string> names;
         unsigned colors = 0, scalars = 0, toggles = 0;
-        std::regex propertyPattern(R"(^\s*//\s*@property\s+([A-Za-z0-9_]+)\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*=\s*(.*))?$)");
+        std::regex propertyPattern(R"(^\s*//\s*@property\s+([A-Za-z0-9_]+)\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+\[(sRGB|Linear)\])?(?:\s*=\s*(.*))?$)");
         std::regex rangePattern(R"(range\s*\(\s*([-+]?[0-9]*\.?[0-9]+)\s*,\s*([-+]?[0-9]*\.?[0-9]+)\s*\))");
 
         std::stringstream stream(source);
@@ -104,7 +104,10 @@ namespace CCEngine
             if (definition.Type == ShaderPropertyType::Unknown || definition.Name.empty())
                 continue;
 
-            std::string defaultText = match.size() >= 4 ? Trim(match[3].str()) : "";
+            if (match[3].matched && definition.Type != ShaderPropertyType::Texture2D)
+                throw std::invalid_argument("Color space annotation requires Texture2D: " + definition.Name);
+            definition.TextureSRGB = match[3].str() == "sRGB";
+            std::string defaultText = match.size() >= 5 ? Trim(match[4].str()) : "";
             std::smatch rangeMatch;
             if (std::regex_search(defaultText, rangeMatch, rangePattern))
             {
